@@ -3,5 +3,3 @@ tests/
 setup.ps1
 setup_venv.ps1
 *venv
-prisma/
-generated/
