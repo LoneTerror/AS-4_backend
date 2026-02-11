@@ -54,6 +54,12 @@ SECRET_KEY=change_this_secret_key
 DATABASE_URL="postgresql://user:password@localhost:5432/rr_db?schema=public"
 ```
 
+## Now initialize the prisma
+
+```
+prisma init
+```
+
 ## 2. Pull schema from DB
 
 ```
@@ -138,16 +144,33 @@ prisma generate
 cd src
 ```
 
-## **Set the database `.env` file at root folder**
+## **9. Set the database `.env` file at root folder**
 
 ```
 DATABASE_URL="postgresql://user:pass@ep-cool-pooler.region.neon.tech/neondb?sslmode=require"
 ```
 
-## **Uvicorn Commands**
+## 10. Start backend
 
 ```
-uvicorn src.main:app
+uvicorn main:app --reload
+```
+
+## Uvicorn Commands
+- Refer to Uvicorn CLI Options at (Documentation)[https://uvicorn.dev/#command-line-options]
+
+## Caching (Optional)
+
+```
+REDIS_URL="redis://localhost:6379/0"
+```
+
+## External Services
+
+```
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
+S3_BUCKET_NAME=rr-attachments
 ```
 
 ## Git Initialization Commands
