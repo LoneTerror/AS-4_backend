@@ -182,6 +182,6 @@ git git push -u origin <branchname>
 
 **Step 8: Pull Request**
 
-* Go To  [Pull Requests](https://github.com/LoneTerror/AS-4_backend.git)
+* Go To  [Pull Requests](https://github.com/LoneTerror/AS-4_backend/pulls)
 * The CodeOwners will review your pull request, then they will approve/reject
 * If your pull request is approved, then your created branch will be merged and deleted
