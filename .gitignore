@@ -1,0 +1,9 @@
+node_modules/
+prisma/
+generated/
+.vscode/
+.env
+tests/
+setup.ps1
+setup_venv.ps1
+*venv
