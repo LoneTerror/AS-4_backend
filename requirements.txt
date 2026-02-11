@@ -1,12 +1,12 @@
 # FastAPI and server
-fastapi==0.110.0
-uvicorn[standard]==0.27.1
+fastapi
+uvicorn[standard]
 
 # Database ORM
-prisma==0.11.0
+prisma
 
 # Data validation
-pydantic==1.10.13
+pydantic
 
 # Utilities
-python-dotenv==1.0.0
+python-dotenv

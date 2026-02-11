@@ -54,6 +54,12 @@ SECRET_KEY=change_this_secret_key
 DATABASE_URL="postgresql://user:password@localhost:5432/rr_db?schema=public"
 ```
 
+## Now initialize the prisma
+
+```
+prisma init
+```
+
 ## 2. Pull schema from DB
 
 ```
