@@ -35,65 +35,15 @@ The platform enables employees to send points-based appreciation, redeem rewards
 * Node.js (Required for Prisma CLI)
 * Docker & Docker Compose (for local DB/Redis)
 
-### 1. Environment Configuration
-Create a `.env` file in the root directory:
+# 🛠️ Setup & Installation
 
-# Application
+## Application
 
 ```
 PROJECT_NAME="Employee R&R API"
 DEBUG=True
 SECRET_KEY=change_this_secret_key
 ```
-
-# Database (Prisma)
-
-## 1. Add DATABASE_URL to .env
-
-```
-DATABASE_URL="postgresql://user:password@localhost:5432/rr_db?schema=public"
-```
-
-## Now initialize the prisma
-
-```
-prisma init
-```
-
-## 2. Pull schema from DB
-
-```
-prisma db pull
-```
-
-## 3. Generate Prisma client
-
-```
-prisma generate
-```
-
-## 4. Start backend
-
-```
-uvicorn main:app --reload
-```
-
-## Caching (Optional)
-
-```
-REDIS_URL="redis://localhost:6379/0"
-```
-
-## External Services
-
-```
-AWS_ACCESS_KEY_ID=your_key
-AWS_SECRET_ACCESS_KEY=your_secret
-S3_BUCKET_NAME=rr-attachments
-```
-
-# 🛠️ Setup & Installation
-
 
 ## **1. Clone the repository**
 
@@ -120,6 +70,7 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
+## **Database (Prisma)**
 ## **5. Initialize Prisma**
 
 ```
@@ -144,20 +95,20 @@ prisma generate
 cd src
 ```
 
-## **9. Set the database `.env` file at root folder**
+## **9. Create the database `.env` file in root directory**
 
 ```
 DATABASE_URL="postgresql://user:pass@ep-cool-pooler.region.neon.tech/neondb?sslmode=require"
 ```
 
-## 10. Start backend
+## **10. Start backend**
 
 ```
 uvicorn main:app --reload
 ```
 
 ## Uvicorn Commands
-- Refer to Uvicorn CLI Options at (Documentation)[https://uvicorn.dev/#command-line-options]
+- Refer to Uvicorn CLI Options at [Documentation](https://uvicorn.dev/#command-line-options)
 
 ## Caching (Optional)
 
