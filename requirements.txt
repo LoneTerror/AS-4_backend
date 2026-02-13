@@ -1,16 +1,28 @@
-# FastAPI and server
-fastapi==0.110.0
-uvicorn[standard]==0.27.1
+# FastAPI and ASGI server
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
 
-# Database ORM
-prisma==0.11.0
+# Pydantic for data validation
+pydantic==2.10.0
+pydantic-settings==2.6.0
+pydantic[email]
 
-# Data validation
-pydantic==1.10.13
+# Prisma ORM
+prisma==0.15.0
 
-# Utilities
-python-dotenv==1.0.0
+# Database driver
+asyncpg==0.29.0
+
+# HTTP client
+httpx==0.28.0
+
+# Security
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-asyncpg==0.29.0
-pydantic[email]
+python-multipart==0.0.19
+
+# Environment variables
+python-dotenv==1.0.1
+
+# Date utilities
+python-dateutil==2.9.0.post0

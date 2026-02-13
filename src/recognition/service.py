@@ -1,142 +1,246 @@
-"""Recognition service business logic"""
-from uuid import UUID
-from datetime import datetime
-from fastapi import HTTPException
+"""Recognition service business logic (100% Contract-Compliant Version)"""
+
+import math
+from datetime import datetime, timezone
+from fastapi import HTTPException, status
 
 from src.prisma.client import db
-from src.common.auth import CurrentUser
+from src.recognition.dependencies import CurrentUser
 from src.recognition.schemas import ReviewCreateRequest, ReviewUpdateRequest
 
 
 class RecognitionService:
-    """Service for handling recognition/review operations"""
+    """
+    Enterprise-grade service layer for review management.
 
+    Responsibilities:
+    - Business rule enforcement
+    - RBAC access control
+    - Pagination logic
+    - Audit field handling
+    - Strict contract compliance
+    """
+
+    # =========================================================
+    # LIST REVIEWS
+    # =========================================================
     @staticmethod
     async def list_reviews(
         page: int,
-        page_size: int,
+        limit: int,
         current_user: CurrentUser
     ):
-        """List reviews with pagination and access control"""
-        skip = (page - 1) * page_size
+        """
+        Retrieve paginated reviews with RBAC enforcement.
+
+        Contract:
+        - page (1-indexed)
+        - limit (max 100)
+        - returns { data, pagination }
+        """
+
+        skip = (page - 1) * limit
         where = {}
 
-        # Non-HR users see only related reviews
-        if "HR_ADMIN" not in current_user.roles:
+        # Restrict non-admin users to own reviews
+        if not any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"]):
             where["OR"] = [
-                {"reviewerId": current_user.id},
-                {"receiverId": current_user.id}
+                {"reviewer_id": current_user.id},
+                {"receiver_id": current_user.id}
             ]
 
-        total = await db.review.count(where=where)
+        # Total count
+        total = await db.reviews.count(where=where)
 
-        data = await db.review.find_many(
+        # Fetch data
+        reviews = await db.reviews.find_many(
             where=where,
             skip=skip,
-            take=page_size,
-            order={"reviewAt": "desc"}
+            take=limit,
+            order={"review_at": "desc"}
         )
 
+        # Correct zero-result pagination
+        total_pages = math.ceil(total / limit) if total > 0 else 0
+
         return {
-            "page": page,
-            "page_size": page_size,
-            "total": total,
-            "data": data
+            "data": reviews,
+            "pagination": {
+                "current_page": page,
+                "per_page": limit,
+                "total": total,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_previous": page > 1 and total_pages > 0
+            }
         }
 
+    # =========================================================
+    # GET REVIEW
+    # =========================================================
     @staticmethod
     async def get_review(review_id: str, current_user: CurrentUser):
-        """Get a single review by ID with access control"""
-        review = await db.review.find_unique(
-            where={"id": review_id}
+        """
+        Retrieve review by ID with RBAC enforcement.
+        """
+
+        review = await db.reviews.find_unique(
+            where={"review_id": review_id}
         )
 
         if not review:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Review not found"
+            )
 
-        # Access control
-        if "HR_ADMIN" not in current_user.roles:
-            if review.reviewerId != current_user.id and review.receiverId != current_user.id:
-                raise HTTPException(status_code=403, detail="Access denied")
+        # RBAC
+        is_admin = any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
+        is_owner = (
+            review.reviewer_id == current_user.id or
+            review.receiver_id == current_user.id
+        )
+
+        if not is_admin and not is_owner:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
 
         return review
 
+    # =========================================================
+    # CREATE REVIEW
+    # =========================================================
     @staticmethod
     async def create_review(
         payload: ReviewCreateRequest,
         current_user: CurrentUser
     ):
-        """Create a new review"""
-        # Check if user has permission
-        if not any(r in current_user.roles for r in ["EMPLOYEE", "MANAGER"]):
-            raise HTTPException(status_code=403, detail="Not allowed")
+        """
+        Create review with strict contract validation.
+        """
 
-        # Prevent self-review
+        # Self-review protection
         if str(payload.receiver_id) == current_user.id:
-            raise HTTPException(status_code=400, detail="Self review not allowed")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Self review not allowed"
+            )
 
-        # Validate receiver exists and is active
-        receiver = await db.employee.find_unique(
-            where={"id": str(payload.receiver_id)},
-            include={"status": True}
+        # Validate receiver existence + ACTIVE status
+        receiver = await db.employees.find_unique(
+            where={"employee_id": str(payload.receiver_id)},
+            include={"status_master_employees_status_idTostatus_master": True}
         )
 
         if not receiver:
-            raise HTTPException(status_code=404, detail="Receiver not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Receiver not found"
+            )
 
-        if receiver.status.statusCode != "ACTIVE":
-            raise HTTPException(status_code=400, detail="Receiver is not active")
+        if (
+            not receiver.status_master_employees_status_idTostatus_master
+            or receiver.status_master_employees_status_idTostatus_master.status_code != "ACTIVE"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Receiver is not active"
+            )
 
-        # Get active review status
-        status = await db.statusmaster.find_first(
-            where={"entityType": "REVIEW", "statusCode": "ACTIVE"}
+        # Get REVIEW_ACTIVE status
+        review_status = await db.status_master.find_first(
+            where={
+                "entity_type": "REVIEW",
+                "status_code": "REVIEW_ACTIVE"
+            }
         )
 
-        if not status:
-            raise HTTPException(status_code=500, detail="Review status missing")
+        if not review_status:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Review status configuration missing"
+            )
 
-        # Create review
-        review = await db.review.create(
+        now = datetime.now(timezone.utc)
+
+        review = await db.reviews.create(
             data={
-                "reviewerId": current_user.id,
-                "receiverId": str(payload.receiver_id),
+                "reviewer_id": current_user.id,
+                "receiver_id": str(payload.receiver_id),
                 "rating": payload.rating,
                 "comment": payload.comment,
-                "imageUrl": str(payload.image_url) if payload.image_url else None,
-                "videoUrl": str(payload.video_url) if payload.video_url else None,
-                "statusId": status.id,
-                "reviewAt": datetime.utcnow(),
-                "createdBy": current_user.id,
-                "updatedBy": current_user.id
+                "image_url": str(payload.image_url) if payload.image_url else None,
+                "video_url": str(payload.video_url) if payload.video_url else None,
+                "status_id": review_status.status_id,
+                "review_at": now,
+                "created_at": now,
+                "created_by": current_user.id,
+                "updated_at": now,
+                "updated_by": current_user.id
             }
         )
 
         return review
 
+    # =========================================================
+    # UPDATE REVIEW
+    # =========================================================
     @staticmethod
     async def update_review(
         review_id: str,
         payload: ReviewUpdateRequest,
         current_user: CurrentUser
     ):
-        """Update an existing review"""
-        review = await db.review.find_unique(
-            where={"id": review_id}
+        """
+        Update review with RBAC and audit enforcement.
+        """
+
+        review = await db.reviews.find_unique(
+            where={"review_id": review_id}
         )
 
         if not review:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Review not found"
+            )
 
-        # Only reviewer or HR can edit
-        if "HR_ADMIN" not in current_user.roles and review.reviewerId != current_user.id:
-            raise HTTPException(status_code=403, detail="Not allowed")
+        is_admin = any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
+        is_owner = review.reviewer_id == current_user.id
 
-        updated = await db.review.update(
-            where={"id": review_id},
-            data={
-                **payload.dict(exclude_unset=True),
-                "updatedBy": current_user.id
-            }
+        if not is_admin and not is_owner:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not allowed to update this review"
+            )
+
+        update_data = {}
+
+        if payload.rating is not None:
+            update_data["rating"] = payload.rating
+        if payload.comment is not None:
+            update_data["comment"] = payload.comment
+        if payload.image_url is not None:
+            update_data["image_url"] = str(payload.image_url)
+        if payload.video_url is not None:
+            update_data["video_url"] = str(payload.video_url)
+
+        # Schema already ensures at least one field,
+        # but keeping defensive programming for safety
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields provided for update"
+            )
+
+        update_data["updated_at"] = datetime.now(timezone.utc)
+        update_data["updated_by"] = current_user.id
+
+        updated = await db.reviews.update(
+            where={"review_id": review_id},
+            data=update_data
         )
 
         return updated
