@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from src.prisma.client import db
 from src.recognition.router import router as recognition_router
+from .rewards import router as rewards_router
 
 
 @asynccontextmanager
@@ -24,6 +25,8 @@ app = FastAPI(
 )
 
 
+
+
 # Health check endpoint
 @app.get("/health", tags=["Health"])
 async def health_check():
@@ -36,3 +39,4 @@ async def health_check():
 
 # Include service routers
 app.include_router(recognition_router)
+app.include_router(rewards_router.router)
