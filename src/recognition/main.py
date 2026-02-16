@@ -59,3 +59,11 @@ app.add_middleware(
 
 # Router
 app.include_router(recognition_router, prefix="/v1", tags=["Recognition"])
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "src.main:app",  
+        host="0.0.0.0",
+        port=8001,
+        reload=True
+    )
