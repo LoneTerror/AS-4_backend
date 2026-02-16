@@ -9,8 +9,7 @@ from pydantic import BaseModel
 security = HTTPBearer()
 
 # 2. Get Auth URL from Environment Variables
-# Make sure to set this in your .env file or Docker config!
-AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://127.0.0.1:8001/auth/verify")
+AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
 
 class CurrentUser(BaseModel):
     id: str

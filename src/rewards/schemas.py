@@ -28,6 +28,16 @@ class CategoryResponse(BaseModel):
         from_attributes = True
 
 
+
+class MinimalCategoryInfo(BaseModel):
+    category_id: UUID4
+    category_name: str
+    category_code: str
+
+    class Config:
+        from_attributes = True
+
+
 # ==========================================
 # 2. CATALOG SCHEMAS (reward_catalog)
 # ==========================================
@@ -65,12 +75,11 @@ class RewardItemResponse(BaseModel):
     default_points: int
     min_points: int
     max_points: int
-    category_id: UUID4
     is_active: bool
     created_at: datetime
     
-    # Optional: Include full category details if needed using nested models
-    # category: Optional[CategoryResponse] 
+    # Nested Object (Instead of just category_id)
+    category: Optional[MinimalCategoryInfo] = None 
 
     class Config:
         from_attributes = True
@@ -111,8 +120,31 @@ class RewardHistoryResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class RedemptionResponse(BaseModel):
+    history_id: UUID4
+    points: int
+    granted_at: datetime
+    status: str
+    new_stock_level: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
 class PaginatedHistoryResponse(BaseModel):
     data: List[RewardHistoryResponse]
     total_items: int
     page: int
     size: int
+
+class PaginationMeta(BaseModel):
+    current_page: int
+    per_page: int
+    total: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
+
+# --- 4. WRAPPER RESPONSE ---
+class PaginatedCatalogResponse(BaseModel):
+    data: List[RewardItemResponse]
+    pagination: PaginationMeta

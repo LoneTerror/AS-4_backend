@@ -88,21 +88,26 @@ async def update_reward_item(
     return await svc.update_item(catalog_id, body, user_id=current_user.id, req_info=request)
 
 
-@router.get("/catalog", response_model=List[schemas.RewardItemResponse])
+@router.get("/catalog", response_model=schemas.PaginatedCatalogResponse)
 async def view_catalog(
     active_only: bool = True,
+    page: int = 1,     # Query param: ?page=1
+    size: int = 20,    # Query param: ?size=20
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.get_current_user)
 ):
+    """
+    View the catalog with pagination and nested category details.
+    """
     svc = service.RewardService(db)
-    return await svc.get_catalog(active_only=active_only)
+    return await svc.get_catalog(active_only=active_only, page=page, size=size)
 
 
 # =========================================================
 # 3. REDEMPTION & HISTORY ENDPOINTS
 # =========================================================
 
-@router.post("/redeem", status_code=status.HTTP_201_CREATED)
+@router.post("/redeem", response_model=schemas.RedemptionResponse, status_code=status.HTTP_201_CREATED) 
 @limiter.limit("5/minute")
 async def redeem_reward(
     request: Request, 
@@ -114,7 +119,6 @@ async def redeem_reward(
     return await svc.grant_reward(
         request=body, 
         granted_by_user_id=current_user.id
-        
     )
 
 

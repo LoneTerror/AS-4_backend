@@ -65,3 +65,7 @@ setup_venv.ps1
 *venv
 generated/
 
+.pytest_cache/
+pytest.ini
+__pycache__/
+*.pyc

@@ -1,4 +1,4 @@
-import json
+import json,uuid
 from fastapi import HTTPException, status, Request
 from prisma import Prisma, Json
 from uuid import UUID
@@ -46,6 +46,26 @@ class RewardService:
             # ⚠️ rigorous logging should go here. 
             # We don't want the whole API to fail just because the audit log failed.
             print(f"FAILED TO AUDIT LOG: {e}")
+
+    # ==========================================
+    # 🕵️ HELPER: GET REFERENCE DATA
+    # ==========================================
+    async def _get_sys_id(self, table, code_field, code_value):
+        """Generic helper to fetch ID from lookup tables (Status, Types)"""
+        # Note: In a real app, you should CACHE these results to avoid DB hits every time
+        record = await getattr(self.db, table).find_unique(
+            where={code_field: code_value}
+        )
+        if not record:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"System Configuration Error: {code_value} not found in {table}"
+            )
+        # return the ID (assuming the primary key field name is known or we return the object)
+        # Based on your schema:
+        if table == "transaction_types": return record.type_id
+        if table == "status_master": return record.status_id
+        return None
 
     # ==========================================
     # 1. CATEGORY MANAGEMENT
@@ -171,9 +191,65 @@ class RewardService:
 
         return new_item
 
-    async def get_catalog(self, active_only: bool = True):
+    async def get_catalog(self, active_only: bool = True, page: int = 1, size: int = 20):
+        # 1. Calculate Offset
+        skip = (page - 1) * size
         where_clause = {"is_active": True} if active_only else {}
-        return await self.db.reward_catalog.find_many(where=where_clause)
+
+        # 2. Get Total Count (for pagination logic)
+        total_items = await self.db.reward_catalog.count(where=where_clause)
+
+        # 3. Get Data with Nested Category
+        items = await self.db.reward_catalog.find_many(
+            where=where_clause,
+            skip=skip,
+            take=size,
+            order={"created_at": "desc"},
+            include={"reward_categories": True} 
+        )
+
+        # 4. Map Prisma result to Pydantic Schema
+        # We manually map 'reward_categories' -> 'category' to match your API contract
+        mapped_data = []
+        for item in items:
+            # Create the nested category object
+            cat_data = None
+            if item.reward_categories:
+                cat_data = schemas.MinimalCategoryInfo(
+                    category_id=item.reward_categories.category_id,
+                    category_name=item.reward_categories.category_name,
+                    category_code=item.reward_categories.category_code
+                )
+            
+            # Create the main item
+            mapped_item = schemas.RewardItemResponse(
+                catalog_id=item.catalog_id,
+                reward_name=item.reward_name,
+                reward_code=item.reward_code,
+                description=item.description,
+                default_points=item.default_points,
+                min_points=item.min_points,
+                max_points=item.max_points,
+                is_active=item.is_active,
+                created_at=item.created_at,
+                category=cat_data 
+            )
+            mapped_data.append(mapped_item)
+
+        # 5. Calculate Pagination Metadata
+        total_pages = (total_items + size - 1) // size
+        
+        return {
+            "data": mapped_data,
+            "pagination": {
+                "current_page": page,
+                "per_page": size,
+                "total": total_items,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_previous": page > 1
+            }
+        }
     
     # ==========================================
     # UPDATE REWARD ITEM
@@ -223,58 +299,117 @@ class RewardService:
         return updated_item
 
     # ==========================================
-    # 3. HISTORY & GRANTING LOGIC
+    # 3. REDEMPTION / GRANTING LOGIC (WITH INVENTORY)
     # ==========================================
     async def grant_reward(self, request: schemas.GrantRewardRequest, granted_by_user_id: str):
         """
-        Handles the logic when a reward is given to a wallet.
+        Handles the Redemption with Inventory Checks:
+        1. Validate inputs (Active? Points limits?)
+        2. CHECK STOCK (New!)
+        3. START DB TRANSACTION
+        4. Deduct Points & Decrement Stock
+        5. Create Transaction & History Records
         """
         
-        # 1. Fetch the Reward Configuration
+        # 1. PRE-VALIDATION (Reads only)
+        # -------------------------------
         reward_item = await self.db.reward_catalog.find_unique(
             where={"catalog_id": str(request.catalog_id)}
         )
-        if not reward_item:
-            raise HTTPException(status_code=404, detail="Reward item not found")
+        if not reward_item or not reward_item.is_active:
+            raise HTTPException(status_code=400, detail="Reward is invalid or inactive")
 
-        if not reward_item.is_active:
-            raise HTTPException(status_code=400, detail="This reward is currently inactive")
+        # --- 🛡️ INVENTORY CHECK (NEW) ---
+        # If stock is 0, we stop immediately.
+        if reward_item.available_stock <= 0:
+             raise HTTPException(status_code=400, detail="Out of stock! This reward is no longer available.")
 
-        # 2. Validate Point Limits
-        if request.points < reward_item.min_points:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Points must be at least {reward_item.min_points}"
-            )
-        if request.points > reward_item.max_points:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Points cannot exceed {reward_item.max_points}"
-            )
+        # Check Point Limits
+        if request.points < reward_item.min_points or request.points > reward_item.max_points:
+            raise HTTPException(status_code=400, detail="Points are outside the allowed range")
 
-        # 3. Verify Wallet Exists
-        wallet = await self.db.wallets.find_unique(
-            where={"wallet_id": str(request.wallet_id)}
-        )
+        # Check Wallet Existence AND Balance
+        wallet = await self.db.wallets.find_unique(where={"wallet_id": str(request.wallet_id)})
         if not wallet:
-            raise HTTPException(status_code=404, detail="Recipient wallet not found")
+            raise HTTPException(status_code=404, detail="Wallet not found")
+        
+        if wallet.available_points < request.points:
+            raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
-        # 4. Create History Record
+        # Fetch IDs for the Transaction Record
+        type_id = await self._get_sys_id("transaction_types", "type_code", "REWARD_REDEMPTION")
+        status_id = await self._get_sys_id("status_master", "status_code", "COMPLETED")
+
+        # Generate unique reference
+        ref_number = f"TXN-{int(datetime.now().timestamp())}-{str(uuid.uuid4())[:8]}"
+
+        # 2. ATOMIC WRITE TRANSACTION
+        # -------------------------------
         try:
-            return await self.db.reward_history.create(
-                data={
-                    "wallet_id": str(request.wallet_id),
-                    "catalog_id": str(request.catalog_id),
-                    "points": request.points,
-                    "granted_by": granted_by_user_id,
-                    "comment": request.comment,
-                    "created_by": granted_by_user_id,
-                    "updated_by": granted_by_user_id,
-                    "updated_at": datetime.now(timezone.utc) 
+            async with self.db.tx() as transaction:
+                
+                # A. Update Wallet (Deduct Points)
+                await transaction.wallets.update(
+                    where={"wallet_id": str(request.wallet_id)},
+                    data={
+                        "available_points": {"decrement": request.points}, 
+                        "redeemed_points": {"increment": request.points},
+                        "updated_by": granted_by_user_id,
+                        "updated_at": datetime.now(timezone.utc)
+                    }
+                )
+
+                # B. Decrement Inventory (NEW!)
+                await transaction.reward_catalog.update(
+                    where={"catalog_id": str(request.catalog_id)},
+                    data={
+                        "available_stock": {"decrement": 1}, # Reduce stock by 1
+                        "updated_at": datetime.now(timezone.utc)
+                    }
+                )
+
+                # C. Create Financial Ledger Record
+                await transaction.transactions.create(
+                    data={
+                        "wallet_id": str(request.wallet_id),
+                        "amount": request.points, 
+                        "transaction_type_id": type_id,
+                        "status_id": status_id,
+                        "description": f"Redeemed: {reward_item.reward_name}",
+                        "reference_number": ref_number,
+                        "transaction_at": datetime.now(timezone.utc),
+                        "created_by": granted_by_user_id,
+                        "updated_by": granted_by_user_id,
+                        "updated_at": datetime.now(timezone.utc)
+                    }
+                )
+
+                # D. Create Reward History
+                history_record = await transaction.reward_history.create(
+                    data={
+                        "wallet_id": str(request.wallet_id),
+                        "catalog_id": str(request.catalog_id),
+                        "points": request.points,
+                        "granted_by": granted_by_user_id,
+                        "comment": request.comment,
+                        "created_by": granted_by_user_id,
+                        "updated_by": granted_by_user_id,
+                        "updated_at": datetime.now(timezone.utc)
+                    }
+                )
+                
+                # E. Return Custom Response with Status
+                # We return a dict here so the Router can map it to a Schema
+                return {
+                    "history_id": history_record.history_id,
+                    "points": history_record.points,
+                    "granted_at": history_record.granted_at,
+                    "status": "COMPLETED", 
+                    "new_stock_level": reward_item.available_stock - 1
                 }
-            )
+
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to grant reward: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
         
     async def get_history(
         self, 
