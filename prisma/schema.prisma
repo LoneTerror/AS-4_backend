@@ -1,7 +1,7 @@
 generator client {
   provider             = "prisma-client-py"
-  recursive_type_depth = "5"
   interface            = "asyncio"
+  recursive_type_depth = "5"
 }
 
 datasource db {
@@ -233,6 +233,7 @@ model reward_catalog {
   created_by                                     String?           @db.Uuid
   updated_at                                     DateTime          @db.Timestamptz(6)
   updated_by                                     String?           @db.Uuid
+  available_stock                                Int               @default(0)
   reward_categories                              reward_categories @relation(fields: [category_id], references: [category_id])
   employees_reward_catalog_created_byToemployees employees?        @relation("reward_catalog_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
   employees_reward_catalog_updated_byToemployees employees?        @relation("reward_catalog_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
