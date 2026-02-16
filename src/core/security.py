@@ -14,6 +14,7 @@ if not SECRET_KEY:
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+RESET_TOKEN_EXPIRE_MINUTES = 15  # Short-lived reset token
 
 
 # ================================
@@ -86,5 +87,42 @@ def decode_token(token: str):
     """
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+
+
+# ================================
+# PASSWORD RESET TOKENS
+# ================================
+
+def create_reset_token(employee_id: str, email: str) -> str:
+    """
+    Create short-lived JWT token for password reset.
+    Valid for 15 minutes only.
+    """
+    to_encode = {
+        "sub": employee_id,
+        "email": email,
+        "purpose": "password_reset",
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES),
+        "iss": "employee-rewards-system"
+    }
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_reset_token(token: str):
+    """
+    Decode and validate password reset token.
+    Returns payload if valid, None otherwise.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
+        # Validate purpose
+        if payload.get("purpose") != "password_reset":
+            return None
+            
+        return payload
     except JWTError:
         return None
