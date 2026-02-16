@@ -1,11 +1,3 @@
-"""
-Common Middleware Module
-Handles:
-- Request ID generation
-- Rate limiting
-- Contract-compliant headers
-"""
-
 import uuid
 import time
 from collections import defaultdict
@@ -19,7 +11,7 @@ from starlette import status
 # CONFIG
 # ==========================================================
 RATE_LIMIT = 1000
-WINDOW_SECONDS = 3600  # 1 hour
+WINDOW_SECONDS = 3600  
 
 requests_store = defaultdict(list)
 
@@ -107,11 +99,11 @@ async def generic_exception_handler(request: Request, exc: Exception):
 # ==========================================================
 async def request_rate_limit_middleware(request: Request, call_next):
 
-    # 1️⃣ Request ID
+    # 1️Request ID
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     request.state.request_id = request_id
 
-    # 2️⃣ Rate limiting (in-memory)
+    # 2️Rate limiting (in-memory)
     client_ip = request.client.host
     now = time.time()
     window_start = now - WINDOW_SECONDS
@@ -130,7 +122,7 @@ async def request_rate_limit_middleware(request: Request, call_next):
 
     response = await call_next(request)
 
-    # 3️⃣ Attach headers
+    # 3️Attach headers
     remaining = RATE_LIMIT - len(requests_store[client_ip])
     reset_time = int(requests_store[client_ip][0] + WINDOW_SECONDS)
 

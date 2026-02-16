@@ -1,5 +1,3 @@
-"""Recognition service API router (Contract-Compliant Version)"""
-
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Path
 
@@ -34,14 +32,7 @@ async def list_reviews(
 ):
     """
     List reviews with pagination.
-    
-    Access Control:
-    - EMPLOYEE: Can see reviews they gave or received
-    - MANAGER: Can see reviews they gave or received
-    - HR_ADMIN/SUPER_ADMIN: Can see all reviews
-    
-    Returns:
-        PaginatedReviewResponse with list of reviews and pagination metadata
+
     """
     return await RecognitionService.list_reviews(page, page_size, current_user)
 
@@ -62,17 +53,7 @@ async def get_review(
 ):
     """
     Get a specific review by ID.
-    
-    Access Control:
-    - EMPLOYEE/MANAGER: Can only see reviews they gave or received
-    - HR_ADMIN/SUPER_ADMIN: Can see any review
-    
-    Returns:
-        ReviewResponse with full review details
-        
-    Raises:
-        404: Review not found
-        403: Access denied
+
     """
     return await RecognitionService.get_review(str(id), current_user)
 
@@ -94,20 +75,7 @@ async def create_review(
 ):
     """
     Create a new review.
-    
-    Business Rules:
-    - Cannot review yourself
-    - Receiver must be an active employee
-    - Rating must be between 1-5
-    - Comment must be 10-2000 characters
-    
-    Returns:
-        ReviewResponse with the created review (HTTP 201)
-        
-    Raises:
-        404: Receiver not found
-        422: Self-review not allowed or receiver not active
-        400: Validation errors
+
     """
     return await RecognitionService.create_review(payload, current_user)
 
@@ -129,17 +97,6 @@ async def update_review(
 ):
     """
     Update an existing review.
-    
-    Access Control:
-    - Review creator can update their own reviews
-    - HR_ADMIN/SUPER_ADMIN can update any review
-    
-    Returns:
-        ReviewResponse with updated review details
-        
-    Raises:
-        404: Review not found
-        403: Not allowed to update this review
-        400: No fields provided for update
+
     """
     return await RecognitionService.update_review(str(id), payload, current_user)

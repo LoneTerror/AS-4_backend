@@ -23,7 +23,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
     Verify plaintext password against bcrypt hash.
-    Compatible with Python bcrypt and Node bcryptjs.
+    Compatible with Python bcrypt.
     """
     return bcrypt.checkpw(
         plain_password.encode("utf-8"),
@@ -34,7 +34,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def hash_password(password: str) -> str:
     """
     Hash password using bcrypt.
-    Cost factor 12 recommended for production.
+    Cost factor 12 .
     """
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")

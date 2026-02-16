@@ -53,7 +53,6 @@ async def get_current_user(
                 detail="Invalid or expired authentication token"
             )
 
-        # Normalize roles to uppercase
         roles = [r.upper() for r in data.get("roles", [])]
 
         return CurrentUser(
@@ -74,29 +73,16 @@ def require_roles(*allowed_roles: str) -> Callable:
     """
     Dependency factory that creates a dependency requiring specific roles.
     
-    Args:
-        *allowed_roles: Variable number of role codes that are allowed
-        
-    Returns:
-        A dependency function that validates user has one of the allowed roles
-        
-    Example:
-        @router.get("/admin-only", dependencies=[Depends(require_roles("HR_ADMIN", "SUPER_ADMIN"))])
-        async def admin_endpoint():
-            ...
     """
     async def role_checker(
         current_user: CurrentUser = Depends(get_current_user)
     ) -> CurrentUser:
 
-        # 🔥 SUPER_ADMIN always allowed
         if "SUPER_ADMIN" in current_user.roles:
             return current_user
 
-        # Normalize allowed roles
         normalized_roles = [role.upper() for role in allowed_roles]
 
-        # Check required roles
         if not any(role in current_user.roles for role in normalized_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

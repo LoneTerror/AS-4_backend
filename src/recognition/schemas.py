@@ -1,5 +1,3 @@
-"""Recognition service schemas (Enterprise Contract-Compliant Version)"""
-
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
@@ -19,6 +17,7 @@ class ReviewCreateRequest(BaseModel):
     - comment: String between 10-2000 characters
     - image_url: Optional valid HTTPS URL (max 500 chars)
     - video_url: Optional valid HTTPS URL (max 500 chars)
+    
     """
     receiver_id: UUID = Field(
         ...,
@@ -73,8 +72,7 @@ class ReviewCreateRequest(BaseModel):
 class ReviewUpdateRequest(BaseModel):
     """
     Request schema for updating an existing review.
-    
-    All fields are optional, but at least one must be provided.
+
     """
     rating: Optional[int] = Field(
         None,
@@ -129,8 +127,7 @@ class ReviewUpdateRequest(BaseModel):
 class ReviewResponse(BaseModel):
     """
     Response schema for review data.
-    
-    Matches the API contract response format exactly.
+
     """
     review_id: UUID = Field(..., description="Unique review identifier")
     reviewer_id: UUID = Field(..., description="Employee who gave the review")
@@ -147,7 +144,7 @@ class ReviewResponse(BaseModel):
     updated_by: UUID = Field(..., description="Employee who last updated the record")
 
     model_config = {
-        "from_attributes": True,  # Allow creating from ORM models
+        "from_attributes": True, 
         "json_schema_extra": {
             "example": {
                 "review_id": "990e8400-e29b-41d4-a716-446655440004",
@@ -170,7 +167,8 @@ class ReviewResponse(BaseModel):
 
 class PaginationMeta(BaseModel):
     """
-    Pagination metadata matching API contract format.
+    Pagination metadata .
+    
     """
     current_page: int = Field(..., description="Current page number (1-indexed)")
     per_page: int = Field(..., description="Number of items per page")
@@ -196,6 +194,7 @@ class PaginationMeta(BaseModel):
 class PaginatedReviewResponse(BaseModel):
     """
     Paginated response containing list of reviews and pagination metadata.
+    
     """
     data: List[ReviewResponse] = Field(..., description="List of reviews")
     pagination: PaginationMeta = Field(..., description="Pagination metadata")
