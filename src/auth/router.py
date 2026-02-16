@@ -9,14 +9,20 @@ from src.auth.schemas import (
     RefreshRequest,
     EmployeeResponse,
     TokenValidationRequest,
-    TokenValidationResponse
+    TokenValidationResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse
 )
 from src.auth.service import (
     authenticate_user,
     create_employee,
     logout_user,
     refresh_access_token,
-    validate_token
+    validate_token,
+    request_password_reset,
+    reset_password
 )
 from src.auth.dependencies import require_roles
 from src.core.security import decode_token
@@ -69,3 +75,21 @@ async def validate_token_endpoint(payload: TokenValidationRequest):
     This is a public endpoint for inter-service communication
     """
     return await validate_token(payload.token)
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+async def forgot_password(payload: ForgotPasswordRequest):
+    """
+    Request password reset - sends reset link to email
+    Public endpoint - always returns success to prevent email enumeration
+    """
+    return await request_password_reset(payload.email)
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+async def reset_password_endpoint(payload: ResetPasswordRequest):
+    """
+    Reset password using reset token from email
+    Public endpoint - validates token and updates password
+    """
+    return await reset_password(payload.token, payload.new_password)
