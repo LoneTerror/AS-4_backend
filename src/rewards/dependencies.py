@@ -78,7 +78,6 @@ def require_roles(*allowed_roles: str) -> Callable:
         current_user: CurrentUser = Depends(get_current_user)
     ) -> CurrentUser:
 
-        # 🔥 SUPER_ADMIN always allowed
         if "SUPER_ADMIN" in current_user.roles:
             return current_user
 

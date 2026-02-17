@@ -10,9 +10,7 @@ class RewardService:
     def __init__(self, db: Prisma):
         self.db = db
 
-    # ==========================================
     # 🕵️ AUDIT LOG HELPER (Private Method)
-    # ==========================================
     async def _log_change(
         self,
         table_name: str,
@@ -37,22 +35,17 @@ class RewardService:
                     "performed_by": user_id,
                     "ip_address": ip_address,
                     "user_agent": user_agent,
-                    # Prisma handles Dict -> Json conversion automatically
+
                     "old_values": Json(old_values) if old_values else Json({}),
                     "new_values": Json(new_values) if new_values else Json({})
                 }
             )
         except Exception as e:
-            # ⚠️ rigorous logging should go here. 
-            # We don't want the whole API to fail just because the audit log failed.
             print(f"FAILED TO AUDIT LOG: {e}")
 
-    # ==========================================
-    # 🕵️ HELPER: GET REFERENCE DATA
-    # ==========================================
+    # HELPER: GET REFERENCE DATA
     async def _get_sys_id(self, table, code_field, code_value):
         """Generic helper to fetch ID from lookup tables (Status, Types)"""
-        # Note: In a real app, you should CACHE these results to avoid DB hits every time
         record = await getattr(self.db, table).find_unique(
             where={code_field: code_value}
         )
@@ -61,17 +54,17 @@ class RewardService:
                 status_code=500, 
                 detail=f"System Configuration Error: {code_value} not found in {table}"
             )
-        # return the ID (assuming the primary key field name is known or we return the object)
-        # Based on your schema:
         if table == "transaction_types": return record.type_id
         if table == "status_master": return record.status_id
         return None
 
-    # ==========================================
-    # 1. CATEGORY MANAGEMENT
-    # ==========================================
+    def _get_stock_status(self, stock: int) -> str:
+        if stock <= 0: return "Out of Stock"
+        if stock < 10: return "Limited Stock"
+        return "In Stock"
+
+    # CATEGORY MANAGEMENT
     async def create_category(self, request: schemas.CreateCategoryRequest, user_id: str, req_info: Request):
-        # Check for duplicate code
         existing = await self.db.reward_categories.find_unique(
             where={"category_code": request.category_code}
         )
@@ -105,25 +98,20 @@ class RewardService:
         where_clause = {"is_active": True} if active_only else {}
         return await self.db.reward_categories.find_many(where=where_clause)
     
-    # ==========================================
     # UPDATE CATEGORY
-    # ==========================================
     async def update_category(self, category_id: str, request: schemas.UpdateCategoryRequest, user_id: str, req_info: Request):
-        # 1. Check if category exists
+
         existing = await self.db.reward_categories.find_unique(
             where={"category_id": category_id}
         )
         if not existing:
             raise HTTPException(status_code=404, detail="Category not found")
 
-        # 2. Prepare update data (remove None values)
-        # exclude_unset=True ensures we only update fields the user actually sent
         update_data = request.model_dump(exclude_unset=True)
         
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
 
-        # 3. Add system fields
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
 
@@ -139,32 +127,28 @@ class RewardService:
             user_id=user_id,
             ip_address=req_info.client.host,
             user_agent=req_info.headers.get("user-agent"),
-            old_values=existing.model_dump(),     # <--- The snapshot BEFORE update
-            new_values=updated_category.model_dump() # <--- The snapshot AFTER update
+            old_values=existing.model_dump(),    
+            new_values=updated_category.model_dump() 
         )
 
         return updated_category
 
-    # ==========================================
-    # 2. CATALOG MANAGEMENT
-    # ==========================================
+    #CATALOG MANAGEMENT
     async def create_item(self, item: schemas.CreateRewardRequest, user_id: str, req_info: Request):
-        # 1. Verify Category Exists
+
         category = await self.db.reward_categories.find_unique(
             where={"category_id": str(item.category_id)}
         )
         if not category:
             raise HTTPException(status_code=404, detail="Category not found")
 
-        # 2. Check for duplicate Reward Code
         existing = await self.db.reward_catalog.find_unique(
             where={"reward_code": item.reward_code}
         )
         if existing:
             raise HTTPException(status_code=400, detail="Reward code already exists")
 
-        # 3. Create the Reward Configuration
-        new_item =  await self.db.reward_catalog.create(
+        new_item = await self.db.reward_catalog.create(
             data={
                 "reward_name": item.reward_name,
                 "reward_code": item.reward_code,
@@ -173,10 +157,12 @@ class RewardService:
                 "default_points": item.default_points,
                 "min_points": item.min_points,
                 "max_points": item.max_points,
+                "available_stock": item.available_stock if item.available_stock is not None else 0, 
                 "created_by": user_id,
                 "updated_by": user_id,
                 "updated_at": datetime.now(timezone.utc) 
-            }
+            },
+            include={"reward_categories": True} 
         )
 
         await self._log_change(
@@ -189,17 +175,36 @@ class RewardService:
             new_values=new_item.model_dump()
         )
 
-        return new_item
+        cat_data = None
+        if new_item.reward_categories:
+            cat_data = schemas.MinimalCategoryInfo(
+                category_id=new_item.reward_categories.category_id,
+                category_name=new_item.reward_categories.category_name,
+                category_code=new_item.reward_categories.category_code
+            )
+
+        return schemas.RewardItemResponse(
+            catalog_id=new_item.catalog_id,
+            reward_name=new_item.reward_name,
+            reward_code=new_item.reward_code,
+            description=new_item.description,
+            default_points=new_item.default_points,
+            min_points=new_item.min_points,
+            max_points=new_item.max_points,
+            is_active=new_item.is_active,
+            created_at=new_item.created_at,
+            category=cat_data,
+            stock_status=self._get_stock_status(new_item.available_stock), 
+            available_stock=new_item.available_stock
+        )
 
     async def get_catalog(self, active_only: bool = True, page: int = 1, size: int = 20):
-        # 1. Calculate Offset
+
         skip = (page - 1) * size
         where_clause = {"is_active": True} if active_only else {}
 
-        # 2. Get Total Count (for pagination logic)
         total_items = await self.db.reward_catalog.count(where=where_clause)
 
-        # 3. Get Data with Nested Category
         items = await self.db.reward_catalog.find_many(
             where=where_clause,
             skip=skip,
@@ -208,11 +213,10 @@ class RewardService:
             include={"reward_categories": True} 
         )
 
-        # 4. Map Prisma result to Pydantic Schema
-        # We manually map 'reward_categories' -> 'category' to match your API contract
         mapped_data = []
         for item in items:
-            # Create the nested category object
+
+            # 1. Map Category
             cat_data = None
             if item.reward_categories:
                 cat_data = schemas.MinimalCategoryInfo(
@@ -221,7 +225,15 @@ class RewardService:
                     category_code=item.reward_categories.category_code
                 )
             
-            # Create the main item
+            # 2. Calculate Stock Status
+            if item.available_stock <= 0:
+                status_msg = "Out of Stock"
+            elif item.available_stock < 10:
+                status_msg = "Limited Stock"
+            else:
+                status_msg = "In Stock"
+
+            # 3. Create Response Object
             mapped_item = schemas.RewardItemResponse(
                 catalog_id=item.catalog_id,
                 reward_name=item.reward_name,
@@ -232,11 +244,12 @@ class RewardService:
                 max_points=item.max_points,
                 is_active=item.is_active,
                 created_at=item.created_at,
-                category=cat_data 
+                category=cat_data,
+                stock_status=status_msg,
+                available_stock=item.available_stock 
             )
             mapped_data.append(mapped_item)
 
-        # 5. Calculate Pagination Metadata
         total_pages = (total_items + size - 1) // size
         
         return {
@@ -251,38 +264,88 @@ class RewardService:
             }
         }
     
-    # ==========================================
-    # UPDATE REWARD ITEM
-    # ==========================================
-    async def update_item(self, catalog_id: str, request: schemas.UpdateRewardRequest, user_id: str, req_info: Request):
-        # 1. Check if item exists
+    async def add_stock(self, catalog_id: str, request: schemas.AddStockRequest, user_id: str, req_info: Request):
+        """Safely increments inventory using atomic operations."""
+        
         existing_item = await self.db.reward_catalog.find_unique(
             where={"catalog_id": catalog_id}
         )
         if not existing_item:
             raise HTTPException(status_code=404, detail="Reward item not found")
 
-        # 2. Logic Check: Min/Max Points Integrity
-        # If user updates points, we must ensure min <= max
+        # Atomic increment
+        updated_item = await self.db.reward_catalog.update(
+            where={"catalog_id": catalog_id},
+            data={
+                "available_stock": {"increment": request.amount},
+                "updated_by": user_id,
+                "updated_at": datetime.now(timezone.utc)
+            },
+            include={"reward_categories": True}
+        )
+
+        # Audit Log
+        await self._log_change(
+            table_name="reward_catalog",
+            record_id=catalog_id,
+            operation="RESTOCK",
+            user_id=user_id,
+            ip_address=req_info.client.host,
+            user_agent=req_info.headers.get("user-agent"),
+            old_values={"available_stock": existing_item.available_stock},
+            new_values={"available_stock": updated_item.available_stock, "added": request.amount}
+        )
+
+        # Map Response
+        cat_data = None
+        if updated_item.reward_categories:
+            cat_data = schemas.MinimalCategoryInfo(
+                category_id=updated_item.reward_categories.category_id,
+                category_name=updated_item.reward_categories.category_name,
+                category_code=updated_item.reward_categories.category_code
+            )
+
+        return schemas.RewardItemResponse(
+            catalog_id=updated_item.catalog_id,
+            reward_name=updated_item.reward_name,
+            reward_code=updated_item.reward_code,
+            description=updated_item.description,
+            default_points=updated_item.default_points,
+            min_points=updated_item.min_points,
+            max_points=updated_item.max_points,
+            is_active=updated_item.is_active,
+            created_at=updated_item.created_at,
+            category=cat_data,
+            stock_status=self._get_stock_status(updated_item.available_stock),
+            available_stock=updated_item.available_stock 
+        )
+    
+    # UPDATE REWARD ITEM
+    async def update_item(self, catalog_id: str, request: schemas.UpdateRewardRequest, user_id: str, req_info: Request):
+
+        existing_item = await self.db.reward_catalog.find_unique(
+            where={"catalog_id": catalog_id}
+        )
+        if not existing_item:
+            raise HTTPException(status_code=404, detail="Reward item not found")
+
         new_min = request.min_points if request.min_points is not None else existing_item.min_points
         new_max = request.max_points if request.max_points is not None else existing_item.max_points
         
         if new_min > new_max:
             raise HTTPException(status_code=400, detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})")
 
-        # 3. Prepare update data
         update_data = request.model_dump(exclude_unset=True)
-
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
 
-        # 4. Add system fields
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
 
-        updated_item =  await self.db.reward_catalog.update(
+        updated_item = await self.db.reward_catalog.update(
             where={"catalog_id": catalog_id},
-            data=update_data
+            data=update_data,
+            include={"reward_categories": True} 
         )
 
         await self._log_change(
@@ -296,11 +359,29 @@ class RewardService:
             new_values=updated_item.model_dump()
         )
 
-        return updated_item
+        cat_data = None
+        if updated_item.reward_categories:
+            cat_data = schemas.MinimalCategoryInfo(
+                category_id=updated_item.reward_categories.category_id,
+                category_name=updated_item.reward_categories.category_name,
+                category_code=updated_item.reward_categories.category_code
+            )
 
-    # ==========================================
-    # 3. REDEMPTION / GRANTING LOGIC (WITH INVENTORY)
-    # ==========================================
+        return schemas.RewardItemResponse(
+            catalog_id=updated_item.catalog_id,
+            reward_name=updated_item.reward_name,
+            reward_code=updated_item.reward_code,
+            description=updated_item.description,
+            default_points=updated_item.default_points,
+            min_points=updated_item.min_points,
+            max_points=updated_item.max_points,
+            is_active=updated_item.is_active,
+            created_at=updated_item.created_at,
+            category=cat_data,
+            stock_status=self._get_stock_status(updated_item.available_stock) 
+        )
+
+    # REDEMPTION / GRANTING LOGIC (WITH INVENTORY)
     async def grant_reward(self, request: schemas.GrantRewardRequest, granted_by_user_id: str):
         """
         Handles the Redemption with Inventory Checks:
@@ -310,25 +391,19 @@ class RewardService:
         4. Deduct Points & Decrement Stock
         5. Create Transaction & History Records
         """
-        
-        # 1. PRE-VALIDATION (Reads only)
-        # -------------------------------
+
         reward_item = await self.db.reward_catalog.find_unique(
             where={"catalog_id": str(request.catalog_id)}
         )
         if not reward_item or not reward_item.is_active:
             raise HTTPException(status_code=400, detail="Reward is invalid or inactive")
 
-        # --- 🛡️ INVENTORY CHECK (NEW) ---
-        # If stock is 0, we stop immediately.
         if reward_item.available_stock <= 0:
              raise HTTPException(status_code=400, detail="Out of stock! This reward is no longer available.")
 
-        # Check Point Limits
         if request.points < reward_item.min_points or request.points > reward_item.max_points:
             raise HTTPException(status_code=400, detail="Points are outside the allowed range")
 
-        # Check Wallet Existence AND Balance
         wallet = await self.db.wallets.find_unique(where={"wallet_id": str(request.wallet_id)})
         if not wallet:
             raise HTTPException(status_code=404, detail="Wallet not found")
@@ -336,19 +411,15 @@ class RewardService:
         if wallet.available_points < request.points:
             raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
-        # Fetch IDs for the Transaction Record
         type_id = await self._get_sys_id("transaction_types", "type_code", "REWARD_REDEMPTION")
         status_id = await self._get_sys_id("status_master", "status_code", "COMPLETED")
 
-        # Generate unique reference
         ref_number = f"TXN-{int(datetime.now().timestamp())}-{str(uuid.uuid4())[:8]}"
 
-        # 2. ATOMIC WRITE TRANSACTION
-        # -------------------------------
+        # ATOMIC WRITE TRANSACTION
         try:
             async with self.db.tx() as transaction:
                 
-                # A. Update Wallet (Deduct Points)
                 await transaction.wallets.update(
                     where={"wallet_id": str(request.wallet_id)},
                     data={
@@ -359,16 +430,14 @@ class RewardService:
                     }
                 )
 
-                # B. Decrement Inventory (NEW!)
                 await transaction.reward_catalog.update(
                     where={"catalog_id": str(request.catalog_id)},
                     data={
-                        "available_stock": {"decrement": 1}, # Reduce stock by 1
+                        "available_stock": {"decrement": 1}, 
                         "updated_at": datetime.now(timezone.utc)
                     }
                 )
 
-                # C. Create Financial Ledger Record
                 await transaction.transactions.create(
                     data={
                         "wallet_id": str(request.wallet_id),
@@ -384,7 +453,6 @@ class RewardService:
                     }
                 )
 
-                # D. Create Reward History
                 history_record = await transaction.reward_history.create(
                     data={
                         "wallet_id": str(request.wallet_id),
@@ -398,8 +466,6 @@ class RewardService:
                     }
                 )
                 
-                # E. Return Custom Response with Status
-                # We return a dict here so the Router can map it to a Schema
                 return {
                     "history_id": history_record.history_id,
                     "points": history_record.points,
@@ -418,25 +484,22 @@ class RewardService:
         size: int = 10
     ):
         skip_count = (page - 1) * size
-        
-        # Build the filter dynamically
+
         where_clause = {}
         if wallet_id:
             where_clause["wallet_id"] = wallet_id
 
-        # Fetch data with relations (include names!)
         history = await self.db.reward_history.find_many(
             where=where_clause,
             skip=skip_count,
             take=size,
-            order={"granted_at": "desc"}, # Newest first
+            order={"granted_at": "desc"}, 
             include={
-                "reward_catalog": True, # Get Reward Name
-                "employees_reward_history_granted_byToemployees": True # Get Sender Name
+                "reward_catalog": True,
+                "employees_reward_history_granted_byToemployees": True 
             }
         )
-        
-        # Count total for pagination
+
         total_items = await self.db.reward_history.count(where=where_clause)
         
         return {
