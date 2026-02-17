@@ -135,9 +135,9 @@ async def get_points_summary_route(
 @wallets_router.post("/credit-from-review")
 async def credit_from_review_route(
     review_id: str,
-    current_user: CurrentUser = Depends(require_roles("HR_ADMIN", "SUPER_ADMIN"))
+    current_user: CurrentUser = Depends(get_current_user)
 ):
-    """Credit wallet based on review rating. The created_by is automatically fetched from the review."""
+    """Credit wallet based on review rating. Triggered automatically after review creation. No admin required."""
     return await credit_wallet_from_review(review_id, current_user)
 
 # Include sub-routers

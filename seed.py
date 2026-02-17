@@ -30,18 +30,27 @@ MGMT_TYPE_ID     = "aa0e8400-e29b-41d4-a716-446655440002"
 SR_DEV_DESIG_ID  = "660e8400-e29b-41d4-a716-446655440000"
 MGR_DESIG_ID     = "660e8400-e29b-41d4-a716-446655440001"
 ADMIN_DESIG_ID   = "660e8400-e29b-41d4-a716-446655440002"
+
+# Transaction type IDs
+CREDIT_TYPE_ID           = "bb0e8400-e29b-41d4-a716-446655440001"
+REWARD_REDEMPTION_TYPE_ID = "bb0e8400-e29b-41d4-a716-446655440002"
+
+# Reward category IDs
+GIFT_CARD_CAT_ID    = "cc0e8400-e29b-41d4-a716-446655440001"
+MERCHANDISE_CAT_ID  = "cc0e8400-e29b-41d4-a716-446655440002"
+EXPERIENCE_CAT_ID   = "cc0e8400-e29b-41d4-a716-446655440003"
 # ─────────────────────────────────────────────
 
 
 async def clean_db():
     """Delete all data in reverse-dependency order."""
     print("🧹 Cleaning existing data...")
-    
+
     # Option 1: Try CASCADE truncate (faster and more thorough)
     try:
         print("   Attempting CASCADE truncate...")
         await db.execute_raw("""
-            TRUNCATE TABLE 
+            TRUNCATE TABLE
                 audit_log,
                 reviews,
                 transactions,
@@ -64,27 +73,26 @@ async def clean_db():
     except Exception as e:
         print(f"   ⚠ CASCADE truncate failed: {e}")
         print("   Falling back to manual deletion...")
-        
-        # Option 2: Manual deletion in strict order
+
         deletion_order = [
-            ("audit_log", db.audit_log),
-            ("reviews", db.reviews),
-            ("transactions", db.transactions),
-            ("reward_history", db.reward_history),
-            ("refresh_tokens", db.refresh_tokens),
-            ("employee_roles", db.employee_roles),
-            ("wallets", db.wallets),
-            ("employees", db.employees),
-            ("reward_catalog", db.reward_catalog),
-            ("reward_categories", db.reward_categories),
-            ("transaction_types", db.transaction_types),
-            ("designations", db.designations),
-            ("departments", db.departments),
-            ("department_types", db.department_types),
-            ("roles", db.roles),
-            ("status_master", db.status_master),
+            ("audit_log",          db.audit_log),
+            ("reviews",            db.reviews),
+            ("transactions",       db.transactions),
+            ("reward_history",     db.reward_history),
+            ("refresh_tokens",     db.refresh_tokens),
+            ("employee_roles",     db.employee_roles),
+            ("wallets",            db.wallets),
+            ("employees",          db.employees),
+            ("reward_catalog",     db.reward_catalog),
+            ("reward_categories",  db.reward_categories),
+            ("transaction_types",  db.transaction_types),
+            ("designations",       db.designations),
+            ("departments",        db.departments),
+            ("department_types",   db.department_types),
+            ("roles",              db.roles),
+            ("status_master",      db.status_master),
         ]
-        
+
         for table_name, table in deletion_order:
             try:
                 count = await table.delete_many()
@@ -92,7 +100,7 @@ async def clean_db():
                     print(f"   ✓ Deleted {count} {table_name} records")
             except Exception as e:
                 print(f"   ✗ Could not delete {table_name}: {e}")
-    
+
     print("   Done.\n")
 
 
@@ -100,7 +108,7 @@ async def seed_status_master():
     print("📋 Seeding status_master...")
     now = datetime.now(timezone.utc)
 
-    # GENERAL statuses
+    # GENERAL — ACTIVE (fixed ID used by employees)
     await db.status_master.create(data={
         "status_id":   ACTIVE_STATUS_ID,
         "status_code": "ACTIVE",
@@ -110,19 +118,16 @@ async def seed_status_master():
         "updated_at":  now,
     })
 
-    # GENERAL, TRANSACTION, and REVIEW statuses
     statuses = [
         # GENERAL
-        ("INACTIVE", "Inactive", "GENERAL", "Entity is inactive"),
-        
-        # TRANSACTION
-        ("PENDING",  "Pending",  "TRANSACTION", "Transaction is pending"),
-        ("APPROVED", "Approved", "TRANSACTION", "Transaction is approved"),
-        ("REJECTED", "Rejected", "TRANSACTION", "Transaction is rejected"),
-        
-        # REVIEW (NEW - for Recognition Service)
-        ("REVIEW_ACTIVE",  "Active",  "REVIEW", "Review is active and visible"),
-        ("REVIEW_DELETED", "Deleted", "REVIEW", "Review has been deleted"),
+        ("INACTIVE",       "Inactive",  "GENERAL",     "Entity is inactive"),
+        # TRANSACTION — APPROVED is used by wallet service for credited transactions
+        ("PENDING",        "Pending",   "TRANSACTION",  "Transaction is pending"),
+        ("APPROVED",       "Approved",  "TRANSACTION",  "Transaction is approved"),
+        ("REJECTED",       "Rejected",  "TRANSACTION",  "Transaction is rejected"),
+        # REVIEW
+        ("REVIEW_ACTIVE",  "Active",    "REVIEW",       "Review is active and visible"),
+        ("REVIEW_DELETED", "Deleted",   "REVIEW",       "Review has been deleted"),
     ]
 
     for code, name, entity, desc in statuses:
@@ -134,9 +139,37 @@ async def seed_status_master():
             "updated_at":  now,
         })
 
-    print("   ✅ Created GENERAL statuses: ACTIVE, INACTIVE")
-    print("   ✅ Created TRANSACTION statuses: PENDING, APPROVED, REJECTED")
-    print("   ✅ Created REVIEW statuses: REVIEW_ACTIVE, REVIEW_DELETED")
+    print("   ✅ GENERAL:      ACTIVE, INACTIVE")
+    print("   ✅ TRANSACTION:  PENDING, APPROVED, REJECTED")
+    print("   ✅ REVIEW:       REVIEW_ACTIVE, REVIEW_DELETED")
+    print("   Done.\n")
+
+
+async def seed_transaction_types():
+    print("💳 Seeding transaction_types...")
+    now = datetime.now(timezone.utc)
+
+    # CREDIT — awarded to receiver when a review is submitted (rating ≥ 3)
+    await db.transaction_types.create(data={
+        "type_id":     CREDIT_TYPE_ID,
+        "type_name":   "Credit",
+        "type_code":   "CREDIT",
+        "description": "Points credited to wallet from a performance review",
+        "is_credit":   True,
+        "updated_at":  now,
+    })
+    print("   ✅ CREDIT           (is_credit=True)  — review point awards")
+
+    # REWARD_REDEMPTION — deducted when an employee redeems a reward
+    await db.transaction_types.create(data={
+        "type_id":     REWARD_REDEMPTION_TYPE_ID,
+        "type_name":   "Reward Redemption",
+        "type_code":   "REWARD_REDEMPTION",
+        "description": "Points deducted when an employee redeems a reward from the catalog",
+        "is_credit":   False,
+        "updated_at":  now,
+    })
+    print("   ✅ REWARD_REDEMPTION (is_credit=False) — reward catalog redemptions")
     print("   Done.\n")
 
 
@@ -232,7 +265,7 @@ async def seed_employees():
     hashed = hash_password(TEST_PASSWORD)
     now = datetime.now(timezone.utc)
 
-    # ── Admin ─────────────────────────────────────────────────
+    # ── Admin ──────────────────────────────────────────────────────────────
     await db.employees.create(data={
         "employee_id":     ADMIN_ID,
         "username":        "admin.user",
@@ -256,7 +289,7 @@ async def seed_employees():
     })
     print("   ✅ admin.user  → SUPER_ADMIN + HR_ADMIN")
 
-    # ── Manager (Jane) ────────────────────────────────────────
+    # ── Manager (Jane) ─────────────────────────────────────────────────────
     await db.employees.create(data={
         "employee_id":     JANE_ID,
         "username":        "jane.smith",
@@ -280,7 +313,7 @@ async def seed_employees():
     })
     print("   ✅ jane.smith  → MANAGER")
 
-    # ── Employee (John) ───────────────────────────────────────
+    # ── Employee (John) ────────────────────────────────────────────────────
     await db.employees.create(data={
         "employee_id":     JOHN_ID,
         "username":        "john.doe",
@@ -319,7 +352,7 @@ async def seed_employee_roles():
         (ADMIN_ID, "SUPER_ADMIN"),
         (ADMIN_ID, "HR_ADMIN"),
         (JANE_ID,  "MANAGER"),
-        (JANE_ID,  "EMPLOYEE"),  # Managers can also create reviews
+        (JANE_ID,  "EMPLOYEE"),   # Managers can also create reviews
         (JOHN_ID,  "EMPLOYEE"),
     ]
 
@@ -338,6 +371,118 @@ async def seed_employee_roles():
     print()
 
 
+async def seed_reward_categories():
+    print("🏷️  Seeding reward_categories...")
+    now = datetime.now(timezone.utc)
+
+    categories = [
+        (GIFT_CARD_CAT_ID,   "Gift Cards",    "GIFT_CARD",   "Digital and physical gift cards"),
+        (MERCHANDISE_CAT_ID, "Merchandise",   "MERCHANDISE", "Company branded merchandise and physical items"),
+        (EXPERIENCE_CAT_ID,  "Experiences",   "EXPERIENCE",  "Events, courses, and experiences"),
+    ]
+
+    for cat_id, name, code, desc in categories:
+        await db.reward_categories.create(data={
+            "category_id":   cat_id,
+            "category_name": name,
+            "category_code": code,
+            "description":   desc,
+            "is_active":     True,
+            "employees_reward_categories_created_byToemployees": {
+                "connect": {"employee_id": ADMIN_ID}
+            },
+            "employees_reward_categories_updated_byToemployees": {
+                "connect": {"employee_id": ADMIN_ID}
+            },
+            "updated_at": now,
+        })
+        print(f"   ✅ {code}")
+
+    print("   Done.\n")
+
+
+async def seed_reward_catalog():
+    print("🎁 Seeding reward_catalog...")
+    now = datetime.now(timezone.utc)
+
+    items = [
+        # (name, code, description, category_id, default_pts, min_pts, max_pts, stock)
+        (
+            "Amazon Gift Card $10",
+            "REW-AMZ-10",
+            "Amazon digital gift card worth $10 USD",
+            GIFT_CARD_CAT_ID,
+            100, 100, 100, 50,
+        ),
+        (
+            "Amazon Gift Card $25",
+            "REW-AMZ-25",
+            "Amazon digital gift card worth $25 USD",
+            GIFT_CARD_CAT_ID,
+            250, 250, 250, 30,
+        ),
+        (
+            "Company T-Shirt",
+            "REW-MERCH-SHIRT",
+            "Premium company branded T-shirt",
+            MERCHANDISE_CAT_ID,
+            200, 200, 200, 100,
+        ),
+        (
+            "Company Hoodie",
+            "REW-MERCH-HOODIE",
+            "Premium company branded hoodie",
+            MERCHANDISE_CAT_ID,
+            400, 400, 400, 40,
+        ),
+        (
+            "Udemy Course Voucher",
+            "REW-LEARN-UDEMY",
+            "One Udemy course of your choice",
+            EXPERIENCE_CAT_ID,
+            300, 300, 300, 20,
+        ),
+        (
+            "Team Lunch Voucher",
+            "REW-EXP-LUNCH",
+            "Lunch for you and your team (up to 5 people)",
+            EXPERIENCE_CAT_ID,
+            500, 500, 500, 15,
+        ),
+    ]
+
+    for name, code, desc, cat_id, default_pts, min_pts, max_pts, stock in items:
+        # Use relation connect for category_id (Prisma Python requires this)
+        # available_stock is updated via raw SQL after creation since
+        # some generated clients don't expose it as a writable scalar
+        item = await db.reward_catalog.create(data={
+            "reward_name":    name,
+            "reward_code":    code,
+            "description":    desc,
+            "default_points": default_pts,
+            "min_points":     min_pts,
+            "max_points":     max_pts,
+            "is_active":      True,
+            "reward_categories": {
+                "connect": {"category_id": cat_id}
+            },
+            "employees_reward_catalog_created_byToemployees": {
+                "connect": {"employee_id": ADMIN_ID}
+            },
+            "employees_reward_catalog_updated_byToemployees": {
+                "connect": {"employee_id": ADMIN_ID}
+            },
+            "updated_at": now,
+        })
+        # Set available_stock directly via raw SQL
+        await db.execute_raw(
+            f"UPDATE reward_catalog SET available_stock = {stock} WHERE catalog_id = '{item.catalog_id}'"
+        )
+        print(f"   ✅ {code:25s}  {default_pts} pts  stock: {stock}")
+
+    print("   Done.\n")
+
+
 async def main():
     await db.connect()
 
@@ -349,11 +494,14 @@ async def main():
 
         await clean_db()
         await seed_status_master()
+        await seed_transaction_types()   # ← NEW: CREDIT + REWARD_REDEMPTION
         await seed_roles()
         await seed_departments()
         await seed_designations()
         await seed_employees()
         await seed_employee_roles()
+        await seed_reward_categories()   # ← NEW: Gift Cards, Merchandise, Experiences
+        await seed_reward_catalog()      # ← NEW: 6 sample reward items
 
         print("=" * 60)
         print("🎉 SEED COMPLETE!")
@@ -367,10 +515,17 @@ async def main():
         print()
         print(f"   password (all): {TEST_PASSWORD}")
         print()
-        print("🚀 Auth Service:        http://127.0.0.1:8001/v1/docs")
-        print("🚀 Recognition Service: http://127.0.0.1:8005/v1/docs")
+        print("💳 Transaction types seeded:")
+        print("   CREDIT           (is_credit=True)  — auto-credited on review")
+        print("   REWARD_REDEMPTION (is_credit=False) — deducted on reward redemption")
         print()
-        print("✅ Review creation will now work!")
+        print("🎁 Reward catalog: 6 items across 3 categories")
+        print()
+        print("🚀 Auth Service:        http://127.0.0.1:8001/v1/docs")
+        print("🚀 Employee Service:    http://127.0.0.1:8002/v1/docs")
+        print("🚀 Wallet Service:      http://127.0.0.1:8004/v1/docs")
+        print("🚀 Recognition Service: http://127.0.0.1:8005/v1/docs")
+        print("🚀 Rewards Service:     http://127.0.0.1:8006/v1/docs")
         print()
 
     except Exception as e:
