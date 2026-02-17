@@ -9,10 +9,10 @@ from src.auth.router import router as auth_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
-    print("Employee Service: 🟢 Database Connected")
+    print("Auth Service: 🟢 Database Connected")
     yield
     await db.disconnect()
-    print("Employee Service: 🔴 Database Disconnected")
+    print("Auth Service: 🔴 Database Disconnected")
 
 
 app = FastAPI(
