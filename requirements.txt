@@ -6,6 +6,7 @@ uvicorn[standard]==0.32.0
 pydantic==2.10.0
 pydantic-settings==2.6.0
 pydantic[email]
+email-validator>=2.0.0
 
 #api rate-limiting
 slowapi
@@ -22,6 +23,7 @@ httpx==0.28.0
 # Security
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt==4.0.1 
 python-multipart==0.0.19
 
 # Environment variables
@@ -32,3 +34,4 @@ python-dateutil==2.9.0.post0
 
 pytest
 pytest-asyncio
+pytest-mock  

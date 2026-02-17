@@ -16,8 +16,10 @@ from src.common.middleware import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
+    print("Employee Service: 🟢 Database Connected")
     yield
     await db.disconnect()
+    print("Employee Service: 🔴 Database Disconnected")
 
 app = FastAPI(
     title="Recognition Service",

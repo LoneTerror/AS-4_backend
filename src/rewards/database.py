@@ -7,11 +7,13 @@ async def connect_db():
     """Connect to the Prisma database."""
     if not prisma_client.is_connected():
         await prisma_client.connect()
+        print("Employee Service: 🟢 Database Connected")
 
 async def disconnect_db():
     """Disconnect from the Prisma database."""
     if prisma_client.is_connected():
         await prisma_client.disconnect()
+        print("Employee Service: 🔴 Database Disconnected")
 
 async def get_db():
     """Dependency to yield the Prisma client for our FastAPI routes."""
