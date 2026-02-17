@@ -59,14 +59,14 @@ async def create_transaction(data, current_user: CurrentUser):
     if not txn_type:
         raise HTTPException(status_code=404, detail="Transaction type not found")
 
-    # Look up SUCCESS status automatically
-    success_status = await db.status_master.find_unique(
-        where={"status_code": "SUCCESS"}
+    # Look up transaction status — DB uses APPROVED for transactions
+    success_status = await db.status_master.find_first(
+        where={"status_code": "APPROVED"}
     )
     if not success_status:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Transaction configuration missing"
+            detail="APPROVED status not found in status_master. Run seed_transaction_types.py"
         )
     
     status_id = success_status.status_id
@@ -344,13 +344,6 @@ async def get_points_summary(wallet_id: str, current_user: CurrentUser):
     }
 
 async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
-    # RBAC: Only admins can credit from review
-    if not is_admin(current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions"
-        )
-
     review_id = str(review_id)
 
     # 1. Fetch review
@@ -385,19 +378,24 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
             detail="Wallet not found"
         )
 
-    # 4. Fetch transaction type and status
+    # 4. Fetch transaction type (CREDIT) and status (APPROVED)
+    # Seed: run seed_transaction_types.py once to create the CREDIT type
     txn_type = await db.transaction_types.find_unique(
         where={"type_code": "CREDIT"}
     )
-
-    status_record = await db.status_master.find_unique(
-        where={"status_code": "SUCCESS"}
-    )
-
-    if not txn_type or not status_record:
+    if not txn_type:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Transaction configuration missing"
+            detail="CREDIT transaction type missing. Run seed_transaction_types.py once to seed it."
+        )
+
+    status_record = await db.status_master.find_first(
+        where={"status_code": "APPROVED"}
+    )
+    if not status_record:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="APPROVED status not found in status_master. Run seed_transaction_types.py"
         )
 
     # 5. Idempotent reference
