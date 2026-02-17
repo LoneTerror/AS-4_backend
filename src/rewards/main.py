@@ -1,15 +1,16 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from .database import connect_db, disconnect_db
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 
+from src.prisma.client import db
+from src.common.middleware import (
+    request_rate_limit_middleware,
+    http_exception_handler,
+    validation_exception_handler,
+    generic_exception_handler
+)
 from . import router as rewards_router
 
-limiter = Limiter(key_func=get_remote_address)
 
-# Initialize the FastAPI Application
 app = FastAPI(
     title="Reward Microservice",
     description="API for managing the reward catalog and point redemptions.",
@@ -18,27 +19,31 @@ app = FastAPI(
     docs_url="/v1/docs",
     redoc_url="/v1/redoc",
 )
+app.middleware("http")(request_rate_limit_middleware)
 
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Mount the Routers
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, generic_exception_handler)
 app.include_router(rewards_router.router)
 
 @app.on_event("startup")
 async def startup():
-    await connect_db()
+    if not db.is_connected():
+        await db.connect()
+        print("Rewards Service: 🟢 Database Connected")
 
 @app.on_event("shutdown")
 async def shutdown():
-    await disconnect_db()
+    if db.is_connected():
+        await db.disconnect()
+        print("Rewards Service: 🔴 Database Disconnected")
 
-# Health Check Endpoint
 @app.get("/")
 @app.get("/health")
 def health_check():
     return {
         "service": "Reward Microservice",
         "status": "System Operational",
-        "version": "0.1.0"
+        "version": "0.1.0",
+        "database": "Connected" if db.is_connected() else "Disconnected"
     }
