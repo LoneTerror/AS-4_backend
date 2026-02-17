@@ -398,15 +398,10 @@ See `schema.prisma` for complete schema definition.
 6. **Set rate limits**: Configure API gateway limits
 7. **Update CORS**: Restrict to production domains
 
-### Example with Gunicorn
+### Example with Uvicorn
 
 ```bash
-gunicorn main:app \
-  --workers 4 \
-  --worker-class uvicorn.workers.UvicornWorker \
-  --bind 0.0.0.0:8005 \
-  --access-logfile - \
-  --error-logfile -
+uvicorn src.recognition.main:app --port 8005 --reload
 ```
 
 ## Support
