@@ -39,7 +39,6 @@ class LogoutRequest(BaseModel):
 
 
 class TokenValidationRequest(BaseModel):
-    """Request schema for token validation from other services"""
     token: str
 
 
