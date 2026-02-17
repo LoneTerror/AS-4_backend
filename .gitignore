@@ -69,3 +69,7 @@ generated/
 pytest.ini
 __pycache__/
 *.pyc
+
+.db
+.sqlite3
+.sqlite
