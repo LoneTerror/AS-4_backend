@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
 from src.prisma.client import db
-from src.recognition.router import router as recognition_router
+from src.wallet.routes import router as wallet_router
 from src.common.middleware import (
     request_rate_limit_middleware,
     http_exception_handler,
@@ -16,13 +16,11 @@ from src.common.middleware import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
-    print("Recogntion Service: 🟢 Database Connected")
     yield
     await db.disconnect()
-    print("Recognition Service: 🔴 Database Disconnected")
 
 app = FastAPI(
-    title="Recognition Service",
+    title="Wallet Service",
     version="1.0.0",
     openapi_url="/v1/openapi.json",
     docs_url="/v1/docs",
@@ -60,12 +58,4 @@ app.add_middleware(
 )
 
 # Router
-app.include_router(recognition_router, prefix="/v1", tags=["Recognition"])
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "src.main:app",  
-        host="0.0.0.0",
-        port=8001,
-        reload=True
-    )
+app.include_router(wallet_router, prefix="/v1")

@@ -4,7 +4,6 @@ from prisma import Prisma
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-# Import your local files
 from . import schemas
 from . import service
 from . import dependencies
@@ -15,12 +14,9 @@ router = APIRouter(
     tags=["Rewards"]
 )
 
-# Initialize Rate Limiter
 limiter = Limiter(key_func=get_remote_address)
 
-# =========================================================
-# 1. CATEGORY ENDPOINTS
-# =========================================================
+# CATEGORY ENDPOINTS
 
 @router.post("/categories", response_model=schemas.CategoryResponse, status_code=status.HTTP_201_CREATED)
 async def create_category(
@@ -60,11 +56,7 @@ async def get_categories(
     svc = service.RewardService(db)
     return await svc.get_categories(active_only=active_only)
 
-
-# =========================================================
-# 2. CATALOG ENDPOINTS
-# =========================================================
-
+# CATALOG ENDPOINTS
 @router.post("/catalog", response_model=schemas.RewardItemResponse, status_code=status.HTTP_201_CREATED)
 async def create_reward_item(
     request: Request, 
@@ -91,8 +83,8 @@ async def update_reward_item(
 @router.get("/catalog", response_model=schemas.PaginatedCatalogResponse)
 async def view_catalog(
     active_only: bool = True,
-    page: int = 1,     # Query param: ?page=1
-    size: int = 20,    # Query param: ?size=20
+    page: int = 1,    
+    size: int = 20,    
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.get_current_user)
 ):
@@ -102,10 +94,19 @@ async def view_catalog(
     svc = service.RewardService(db)
     return await svc.get_catalog(active_only=active_only, page=page, size=size)
 
+@router.patch("/catalog/{catalog_id}/stock", response_model=schemas.RewardItemResponse)
+async def restock_item(
+    catalog_id: str,
+    body: schemas.AddStockRequest,
+    request: Request,
+    db: Prisma = Depends(get_db),
+    current_user: dependencies.CurrentUser = Depends(dependencies.get_current_user)
+):
+    """Adds stock to an existing reward item."""
+    svc = service.RewardService(db)
+    return await svc.add_stock(catalog_id, body, current_user.id, request)
 
-# =========================================================
-# 3. REDEMPTION & HISTORY ENDPOINTS
-# =========================================================
+# REDEMPTION & HISTORY ENDPOINTS
 
 @router.post("/redeem", response_model=schemas.RedemptionResponse, status_code=status.HTTP_201_CREATED) 
 @limiter.limit("5/minute")
@@ -122,8 +123,7 @@ async def redeem_reward(
     )
 
 
-# 4. REWARD HISTORY ENDPOINTS
-
+# REWARD HISTORY ENDPOINTS
 @router.get("/history/me", response_model=schemas.PaginatedHistoryResponse)
 async def get_my_history(
     page: int = 1,
@@ -135,15 +135,12 @@ async def get_my_history(
     View ONLY my own reward history.
     """
     svc = service.RewardService(db)
-    
-    # 1. Find the user's wallet
+
     my_wallet_id = await svc.get_wallet_id_for_user(current_user.id)
     
     if not my_wallet_id:
-        # If they don't have a wallet, they have no history
         return {"data": [], "total_items": 0, "page": page, "size": size}
 
-    # 2. Get history for that wallet
     return await svc.get_history(wallet_id=my_wallet_id, page=page, size=size)
 
 
@@ -153,7 +150,6 @@ async def get_all_history(
     page: int = 1,
     size: int = 10,
     db: Prisma = Depends(get_db),
-    # Only Admins can view everyone's history
     current_user: dependencies.CurrentUser = Depends(dependencies.require_roles("ADMIN", "HR_ADMIN"))
 ):
     """

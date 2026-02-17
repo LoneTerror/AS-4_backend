@@ -2,9 +2,7 @@ from pydantic import BaseModel, Field, UUID4, validator
 from typing import Optional, List
 from datetime import datetime
 
-# ==========================================
-# 1. CATEGORY SCHEMAS (reward_categories)
-# ==========================================
+# CATEGORY SCHEMAS (reward_categories)
 
 class CreateCategoryRequest(BaseModel):
     category_name: str = Field(..., max_length=100)
@@ -27,8 +25,6 @@ class CategoryResponse(BaseModel):
     class Config:
         from_attributes = True
 
-
-
 class MinimalCategoryInfo(BaseModel):
     category_id: UUID4
     category_name: str
@@ -37,10 +33,7 @@ class MinimalCategoryInfo(BaseModel):
     class Config:
         from_attributes = True
 
-
-# ==========================================
-# 2. CATALOG SCHEMAS (reward_catalog)
-# ==========================================
+#CATALOG SCHEMAS (reward_catalog)
 
 class CreateRewardRequest(BaseModel):
     reward_name: str = Field(..., max_length=200)
@@ -48,10 +41,10 @@ class CreateRewardRequest(BaseModel):
     description: Optional[str] = None
     category_id: UUID4
     
-    # Points Logic
     default_points: int = Field(..., gt=0)
     min_points: int = Field(..., gt=0)
     max_points: int = Field(..., gt=0)
+    available_stock: Optional[int] = Field(0, ge=0, description="Initial stock count")
 
     @validator('max_points')
     def check_max_points(cls, v, values):
@@ -77,24 +70,25 @@ class RewardItemResponse(BaseModel):
     max_points: int
     is_active: bool
     created_at: datetime
-    
-    # Nested Object (Instead of just category_id)
+    stock_status: str
+    available_stock: int
+
     category: Optional[MinimalCategoryInfo] = None 
 
     class Config:
         from_attributes = True
 
+class AddStockRequest(BaseModel):
+    amount: int = Field(..., gt=0, description="Amount of new stock to add")
 
-# ==========================================
-# 3. HISTORY/GRANTING SCHEMAS (reward_history)
-# ==========================================
+# HISTORY/GRANTING SCHEMAS (reward_history)
 
 class GrantRewardRequest(BaseModel):
     """
     Used when a Manager grants a reward to an Employee OR 
     an Employee claims a specific reward.
     """
-    wallet_id: UUID4 # The recipient's wallet ID
+    wallet_id: UUID4 
     catalog_id: UUID4
     points: int = Field(..., gt=0, description="Actual points given/redeemed")
     comment: Optional[str] = None
@@ -112,8 +106,7 @@ class RewardHistoryResponse(BaseModel):
     points: int
     comment: Optional[str]
     granted_at: datetime
-    
-    # Nested Relations (Prisma will fill these)
+
     reward_catalog: Optional[MinimalCatalogInfo] = None
     employees_reward_history_granted_byToemployees: Optional[MinimalEmployeeInfo] = None
     
@@ -144,7 +137,7 @@ class PaginationMeta(BaseModel):
     has_next: bool
     has_previous: bool
 
-# --- 4. WRAPPER RESPONSE ---
+# WRAPPER RESPONSE
 class PaginatedCatalogResponse(BaseModel):
     data: List[RewardItemResponse]
     pagination: PaginationMeta

@@ -1,34 +1,37 @@
-import os
-import httpx
-from typing import List, Callable, Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from typing import List, Callable
+import httpx
+import os
 
-# 1. Setup Security Scheme
 security = HTTPBearer()
 
-# 2. Get Auth URL from Environment Variables
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
+
 
 class CurrentUser(BaseModel):
     id: str
-    email: str             
-    roles: List[str]       
-    department_id: Optional[str] = None
+    email: str
+    roles: List[str]
+    department_id: str | None = None
+
 
 async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> CurrentUser:
     """
-    Validates the authentication token by calling the Auth Service.
+    Validates the authentication token and returns the current user.
+    
+    Raises:
+        HTTPException 401: Invalid or expired authentication token
+        HTTPException 503: Authentication service unavailable
     """
     token = credentials.credentials
     request_id = request.headers.get("X-Request-ID")
 
     try:
-        # Call the Auth Service to verify the token
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
                 AUTH_SERVICE_URL,
@@ -36,7 +39,6 @@ async def get_current_user(
                 headers={"X-Request-ID": request_id} if request_id else None
             )
 
-        # Handle Auth Service Errors
         if response.status_code != 200:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -45,7 +47,6 @@ async def get_current_user(
 
         data = response.json()
 
-        # Double check validity flag
         if not data.get("valid"):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -57,34 +58,45 @@ async def get_current_user(
 
         return CurrentUser(
             id=data["user_id"],
-            email=data.get("email", ""), 
-            roles=roles,                 
+            email=data["email"],
+            roles=roles,
             department_id=data.get("department_id")
         )
 
     except httpx.RequestError:
-        # If Auth Service is down, we can't verify users
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service unavailable"
         )
 
+
 def require_roles(*allowed_roles: str) -> Callable:
     """
-    Factory function to check for specific roles.
-    Usage: @router.get("/", dependencies=[Depends(require_roles("ADMIN", "HR"))])
+    Dependency factory that creates a dependency requiring specific roles.
+    
+    Args:
+        *allowed_roles: Variable number of role codes that are allowed
+        
+    Returns:
+        A dependency function that validates user has one of the allowed roles
+        
+    Example:
+        @router.get("/admin-only", dependencies=[Depends(require_roles("HR_ADMIN", "SUPER_ADMIN"))])
+        async def admin_endpoint():
+            ...
     """
     async def role_checker(
         current_user: CurrentUser = Depends(get_current_user)
     ) -> CurrentUser:
 
+        # 🔥 SUPER_ADMIN always allowed
         if "SUPER_ADMIN" in current_user.roles:
             return current_user
 
         # Normalize allowed roles
         normalized_roles = [role.upper() for role in allowed_roles]
 
-        # Check if user has ANY of the allowed roles
+        # Check required roles
         if not any(role in current_user.roles for role in normalized_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
