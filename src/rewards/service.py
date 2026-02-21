@@ -5,6 +5,7 @@ from uuid import UUID
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone 
 from . import schemas
+from src.core.logger import logger
 
 class RewardService:
     def __init__(self, db: Prisma):
@@ -35,13 +36,13 @@ class RewardService:
                     "performed_by": user_id,
                     "ip_address": ip_address,
                     "user_agent": user_agent,
-
                     "old_values": Json(old_values) if old_values else Json({}),
                     "new_values": Json(new_values) if new_values else Json({})
                 }
             )
+            logger.debug(f"Audit log created: {operation} on {table_name} for record {record_id}")
         except Exception as e:
-            print(f"FAILED TO AUDIT LOG: {e}")
+            logger.error(f"FAILED TO AUDIT LOG: {e}", exc_info=True)
 
     # HELPER: GET REFERENCE DATA
     async def _get_sys_id(self, table, code_field, code_value):
@@ -65,10 +66,12 @@ class RewardService:
 
     # CATEGORY MANAGEMENT
     async def create_category(self, request: schemas.CreateCategoryRequest, user_id: str, req_info: Request):
+        logger.info(f"User {user_id} attempting to create category: {request.category_code}")
         existing = await self.db.reward_categories.find_unique(
             where={"category_code": request.category_code}
         )
         if existing:
+            logger.warning(f"Category creation failed: code '{request.category_code}' already exists")
             raise HTTPException(status_code=400, detail="Category code already exists")
 
         new_category =  await self.db.reward_categories.create(
@@ -91,7 +94,7 @@ class RewardService:
             user_agent=req_info.headers.get("user-agent"),
             new_values=new_category.model_dump()
         )
-
+        logger.info(f"Successfully created category {new_category.category_id}")
         return new_category
 
     async def get_categories(self, active_only: bool = True):
@@ -391,24 +394,29 @@ class RewardService:
         4. Deduct Points & Decrement Stock
         5. Create Transaction & History Records
         """
-
+        logger.info(f"Initiating grant_reward. Catalog ID: {request.catalog_id}, Wallet ID: {request.wallet_id}")
         reward_item = await self.db.reward_catalog.find_unique(
             where={"catalog_id": str(request.catalog_id)}
         )
         if not reward_item or not reward_item.is_active:
+            logger.warning(f"Grant failed: Reward {request.catalog_id} invalid or inactive.")
             raise HTTPException(status_code=400, detail="Reward is invalid or inactive")
 
         if reward_item.available_stock <= 0:
-             raise HTTPException(status_code=400, detail="Out of stock! This reward is no longer available.")
+            logger.warning(f"Grant failed: Reward {request.catalog_id} out of stock.")
+            raise HTTPException(status_code=400, detail="Out of stock! This reward is no longer available.")
 
         if request.points < reward_item.min_points or request.points > reward_item.max_points:
+            logger.warning(f"Grant failed: Points {request.points} outside bounds for {request.catalog_id}.")
             raise HTTPException(status_code=400, detail="Points are outside the allowed range")
 
         wallet = await self.db.wallets.find_unique(where={"wallet_id": str(request.wallet_id)})
         if not wallet:
+            logger.warning(f"Grant failed: Wallet {request.wallet_id} not found.")
             raise HTTPException(status_code=404, detail="Wallet not found")
         
         if wallet.available_points < request.points:
+            logger.warning(f"Grant failed: Insufficient points in wallet {request.wallet_id}.")
             raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
         type_id = await self._get_sys_id("transaction_types", "type_code", "REWARD_REDEMPTION")
@@ -418,6 +426,7 @@ class RewardService:
 
         # ATOMIC WRITE TRANSACTION
         try:
+            logger.debug(f"Starting atomic transaction for grant_reward {ref_number}")
             async with self.db.tx() as transaction:
                 
                 await transaction.wallets.update(
@@ -465,7 +474,7 @@ class RewardService:
                         "updated_at": datetime.now(timezone.utc)
                     }
                 )
-                
+                logger.info(f"Transaction {ref_number} completed successfully for wallet {request.wallet_id}")
                 return {
                     "history_id": history_record.history_id,
                     "points": history_record.points,
@@ -475,6 +484,7 @@ class RewardService:
                 }
 
         except Exception as e:
+            logger.error(f"Atomic transaction failed for {ref_number}: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
         
     async def get_history(

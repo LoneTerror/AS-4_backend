@@ -7,6 +7,8 @@ from . import schemas
 from . import service
 from . import dependencies
 
+from src.core.logger import logger
+
 async def get_db() -> Prisma:
     return db
 
@@ -23,9 +25,8 @@ async def create_category(
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.require_roles("ADMIN", "HR_ADMIN"))
 ):
-    """
-    Create a new reward category.
-    """
+    """Create a new reward category."""
+    logger.info(f"User {current_user.id} requested to create category: {body.category_name}")
     svc = service.RewardService(db)
     return await svc.create_category(body, user_id=current_user.id, req_info=request)
 
@@ -38,9 +39,8 @@ async def update_category(
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.require_roles("ADMIN", "HR_ADMIN"))
 ):
-    """
-    Update a category.
-    """
+    """Update a category."""
+    logger.info(f"User {current_user.id} updating category: {category_id}")
     svc = service.RewardService(db)
     return await svc.update_category(category_id, body, user_id=current_user.id, req_info=request)
 
@@ -51,6 +51,7 @@ async def get_categories(
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.get_current_user)
 ):
+    logger.debug(f"User {current_user.id} fetching categories. Active only: {active_only}")
     svc = service.RewardService(db)
     return await svc.get_categories(active_only=active_only)
 
@@ -62,8 +63,9 @@ async def create_reward_item(
     request: Request, 
     item: schemas.CreateRewardRequest,
     db: Prisma = Depends(get_db),
-    current_user: dependencies.CurrentUser = Depends(dependencies.require_roles("ADMIN", "HR_ADMIN"))                              
+    current_user: dependencies.CurrentUser = Depends(dependencies.require_roles("ADMIN", "HR_ADMIN"))                               
 ):
+    logger.info(f"Admin {current_user.id} creating reward item: {item.reward_code}")
     svc = service.RewardService(db)
     return await svc.create_item(item, user_id=current_user.id, req_info=request)
 
@@ -76,6 +78,7 @@ async def update_reward_item(
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.require_roles("ADMIN", "HR_ADMIN"))
 ):
+    logger.info(f"Admin {current_user.id} updating catalog item: {catalog_id}")
     svc = service.RewardService(db)
     return await svc.update_item(catalog_id, body, user_id=current_user.id, req_info=request)
 
@@ -88,9 +91,8 @@ async def view_catalog(
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.get_current_user)
 ):
-    """
-    View the catalog with pagination and nested category details.
-    """
+    """View the catalog with pagination and nested category details."""
+    logger.debug(f"User {current_user.id} viewing catalog page {page}")
     svc = service.RewardService(db)
     return await svc.get_catalog(active_only=active_only, page=page, size=size)
 
@@ -104,6 +106,7 @@ async def restock_item(
     current_user: dependencies.CurrentUser = Depends(dependencies.get_current_user)
 ):
     """Adds stock to an existing reward item."""
+    logger.info(f"User {current_user.id} restocking item {catalog_id} with {body.amount} units")
     svc = service.RewardService(db)
     return await svc.add_stock(catalog_id, body, current_user.id, request)
 
@@ -117,6 +120,7 @@ async def redeem_reward(
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.get_current_user)
 ):
+    logger.info(f"User {current_user.id} attempting to redeem catalog item {body.catalog_id}")
     svc = service.RewardService(db)
     return await svc.grant_reward(
         request=body, 
@@ -133,14 +137,14 @@ async def get_my_history(
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.get_current_user)
 ):
-    """
-    View ONLY my own reward history.
-    """
+    """View ONLY my own reward history."""
+    logger.debug(f"User {current_user.id} fetching their personal reward history")
     svc = service.RewardService(db)
 
     my_wallet_id = await svc.get_wallet_id_for_user(current_user.id)
     
     if not my_wallet_id:
+        logger.warning(f"Failed to fetch history: No wallet found for user {current_user.id}")
         return {"data": [], "total_items": 0, "page": page, "size": size}
 
     return await svc.get_history(wallet_id=my_wallet_id, page=page, size=size)
@@ -154,8 +158,7 @@ async def get_all_history(
     db: Prisma = Depends(get_db),
     current_user: dependencies.CurrentUser = Depends(dependencies.require_roles("ADMIN", "HR_ADMIN"))
 ):
-    """
-    Admin View: View history for ALL users, or filter by a specific wallet.
-    """
+    """Admin View: View history for ALL users, or filter by a specific wallet."""
+    logger.info(f"Admin {current_user.id} fetching global reward history. Filtered by wallet: {wallet_id}")
     svc = service.RewardService(db)
     return await svc.get_history(wallet_id=wallet_id, page=page, size=size)
