@@ -11,6 +11,9 @@ from src.common.middleware import (
 )
 from . import router as rewards_router
 
+# --- IMPORT LOGGER ---
+from src.core.logger import logger
+
 app = FastAPI(
     title="Reward Microservice",
     description="API for managing the reward catalog and point redemptions.",
@@ -54,21 +57,32 @@ app.include_router(rewards_router.router)
 
 @app.on_event("startup")
 async def startup():
-    if not db.is_connected():
-        await db.connect()
-        print("Rewards Service: 🟢 Database Connected")
+    logger.info("Initializing Reward Microservice...")
+    try:
+        if not db.is_connected():
+            await db.connect()
+            logger.info("Rewards Service: 🟢 Database Connected Successfully")
+    except Exception as e:
+        # If DB fails to connect on boot, log it as critical so we know immediately
+        logger.critical(f"Rewards Service: 🔴 Database Connection Failed: {str(e)}", exc_info=True)
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    if db.is_connected():
-        await db.disconnect()
-        print("Rewards Service: 🔴 Database Disconnected")
+    logger.info("Shutting down Reward Microservice...")
+    try:
+        if db.is_connected():
+            await db.disconnect()
+            logger.info("Rewards Service: 🔴 Database Disconnected Successfully")
+    except Exception as e:
+        logger.error(f"Rewards Service: Error during database disconnection: {str(e)}", exc_info=True)
 
 
 @app.get("/")
 @app.get("/health")
 def health_check():
+    # Using debug so health checks don't spam the info/production logs
+    logger.debug("Health check endpoint pinged.")
     return {
         "service": "Reward Microservice",
         "status": "System Operational",
