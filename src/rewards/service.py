@@ -370,6 +370,7 @@ class RewardService:
                 category_code=updated_item.reward_categories.category_code
             )
 
+        # ✅ FIX 1: added missing available_stock — was causing a Pydantic validation error
         return schemas.RewardItemResponse(
             catalog_id=updated_item.catalog_id,
             reward_name=updated_item.reward_name,
@@ -381,7 +382,8 @@ class RewardService:
             is_active=updated_item.is_active,
             created_at=updated_item.created_at,
             category=cat_data,
-            stock_status=self._get_stock_status(updated_item.available_stock) 
+            stock_status=self._get_stock_status(updated_item.available_stock),
+            available_stock=updated_item.available_stock  # ✅ FIX 1
         )
 
     # REDEMPTION / GRANTING LOGIC (WITH INVENTORY)
@@ -389,9 +391,9 @@ class RewardService:
         """
         Handles the Redemption with Inventory Checks:
         1. Validate inputs (Active? Points limits?)
-        2. CHECK STOCK (New!)
+        2. CHECK STOCK (early exit for obvious cases)
         3. START DB TRANSACTION
-        4. Deduct Points & Decrement Stock
+        4. Atomically deduct points & decrement stock with in-tx guard
         5. Create Transaction & History Records
         """
         logger.info(f"Initiating grant_reward. Catalog ID: {request.catalog_id}, Wallet ID: {request.wallet_id}")
@@ -420,7 +422,7 @@ class RewardService:
             raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
         type_id = await self._get_sys_id("transaction_types", "type_code", "REWARD_REDEMPTION")
-        status_id = await self._get_sys_id("status_master", "status_code", "COMPLETED")
+        status_id = await self._get_sys_id("status_master", "status_code", "APPROVED")
 
         ref_number = f"TXN-{int(datetime.now().timestamp())}-{str(uuid.uuid4())[:8]}"
 
@@ -428,7 +430,7 @@ class RewardService:
         try:
             logger.debug(f"Starting atomic transaction for grant_reward {ref_number}")
             async with self.db.tx() as transaction:
-                
+
                 await transaction.wallets.update(
                     where={"wallet_id": str(request.wallet_id)},
                     data={
@@ -439,13 +441,28 @@ class RewardService:
                     }
                 )
 
-                await transaction.reward_catalog.update(
-                    where={"catalog_id": str(request.catalog_id)},
+                # ✅ FIX 2: added missing updated_by — its absence caused a Prisma NOT NULL
+                #    constraint error that silently rolled back every redemption transaction.
+                # ✅ FIX 3: added available_stock gt:0 guard inside the transaction so two
+                #    concurrent redemptions can't both pass the pre-flight check and push
+                #    stock negative. If the row no longer qualifies, update returns None.
+                updated_catalog = await transaction.reward_catalog.update(
+                    where={
+                        "catalog_id": str(request.catalog_id),
+                        "available_stock": {"gt": 0}  # ✅ FIX 3: atomic race-condition guard
+                    },
                     data={
-                        "available_stock": {"decrement": 1}, 
-                        "updated_at": datetime.now(timezone.utc)
+                        "available_stock": {"decrement": 1},
+                        "updated_at": datetime.now(timezone.utc),
+                        "updated_by": granted_by_user_id  # ✅ FIX 2: was missing
                     }
                 )
+
+                if not updated_catalog:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Out of stock! This reward was just claimed by someone else."
+                    )
 
                 await transaction.transactions.create(
                     data={
@@ -474,15 +491,21 @@ class RewardService:
                         "updated_at": datetime.now(timezone.utc)
                     }
                 )
+
                 logger.info(f"Transaction {ref_number} completed successfully for wallet {request.wallet_id}")
                 return {
                     "history_id": history_record.history_id,
                     "points": history_record.points,
                     "granted_at": history_record.granted_at,
-                    "status": "COMPLETED", 
-                    "new_stock_level": reward_item.available_stock - 1
+                    "status": "COMPLETED",
+                    # Use live post-decrement value instead of stale pre-fetch snapshot
+                    "new_stock_level": updated_catalog.available_stock
                 }
 
+        except HTTPException:
+            # Re-raise clean HTTP errors (e.g. the out-of-stock guard above) without
+            # wrapping them in the generic 500 handler below.
+            raise
         except Exception as e:
             logger.error(f"Atomic transaction failed for {ref_number}: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
