@@ -1,5 +1,3 @@
-"""Recognition service business logic (100% Contract-Compliant Version)"""
-
 import math
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
@@ -227,8 +225,6 @@ class RecognitionService:
         if payload.video_url is not None:
             update_data["video_url"] = str(payload.video_url)
 
-        # Schema already ensures at least one field,
-        # but keeping defensive programming for safety
         if not update_data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
