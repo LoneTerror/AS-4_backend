@@ -46,17 +46,17 @@ def _build_login_response(user, access_token, refresh_token_raw):
 # -------------------------------
 async def validate_token(token: str):
     """
-    Validate JWT token and return user info
-    Used by other microservices to authenticate requests
+    Validate JWT token and return user info.
+    Used by other microservices to authenticate requests.
     """
     payload = decode_token(token)
-    
+
     if not payload:
         return {
             "valid": False,
             "error": "Invalid or expired token"
         }
-    
+
     return {
         "valid": True,
         "user_id": payload.get("sub"),
@@ -107,6 +107,9 @@ async def authenticate_user(username: str, password: str):
         print(f"DEBUG: Found roles: {roles}")
     except Exception as e:
         print(f"CRITICAL WARNING: Failed to extract roles. Error: {e}")
+
+    # FIX: Apply fallback AFTER extraction attempt, not inside the except block only
+    if not roles:
         roles = ["EMPLOYEE"]
 
     # 4. Create Access Token
@@ -123,7 +126,6 @@ async def authenticate_user(username: str, password: str):
 
     client_refresh_token = f"{token_id}{_TOKEN_SEP}{token_secret}"
 
-    # FIX: use SHA256 instead of bcrypt
     refresh_token_hash = hash_refresh_token(token_secret)
 
     await db.refresh_tokens.create(
@@ -136,7 +138,6 @@ async def authenticate_user(username: str, password: str):
             "updated_at": _now(),
         }
     )
-
 
     return _build_login_response(user, access_token, client_refresh_token)
 
@@ -166,11 +167,13 @@ async def refresh_access_token(client_refresh_token: str):
     if not verify_refresh_token(token_secret, stored_token.token_hash):
         raise HTTPException(status_code=401, detail="Invalid token signature")
 
-
     user = stored_token.employees
 
     # 3. Fetch current roles
-    roles = ["EMPLOYEE"]  # safe default
+    # FIX: was `roles = ["EMPLOYEE"]` here, then immediately overwritten by the
+    #      list comprehension result — so an empty DB result would wipe the default.
+    #      Now we set the fallback AFTER the query.
+    roles = []
     try:
         roles_relation = await db.employee_roles.find_many(
             where={
@@ -185,6 +188,10 @@ async def refresh_access_token(client_refresh_token: str):
         ]
     except Exception as e:
         print(f"Refresh Token Role Error: {e}")
+
+    # FIX: Fallback applied after query so it's never silently discarded
+    if not roles:
+        roles = ["EMPLOYEE"]
 
     # 4. Create new access token
     new_access_token = create_access_token({
@@ -314,21 +321,19 @@ async def request_password_reset(email: str):
     Request password reset - sends email with reset token.
     Always returns success to prevent email enumeration attacks.
     """
-    
+
     # 1. Lookup user by email
     user = await db.employees.find_unique(
         where={"email": email}
     )
-    
+
     # 2. If user exists, generate token and send email
     if user:
-        # Generate short-lived reset token
         reset_token = create_reset_token(
             employee_id=str(user.employee_id),
             email=user.email
         )
-        
-        # Send reset email (async in production)
+
         try:
             send_password_reset_email(
                 email=user.email,
@@ -338,12 +343,11 @@ async def request_password_reset(email: str):
             print(f"✅ Password reset email sent to {user.email}")
         except Exception as e:
             print(f"❌ Failed to send reset email: {e}")
-            # Don't raise error - still return success response
+            # Don't raise — still return success response
     else:
         print(f"⚠️ Password reset requested for non-existent email: {email}")
-        # Still return success to prevent email enumeration
-    
-    # 3. Always return success message (security best practice)
+
+    # 3. Always return success (prevents email enumeration)
     return {
         "message": "If your email is registered, you will receive a password reset link shortly."
     }
@@ -353,42 +357,40 @@ async def request_password_reset(email: str):
 # RESET PASSWORD
 # -------------------------------
 async def reset_password(token: str, new_password: str):
-    """
-    Reset password using the reset token.
-    """
-    
+    """Reset password using the reset token."""
+
     # 1. Decode and validate token
     payload = decode_reset_token(token)
-    
+
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired reset token"
         )
-    
+
     employee_id = payload.get("sub")
     email = payload.get("email")
-    
+
     if not employee_id or not email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid token payload"
         )
-    
+
     # 2. Verify user still exists
     user = await db.employees.find_unique(
         where={"employee_id": employee_id}
     )
-    
+
     if not user or user.email != email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid reset token"
         )
-    
+
     # 3. Hash new password
     new_password_hash = hash_password(new_password)
-    
+
     # 4. Update password
     await db.employees.update(
         where={"employee_id": employee_id},
@@ -398,9 +400,8 @@ async def reset_password(token: str, new_password: str):
             "updated_by": employee_id  # Self-updated
         }
     )
-    
-    # 5. Revoke all existing refresh tokens for security
-    # Force user to login again with new password
+
+    # 5. Revoke all existing refresh tokens — force re-login with new password
     await db.refresh_tokens.update_many(
         where={
             "employee_id": employee_id,
@@ -411,7 +412,7 @@ async def reset_password(token: str, new_password: str):
             "updated_at": _now()
         }
     )
-    
+
     # 6. Send confirmation email
     try:
         send_password_reset_confirmation(
@@ -420,10 +421,9 @@ async def reset_password(token: str, new_password: str):
         )
     except Exception as e:
         print(f"⚠️ Failed to send confirmation email: {e}")
-        # Don't fail the request if confirmation email fails
-    
+
     print(f"✅ Password reset successful for user: {user.username}")
-    
+
     return {
         "message": "Password reset successful. Please login with your new password."
     }
