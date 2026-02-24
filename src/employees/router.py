@@ -70,4 +70,3 @@ async def patch_employee(
     """Soft delete employee. HR_ADMIN only."""
     # require_roles(current_emp, ["HR_ADMIN"])
     await service.patch_employee(employee_id, current_emp.id)
-    return

@@ -9,6 +9,9 @@ from src.wallet.dependencies import CurrentUser
 # Utility
 # -----------------------------
 
+WNF = "Wallet not found"
+AD = "Access Denied"
+
 def is_admin(user: CurrentUser) -> bool:
     return any(role in user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
 
@@ -51,7 +54,7 @@ async def create_transaction(data, current_user: CurrentUser):
         where={"wallet_id": wallet_id}
     )
     if not wallet:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise HTTPException(status_code=404, detail=WNF)
 
     txn_type = await db.transaction_types.find_unique(
         where={"type_id": txn_type_id}
@@ -161,10 +164,10 @@ async def get_transactions(
     try:
         wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
         if not wallet:
-            raise HTTPException(status_code=404, detail="Wallet not found")
+            raise HTTPException(status_code=404, detail=WNF) # WNF = "Wallet not found" defined at top
 
         if not is_admin(current_user) and wallet.employee_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Access denied")
+            raise HTTPException(status_code=403, detail="AD")
 
         page = max(page, 1)
         limit = min(max(limit, 1), 100)
@@ -259,7 +262,7 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
             where={"wallet_id": txn.wallet_id}
         )
         if not wallet or wallet.employee_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Access denied")
+            raise HTTPException(status_code=403, detail="AD")
 
     # Transform to response format
     return {
@@ -284,14 +287,14 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
 
 async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
     if not is_admin(current_user) and employee_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="AD")
 
     wallet = await db.wallets.find_unique(
         where={"employee_id": employee_id}
     )
 
     if not wallet:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise HTTPException(status_code=404, detail=WNF)
 
     return wallet
 
@@ -299,10 +302,10 @@ async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
 async def get_wallet_balance(wallet_id: str, current_user: CurrentUser):
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise HTTPException(status_code=404, detail=WNF)
 
     if not is_admin(current_user) and wallet.employee_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="AD")
 
     return {
         "wallet_id": str(wallet.wallet_id),
@@ -313,10 +316,10 @@ async def get_wallet_balance(wallet_id: str, current_user: CurrentUser):
 async def get_points_summary(wallet_id: str, current_user: CurrentUser):
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise HTTPException(status_code=404, detail=WNF)
 
     if not is_admin(current_user) and wallet.employee_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="AD")
 
     now = datetime.now(timezone.utc)
 
@@ -455,7 +458,7 @@ async def get_transaction_types(current_user: CurrentUser):
     if not is_admin(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
+            detail="AD"
         )
 
     types = await db.transaction_types.find_many()
