@@ -41,6 +41,9 @@ MERCHANDISE_CAT_ID  = "cc0e8400-e29b-41d4-a716-446655440002"
 EXPERIENCE_CAT_ID   = "cc0e8400-e29b-41d4-a716-446655440003"
 # ─────────────────────────────────────────────
 
+async def print_done():
+    print("Done\n")
+
 
 async def clean_db():
     """Delete all data in reverse-dependency order."""
@@ -101,7 +104,7 @@ async def clean_db():
             except Exception as e:
                 print(f"   ✗ Could not delete {table_name}: {e}")
 
-    print("   Done.\n")
+    print_done()
 
 
 async def seed_status_master():
@@ -142,7 +145,7 @@ async def seed_status_master():
     print("   ✅ GENERAL:      ACTIVE, INACTIVE")
     print("   ✅ TRANSACTION:  PENDING, APPROVED, REJECTED")
     print("   ✅ REVIEW:       REVIEW_ACTIVE, REVIEW_DELETED")
-    print("   Done.\n")
+    print_done()
 
 
 async def seed_transaction_types():
@@ -170,7 +173,7 @@ async def seed_transaction_types():
         "updated_at":  now,
     })
     print("   ✅ REWARD_REDEMPTION (is_credit=False) — reward catalog redemptions")
-    print("   Done.\n")
+    print_done()
 
 
 async def seed_roles():
@@ -191,7 +194,7 @@ async def seed_roles():
             "updated_at":  now,
         })
 
-    print("   Done.\n")
+    print_done()
 
 
 async def seed_departments():
@@ -226,7 +229,7 @@ async def seed_departments():
         "updated_at":         now,
     })
 
-    print("   Done.\n")
+    print_done()
 
 
 async def seed_designations():
@@ -255,7 +258,7 @@ async def seed_designations():
         "updated_at":       now,
     })
 
-    print("   Done.\n")
+    print_done()
 
 
 async def seed_employees():
@@ -398,7 +401,7 @@ async def seed_reward_categories():
         })
         print(f"   ✅ {code}")
 
-    print("   Done.\n")
+    print_done()
 
 
 async def seed_reward_catalog():
@@ -480,7 +483,7 @@ async def seed_reward_catalog():
         )
         print(f"   ✅ {code:25s}  {default_pts} pts  stock: {stock}")
 
-    print("   Done.\n")
+    print_done()
 
 
 async def main():
