@@ -7,24 +7,34 @@ RUN addgroup --system appgroup && adduser --system --group appuser
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# --- FIX START: Force Prisma to use a folder inside /app for binaries ---
+# This prevents the "Permission denied: /root/.cache/..." error
+ENV PRISMA_PY_CACHE_DIR="/app/prisma_cache"
+# --- FIX END ---
+
 WORKDIR /app
 
 # Install system dependencies required for PostgreSQL and Prisma
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev curl \
+# We clean up apt lists to keep the image small
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the entire modular monolith codebase
+# Copy the entire codebase
 COPY . .
 
-# CRITICAL STEP: Generate the Prisma Client
-# This reads your schema.prisma file and builds the Python client
+# Generate the Prisma Client
+# Because of the ENV var above, binaries will now save to /app/prisma_cache
 RUN python -m prisma generate
 
 # Hand over directory ownership to the non-root user
+# This now COVERS the new /app/prisma_cache directory too!
 RUN chown -R appuser:appgroup /app
 
 # Drop root privileges
@@ -32,7 +42,5 @@ USER appuser
 
 EXPOSE 8000
 
-# Start Gunicorn. 
-# Note: Since your main.py uses relative imports (.rewards), 
-# ensure the module path aligns with your directory structure.
+# Start Gunicorn
 CMD ["gunicorn", "src.main:app", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000"]
