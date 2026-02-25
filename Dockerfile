@@ -43,7 +43,7 @@ RUN mkdir -p /app/prisma_cache
 
 # Generate the Prisma Client
 # FIX: Use the CLI command 'prisma', NOT 'python -m prisma'
-RUN prisma generate
+RUN /app/venv/bin/prisma generate
 
 # Hand over directory ownership to the non-root user
 RUN chown -R appuser:appgroup /app
