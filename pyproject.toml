@@ -1,8 +1,4 @@
 [tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
 asyncio_mode = "auto"
-testpaths = ["src/auth/tests", "src/organization/tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short --import-mode=importlib"
-pythonpath = ["."]
