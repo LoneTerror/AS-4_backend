@@ -31,16 +31,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create the virtual environment
 RUN python -m venv $VIRTUAL_ENV
 
-# Install Python dependencies (These now automatically go into the venv because of PATH)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the codebase
+# Copy the entire codebase
 COPY . .
 
-# Generate the Prisma Client (Uses the venv's python and stores cache in /app/prisma_cache)
+# --- CRITICAL FIX ---
+# Create the cache directory explicitly
 RUN mkdir -p /app/prisma_cache
-RUN python -m prisma generate
+
+# Generate the Prisma Client
+# FIX: Use the CLI command 'prisma', NOT 'python -m prisma'
+RUN prisma generate
+
+# Hand over directory ownership to the non-root user
+RUN chown -R appuser:appgroup /app
 
 # --- PERMISSIONS FIX ---
 # Hand over ownership of the ENTIRE app directory (code, venv, and prisma cache) to appuser
