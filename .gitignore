@@ -57,7 +57,7 @@ coverage/
 # Temporary folders
 tmp/
 temp/
-tests/
+
 
 # Others
 setup.ps1
