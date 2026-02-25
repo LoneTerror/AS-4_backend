@@ -1,7 +1,7 @@
 generator client {
   provider             = "prisma-client-py"
-  interface            = "asyncio"
   recursive_type_depth = "5"
+  interface            = "asyncio"
 }
 
 datasource db {
@@ -386,4 +386,17 @@ model wallets {
 
   @@index([available_points])
   @@index([total_earned_points])
+}
+
+model notification {
+  notification_id String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  recipient_id    String   @db.Uuid
+  title           String   @db.VarChar(255)
+  message         String
+  is_read         Boolean  @default(false)
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([created_at])
+  @@index([is_read])
+  @@index([recipient_id])
 }
