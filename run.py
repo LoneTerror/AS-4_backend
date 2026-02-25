@@ -6,6 +6,7 @@ services = [
     ("wallet", "src.wallet.main:app", 8004),
     ("recognition", "src.recognition.main:app", 8005),
     ("rewards", "src.rewards.main:app", 8006),
+    ("organization", "src.organization.main:app", 8007),
 ]
 
 processes = []
