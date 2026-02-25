@@ -4,8 +4,6 @@ pipeline {
     environment {
         IMAGE = "mrmonster786/rnr-backend"
         TAG = "${env.BUILD_NUMBER}"
-        ALLOWED_BRANCH_1 = "dev"
-        ALLOWED_BRANCH_2 = "release"
     }
 
     options {
@@ -19,17 +17,14 @@ pipeline {
         stage('Branch Guard') {
             when {
                 not {
-                    anyOf {
-                        branch "${ALLOWED_BRANCH_1}"
-                        branch "${ALLOWED_BRANCH_2}"
-                    }
+                    branch 'develop'
                 }
             }
             steps {
-                echo "Build not allowed for branch: ${env.BRANCH_NAME}"
+                echo "Skipping branch: ${env.BRANCH_NAME}"
                 script {
                     currentBuild.result = 'NOT_BUILT'
-                    error("Skipping branch")
+                    error("Only develop branch allowed")
                 }
             }
         }
@@ -59,6 +54,7 @@ pipeline {
                 . venv/bin/activate
                 pip install --upgrade pip
                 pip install -r requirements.txt
+                pip install pytest bandit pip-audit
                 '''
             }
         }
@@ -126,71 +122,12 @@ pipeline {
             }
         }
 
-        stage('Deploy to Dev') {
-            when {
-                branch 'dev'
-            }
-            steps {
-                sh './deploy.sh dev $TAG'
-            }
-        }
-
-        stage('Deploy to Staging') {
-            when {
-                branch 'release'
-            }
-            steps {
-                sh './deploy.sh staging $TAG'
-            }
-        }
-
-        stage('DAST - OWASP ZAP (Release Only)') {
-            when {
-                branch 'release'
-            }
-            steps {
-                sh '''
-                docker run --rm -t owasp/zap2docker-stable \
-                  zap-baseline.py \
-                  -t http://staging.yourdomain.com \
-                  -r zap-report.html
-                '''
-            }
-        }
-
-        stage('Manual Approval for Production') {
-            when {
-                branch 'release'
-            }
-            steps {
-                input message: "Promote this release to production?", ok: "Deploy"
-            }
-        }
-
-        stage('Deploy to Production') {
-            when {
-                branch 'release'
-            }
-            steps {
-                sh './deploy.sh production $TAG'
-            }
-        }
     }
 
     post {
-
         always {
             archiveArtifacts artifacts: '*.json, *.html', allowEmptyArchive: true
             cleanWs()
         }
-
-        failure {
-            echo "Build failed due to security or test issue."
-        }
-
-        success {
-            echo "Secure build completed successfully."
-        }
-
     }
 }
