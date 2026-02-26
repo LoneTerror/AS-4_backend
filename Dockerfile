@@ -5,7 +5,7 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install build deps + Node (needed only for prisma generate)
+# Build deps + Node (only for prisma generate)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev curl ca-certificates && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
@@ -16,10 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# ---- Prisma paths (CRITICAL) ----
-ENV PRISMA_PY_BINARIES_PATH=/app/prisma_binaries
-ENV PRISMA_HOME=/app/.prisma
-ENV XDG_CACHE_HOME=/app/.cache
+# ---- Prisma paths ----
+ENV HOME=/app \
+    PRISMA_PY_BINARIES_PATH=/app/prisma_binaries \
+    PRISMA_HOME=/app/.prisma \
+    XDG_CACHE_HOME=/app/.cache
 
 # Install Python deps
 COPY requirements.txt .
@@ -46,8 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 curl supervisor nginx ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# ---- Prisma paths (must match builder) ----
-ENV PRISMA_PY_BINARIES_PATH=/app/prisma_binaries \
+# ---- Prisma + Runtime paths ----
+ENV HOME=/app \
+    PRISMA_PY_BINARIES_PATH=/app/prisma_binaries \
     PRISMA_HOME=/app/.prisma \
     XDG_CACHE_HOME=/app/.cache \
     PYTHONPATH=/app \
@@ -69,13 +71,15 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 RUN rm -rf /etc/nginx/nginx.conf /etc/nginx/sites-enabled/*
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# Create required runtime dirs + fix ownership
+# Create runtime dirs + FIX PERMISSIONS (important for prisma)
 RUN mkdir -p \
     /var/log/nginx \
     /var/lib/nginx \
     /run/nginx \
     /var/log/supervisor \
-    /tmp/client_temp && \
+    /tmp/client_temp \
+    /app/.cache \
+    /app/.prisma && \
     chown -R appuser:appgroup \
     /app \
     /var/log \
