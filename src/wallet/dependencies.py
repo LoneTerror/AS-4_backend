@@ -4,6 +4,9 @@ from pydantic import BaseModel
 from typing import List, Callable
 import httpx
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 security = HTTPBearer()
 
@@ -63,7 +66,7 @@ async def get_current_user(
             department_id=data.get("department_id")
         )
 
-    except httpx.RequestError:
+    except (httpx.RequestError, httpx.InvalidURL):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service unavailable"
