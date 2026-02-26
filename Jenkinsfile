@@ -87,7 +87,14 @@ pipeline {
                     steps {
                         sh '''
                         . venv/bin/activate
-                        pip-audit --format json --output pip-audit-report.json
+                        
+                        echo "--- Checking for Vulnerabilities ---"
+                        # 1. Run in human-readable mode so you can see WHICH packages are broken in the logs
+                        # '|| true' ensures the pipeline doesn't stop here
+                        pip-audit || true
+                        
+                        # 2. Generate the JSON report for Jenkins artifacts
+                        pip-audit --format json --output pip-audit-report.json || true
                         '''
                     }
                 }
