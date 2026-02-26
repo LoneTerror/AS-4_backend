@@ -116,13 +116,18 @@ pipeline {
                     ]) {
                         sh """
                         docker run -d \
-                            --name rnr-backend-test \
-                            --restart always \
-                            -p 8000:8000 \
-                            -e DATABASE_URL="${DB_URL}" \
-                            -e SECRET_KEY="${SECRET_KEY}" \
-                            -e ALGORITHM="${ALGO}" \
-                            ${IMAGE}:${TAG}
+                        --name rnr-backend-test \
+                        --restart always \
+                        -p 8001:8001 \
+                        -p 8003:8003 \
+                        -p 8004:8004 \
+                        -p 8005:8005 \
+                        -p 8006:8006 \
+                        -p 8007:8007 \
+                        -e DATABASE_URL="${DB_URL}" \
+                        -e SECRET_KEY="${SECRET_KEY}" \
+                        -e ALGORITHM="${ALGO}" \
+                        ${IMAGE}:${TAG}
                         """
                     }
                     echo "🚀 Application deployed to http://192.168.116.137:8000" 

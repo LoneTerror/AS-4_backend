@@ -3,7 +3,6 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install system deps + Node.js (Required for Prisma to generate without downloading engines)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -12,26 +11,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Setup Virtual Environment
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Generate Prisma Client 
-# Since Node.js is now installed in the OS, Prisma won't try to download it.
 COPY prisma/schema.prisma ./prisma/
 RUN prisma generate
 
 # ---------- STAGE 2: RUNTIME ----------
 FROM python:3.11-slim
 
-# Create non-root user
 RUN addgroup --system appgroup && adduser --system --group appuser
 
-# Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/app/venv \
@@ -40,31 +33,33 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install ONLY runtime dependencies (no gcc, no nodejs)
+# Install runtime deps + Supervisor
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    supervisor \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the venv (including generated prisma client) from builder
+# Copy the venv and prisma from builder
 COPY --from=builder /app/venv /app/venv
-# Copy the schema (prisma needs it at runtime)
 COPY --from=builder /app/prisma /app/prisma
 
-# Copy source code
+# Copy source code and supervisor config
 COPY . .
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Set permissions
-RUN chown -R appuser:appgroup /app
+# Setup log directories and permissions for Supervisor
+RUN mkdir -p /var/log/supervisor && \
+    chown -R appuser:appgroup /app /var/log/supervisor /var/run
+
 USER appuser
 
-EXPOSE 8000
+# Expose all microservice ports
+EXPOSE 8001 8003 8004 8005 8006 8007
 
+# Healthcheck (Checking the Auth service as a proxy for app health)
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+  CMD curl -f http://localhost:8001/health || exit 1
 
-CMD ["gunicorn", "src.main:app", \
-     "--workers", "2", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--bind", "0.0.0.0:8000", \
-     "--timeout", "60"]
+# Start Supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
