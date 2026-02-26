@@ -21,7 +21,6 @@ RUN prisma generate
 
 # ---------- STAGE 2: RUNTIME ----------
 FROM python:3.11-slim
-
 RUN addgroup --system appgroup && adduser --system --group appuser
 
 ENV PRISMA_PY_BINARIES_PATH=/app/prisma_binaries \
@@ -37,25 +36,20 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 curl supervisor nginx && rm -rf /var/lib/apt/lists/*
 
-# Copy artifacts from builder
 COPY --from=builder /app/prisma_binaries /app/prisma_binaries
 COPY --from=builder /app/venv /app/venv
 COPY --from=builder /app/prisma /app/prisma
 
-# Copy source and config files
 COPY . .
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# --- CRITICAL NGINX FIX ---
-# 1. Remove ALL default configs that might override yours
 RUN rm -rf /etc/nginx/nginx.conf /etc/nginx/sites-enabled/* /etc/nginx/sites-available/* /etc/nginx/conf.d/*
-# 2. Place your config as the ONLY global config
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# PERMISSIONS: Comprehensive fix for Nginx, Supervisor, and Prisma
-# We also create the /run/nginx directory which is often missing in slim images
+# PERMISSIONS: Comprehensive fix
 RUN mkdir -p /var/log/nginx /var/lib/nginx /run/nginx /tmp/client_temp /var/log/supervisor && \
     chown -R appuser:appgroup /app /var/log /var/lib/nginx /run/nginx /etc/nginx /tmp && \
+    # Ensure the prisma binaries are executable
     chmod -R +x /app/prisma_binaries
 
 USER appuser
