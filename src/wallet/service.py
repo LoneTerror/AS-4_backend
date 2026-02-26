@@ -1,542 +1,594 @@
-import logging
-from fastapi import HTTPException, status
-from prisma.errors import UniqueViolationError
-from src.prisma.client import db
-from datetime import datetime, timezone
-from src.wallet.dependencies import CurrentUser
-from src.notifications.service import NotificationService
-from src.notifications.schemas import NotificationType
-from src.core.logger import setup_logger
-
-# ── Points engine import ───────────────────────────────────────────────────────
-# ReviewCategory was removed when multipliers moved to the DB.
-# Only the pure calculation helpers are still needed here (legacy fallback path).
-from src.recognition.points_engine import (
-    calculate_points,
-    quarters_elapsed,
-    apply_decay,
-)
-
-logger = setup_logger(__name__)
-_notif = NotificationService(db)
-
-
-# -----------------------------
-# Utility
-# -----------------------------
-
-WNF = "Wallet not found"
-AD  = "Access Denied"
-
-
-def is_admin(user: CurrentUser) -> bool:
-    return any(role in user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
-
-
-# -----------------------------
-# Transaction creation
-# -----------------------------
-
-async def create_transaction(data, current_user: CurrentUser):
-    if not is_admin(current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions to create transactions"
-        )
-
-    wallet_id   = str(data.wallet_id)
-    txn_type_id = str(data.transaction_type_id)
-    created_by  = current_user.id
-    amount      = data.amount
-
-    if amount <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Amount must be greater than zero"
-        )
-
-    wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
-    if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
-
-    txn_type = await db.transaction_types.find_unique(where={"type_id": txn_type_id})
-    if not txn_type:
-        raise HTTPException(status_code=404, detail="Transaction type not found")
-
-    success_status = await db.status_master.find_first(
-        where={"status_code": "APPROVED"}
-    )
-    if not success_status:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="APPROVED status not found in status_master. Run seed_transaction_types.py"
-        )
-
-    status_id = success_status.status_id
-
-    # Debit check
-    if not txn_type.is_credit and wallet.available_points < amount:
-        raise HTTPException(status_code=400, detail="Insufficient wallet balance")
-
-    new_available = wallet.available_points
-    new_redeemed  = wallet.redeemed_points
-    new_total     = wallet.total_earned_points
-
-    if txn_type.is_credit:
-        new_available += amount
-        new_total     += amount
-    else:
-        new_available -= amount
-        new_redeemed  += amount
-
-    try:
-        async with db.tx() as transaction:
-            new_txn = await transaction.transactions.create(
-                data={
-                    "wallet_id":          wallet_id,
-                    "amount":             amount,
-                    "transaction_type_id": txn_type_id,
-                    "status_id":          status_id,
-                    "description":        data.description,
-                    "reference_number":   data.reference_number,
-                    "created_by":         created_by,
-                    "updated_by":         created_by,
-                    "created_at":         datetime.now(timezone.utc),
-                    "updated_at":         datetime.now(timezone.utc),
-                }
-            )
-
-            result = await transaction.wallets.update_many(
-                where={"wallet_id": wallet_id, "version": wallet.version},
-                data={
-                    "available_points":   new_available,
-                    "redeemed_points":    new_redeemed,
-                    "total_earned_points": new_total,
-                    "version":            wallet.version + 1,
-                    "updated_by":         created_by,
-                }
-            )
-
-            if result == 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Wallet was updated by another transaction."
-                )
-
-        # ── Notify wallet owner ────────────────────────────────────────────
-        try:
-            direction = "credited to" if txn_type.is_credit else "debited from"
-            emoji     = "💰" if txn_type.is_credit else "💸"
-            await _notif.create_notification(
-                employee_id = wallet.employee_id,
-                title       = f"{amount} points {direction} your wallet {emoji}",
-                message     = (
-                    f"{amount} points have been {direction} your wallet "
-                    f"via {txn_type.type_name}."
-                    + (f" — {data.description}" if data.description else "")
-                    + (f" (Ref: {data.reference_number})" if data.reference_number else "")
-                ),
-                type = NotificationType.REWARD,
-            )
-        except Exception:
-            logger.exception(
-                "Transaction notification failed for txn %s — transaction was saved successfully",
-                new_txn.transaction_id,
-            )
-
-        final_txn = await db.transactions.find_unique(
-            where={"transaction_id": new_txn.transaction_id},
-            include={"status_master": True, "transaction_types": True}
-        )
-        return final_txn
-
-    except UniqueViolationError:
-        raise HTTPException(
-            status_code=409,
-            detail="Transaction with this reference number already exists"
-        )
-
-
-# -----------------------------
-# Transaction queries
-# -----------------------------
-
-async def get_transactions(
-    wallet_id: str,
-    page: int,
-    limit: int,
-    current_user: CurrentUser,
-    start_date: datetime | None = None,
-    end_date: datetime | None = None,
-    status_code: str | None = None,
-):
-    wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
-    if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
-
-    if not is_admin(current_user) and wallet.employee_id != current_user.id:
-        raise HTTPException(status_code=403, detail=AD)
-
-    page  = max(page, 1)
-    limit = min(max(limit, 1), 100)
-    skip  = (page - 1) * limit
-
-    where_clause: dict = {"wallet_id": wallet_id}
-
-    if start_date or end_date:
-        where_clause["transaction_at"] = {}
-        if start_date:
-            where_clause["transaction_at"]["gte"] = start_date
-        if end_date:
-            where_clause["transaction_at"]["lte"] = end_date
-
-    if status_code:
-        status_record = await db.status_master.find_unique(
-            where={"status_code": status_code.upper()}
-        )
-        if status_record:
-            where_clause["status_id"] = status_record.status_id
-
-    transactions = await db.transactions.find_many(
-        where=where_clause,
-        skip=skip,
-        take=limit,
-        order={"transaction_at": "desc"},
-        include={"status_master": True, "transaction_types": True},
-    )
-
-    total = await db.transactions.count(where=where_clause)
-
-    formatted = []
-    for txn in transactions:
-        formatted.append({
-            "transaction_id":   txn.transaction_id,
-            "wallet_id":        txn.wallet_id,
-            "amount":           txn.amount,
-            "status": {
-                "status_id": str(txn.status_master.status_id),
-                "code":      txn.status_master.status_code,
-                "name":      txn.status_master.status_name,
-            },
-            "transaction_type": {
-                "type_id":   str(txn.transaction_types.type_id),
-                "code":      txn.transaction_types.type_code,
-                "name":      txn.transaction_types.type_name,
-                "is_credit": txn.transaction_types.is_credit,
-            },
-            "reference_number": txn.reference_number,
-            "description":      txn.description,
-            "transaction_at":   txn.transaction_at,
-            "created_at":       txn.created_at,
-            "updated_at":       txn.updated_at,
-            "created_by":       txn.created_by,
-            "updated_by":       txn.updated_by,
-        })
-
-    return {"page": page, "limit": limit, "total": total, "transactions": formatted}
-
-
-async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
-    from src.wallet.schemas import StatusInfo, TransactionTypeInfo
-
-    txn = await db.transactions.find_unique(
-        where={"transaction_id": transaction_id},
-        include={"status_master": True, "transaction_types": True},
-    )
-
-    if not txn:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-
-    if not is_admin(current_user):
-        wallet = await db.wallets.find_unique(where={"wallet_id": txn.wallet_id})
-        if not wallet or wallet.employee_id != current_user.id:
-            raise HTTPException(status_code=403, detail=AD)
-
-    return {
-        "transaction_id":   txn.transaction_id,
-        "wallet_id":        txn.wallet_id,
-        "amount":           txn.amount,
-        "status":           StatusInfo.from_db(txn.status_master),
-        "transaction_type": TransactionTypeInfo.from_db(txn.transaction_types),
-        "reference_number": txn.reference_number,
-        "description":      txn.description,
-        "transaction_at":   txn.transaction_at,
-        "created_at":       txn.created_at,
-        "updated_at":       txn.updated_at,
-        "created_by":       txn.created_by,
-        "updated_by":       txn.updated_by,
-    }
-
-
-# -----------------------------
-# Wallet queries
-# -----------------------------
-
-async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
-    logger.info(
-        "Wallet fetch requested for employee_id=%s by user_id=%s",
-        employee_id,
-        current_user.id
-    )
-    if not is_admin(current_user) and employee_id != current_user.id:
-        raise HTTPException(status_code=403, detail=AD)
-
-    wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
-    if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
-
-    return wallet
-
-
-async def get_wallet_balance(wallet_id: str, current_user: CurrentUser):
-    logger.info(
-        "Wallet balance fetch requested for wallet_id=%s by user_id=%s",
-        wallet_id,
-        current_user.id
-    )
-
-    wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
-    if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
-
-    if not is_admin(current_user) and wallet.employee_id != current_user.id:
-        raise HTTPException(status_code=403, detail=AD)
-
-    return {
-        "wallet_id":        str(wallet.wallet_id),
-        "available_points": wallet.available_points,
-    }
-
-
-async def get_points_summary(wallet_id: str, current_user: CurrentUser):
-    logger.info(
-        "Points summary fetch requested for wallet_id=%s by user_id=%s",
-        wallet_id,
-        current_user.id
-    )
-    wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
-    if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
-
-    if not is_admin(current_user) and wallet.employee_id != current_user.id:
-        raise HTTPException(status_code=403, detail=AD)
-
-    now            = datetime.now(timezone.utc)
-    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    start_of_year  = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    month_txns = await db.transactions.find_many(
-        where={"wallet_id": wallet_id, "transaction_at": {"gte": start_of_month}}
-    )
-    year_txns = await db.transactions.find_many(
-        where={"wallet_id": wallet_id, "transaction_at": {"gte": start_of_year}}
-    )
-
-    logger.info(
-        "Computed summary wallet_id=%s month_txns=%d year_txns=%d",
-        wallet_id,
-        len(month_txns),
-        len(year_txns)
-    )
-    return {
-        "wallet_id":          wallet_id,
-        "points_this_month":  sum(t.amount for t in month_txns),
-        "points_this_year":   sum(t.amount for t in year_txns),
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# REVIEW → WALLET CREDIT  (the key function)
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
-    """
-    Credit the receiver's wallet for a review.
-
-    Points formula (via points_engine):
-        raw_points = rating × category_multiplier × reviewer_weight × seasonal_multiplier
-
-    The integer part of raw_points is credited to the wallet.
-    Idempotent: a UniqueViolationError on reference_number means already credited.
-    """
-    review_id = str(review_id)
-
-    # ── 1. Fetch the review ───────────────────────────────────────────────
-    review = await db.reviews.find_unique(where={"review_id": review_id})
-    if not review:
-        logger.warning(
-            "Review not found for review_id=%s",
-            review_id
-        )
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-
-    employee_id = review.receiver_id
-    created_by  = review.created_by
-
-    # ── 2. Resolve points ─────────────────────────────────────────────────
-    #
-    # Happy path: use pre-computed raw_points stored on the review row.
-    # Legacy path: recalculate using multipliers stored on the review row,
-    #              falling back to 1.0 defaults if they were never stored.
-    #
-    if review.raw_points is not None:
-        points = max(1, round(review.raw_points))
-        breakdown = {
-            "source":              "stored",
-            "raw_points":          review.raw_points,
-            "category":            review.category,
-            "category_multiplier": review.category_multiplier,
-            "reviewer_weight":     review.reviewer_weight,
-            "seasonal_multiplier": review.seasonal_multiplier,
-        }
-    else:
-        # Legacy review — recalculate with the new engine signature.
-        # All multipliers are read from the review row itself; if absent,
-        # default to 1.0 (neutral) so the rating alone determines points.
-        logger.warning(
-            "review %s has no raw_points — recalculating with defaults", review_id
-        )
-        category_multiplier = float(review.category_multiplier or 1.0)
-        reviewer_weight     = float(review.reviewer_weight     or 1.0)
-        seasonal_multiplier = float(review.seasonal_multiplier or 1.0)
-        decay_rate          = 0.9   # sensible default; ideally read from points_config
-        review_dt           = review.review_at or datetime.now(timezone.utc)
-
-        pts = calculate_points(
-            rating              = review.rating,
-            category_multiplier = category_multiplier,
-            reviewer_weight     = reviewer_weight,
-            seasonal_multiplier = seasonal_multiplier,
-            decay_rate          = decay_rate,
-            review_dt           = review_dt,
-            category_code       = review.category or "UNKNOWN",
-        )
-        points    = max(1, round(pts.raw_points))
-        breakdown = pts.as_dict()
-        breakdown["source"] = "recalculated"
-
-    if points == 0:
-        return {"message": "No points awarded for this rating", "credited_points": 0}
-
-    # ── 3. Fetch wallet ───────────────────────────────────────────────────
-    wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
-    if not wallet:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=WNF)
-
-    # ── 4. Resolve CREDIT transaction type ────────────────────────────────
-    txn_type = await db.transaction_types.find_unique(where={"type_code": "CREDIT"})
-    if not txn_type:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="CREDIT transaction type missing. Run seed_transaction_types.py"
-        )
-
-    # ── 5. Resolve APPROVED status ────────────────────────────────────────
-    status_record = await db.status_master.find_first(where={"status_code": "APPROVED"})
-    if not status_record:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="APPROVED status not found in status_master. Run seed_transaction_types.py"
-        )
-
-    # ── 6. Idempotent reference — one credit per review, forever ──────────
-    reference     = f"REVIEW-{review_id}"
-    new_available = wallet.available_points    + points
-    new_total     = wallet.total_earned_points + points
-    category_label = review.category or "REVIEW"
-
-    try:
-        async with db.tx() as txn:
-            new_txn = await txn.transactions.create(
-                data={
-                    "wallet_id":           wallet.wallet_id,
-                    "amount":              points,
-                    "transaction_type_id": txn_type.type_id,
-                    "status_id":           status_record.status_id,
-                    "description":         (
-                        f"{review.rating}★ {category_label} review "
-                        f"→ {points} pts "
-                        f"(×{review.category_multiplier or 1.0} cat, "
-                        f"×{review.reviewer_weight or 1.0} role, "
-                        f"×{review.seasonal_multiplier or 1.0} seasonal)"
-                    ),
-                    "reference_number":    reference,
-                    "created_by":          created_by,
-                    "updated_by":          created_by,
-                    "created_at":          datetime.now(timezone.utc),
-                    "updated_at":          datetime.now(timezone.utc),
-                }
-            )
-
-            result = await txn.wallets.update_many(
-                where={"wallet_id": wallet.wallet_id, "version": wallet.version},
-                data={
-                    "available_points":    new_available,
-                    "total_earned_points": new_total,
-                    "version":             wallet.version + 1,
-                    "updated_by":          created_by,
-                }
-            )
-
-            if result == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Wallet updated concurrently — please retry"
-                )
-
-        # ── Notify receiver (non-blocking) ────────────────────────────────
-        try:
-            stars = "⭐" * review.rating
-            await _notif.create_notification(
-                employee_id = employee_id,
-                title       = f"{points} points credited to your wallet 💰",
-                message     = (
-                    f"You earned {points} pts for a {review.rating}-star "
-                    f"{category_label} review {stars}. "
-                    f"New balance: {new_available} pts."
-                ),
-                type = NotificationType.REWARD,
-            )
-        except Exception:
-            logger.exception(
-                "Credit notification failed for review %s — points were credited successfully",
-                review_id,
-            )
-
-        logger.info(
-            "Wallet credited | employee=%s review=%s points=%d "
-            "available=%d total=%d breakdown=%s",
-            employee_id, review_id, points, new_available, new_total, breakdown,
-        )
-
-        return {
-            "transaction_id":  str(new_txn.transaction_id),
-            "wallet_id":       str(wallet.wallet_id),
-            "credited_points": points,
-            "new_balance":     new_available,
-            "breakdown":       breakdown,
-            "message":         f"{points} points credited successfully",
-        }
-
-    except UniqueViolationError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Points already credited for this review"
-        )
-
-
-async def get_transaction_types(current_user: CurrentUser):
-    if not is_admin(current_user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=AD)
-
-    types = await db.transaction_types.find_many()
-
-    return [
-        {
-            "type_id":   str(t.type_id),
-            "code":      t.type_code,
-            "name":      t.type_name,
-            "is_credit": t.is_credit,
-        }
-        for t in types
-    ]
+generator client {
+  provider                    = "prisma-client-py"
+  interface                   = "asyncio"
+  recursive_type_depth        = "5"
+  enable_experimental_decimal = true
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+model audit_log {
+  audit_id       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  table_name     String    @db.VarChar(100)
+  record_id      String    @db.Uuid
+  operation_type String    @db.VarChar(50)
+  old_values     Json?
+  new_values     Json?
+  performed_by   String    @db.Uuid
+  performed_at   DateTime  @default(now()) @db.Timestamptz(6)
+  ip_address     String?   @db.VarChar(45)
+  user_agent     String?
+  employees      employees @relation(fields: [performed_by], references: [employee_id])
+
+  @@index([operation_type])
+  @@index([performed_at])
+  @@index([performed_by])
+  @@index([record_id])
+  @@index([table_name])
+  @@index([table_name, record_id])
+  @@index([table_name, record_id, performed_at])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPARTMENTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model department_types {
+  department_type_id                               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type_name                                        String        @unique @db.VarChar(100)
+  type_code                                        String        @unique @db.VarChar(50)
+  created_at                                       DateTime      @default(now()) @db.Timestamptz(6)
+  created_by                                       String?       @db.Uuid
+  updated_at                                       DateTime      @db.Timestamptz(6)
+  updated_by                                       String?       @db.Uuid
+  employees_department_types_created_byToemployees employees?    @relation("department_types_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_department_types_updated_byToemployees employees?    @relation("department_types_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  departments                                      departments[]
+}
+
+model departments {
+  department_id                                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  department_name                                String           @unique @db.VarChar(100)
+  department_code                                String           @unique @db.VarChar(50)
+  department_type_id                             String           @db.Uuid
+  created_at                                     DateTime         @default(now()) @db.Timestamptz(6)
+  created_by                                     String?          @db.Uuid
+  updated_at                                     DateTime         @db.Timestamptz(6)
+  updated_by                                     String?          @db.Uuid
+  employees_departments_created_byToemployees    employees?       @relation("departments_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  department_types                               department_types @relation(fields: [department_type_id], references: [department_type_id])
+  employees_departments_updated_byToemployees    employees?       @relation("departments_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  employees_employees_department_idTodepartments employees[]      @relation("employees_department_idTodepartments")
+
+  @@index([department_type_id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DESIGNATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model designations {
+  designation_id                                   String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  designation_name                                 String      @unique @db.VarChar(100)
+  designation_code                                 String      @unique @db.VarChar(50)
+  level                                            Int
+  created_at                                       DateTime    @default(now()) @db.Timestamptz(6)
+  created_by                                       String?     @db.Uuid
+  updated_at                                       DateTime    @db.Timestamptz(6)
+  updated_by                                       String?     @db.Uuid
+  employees_designations_created_byToemployees     employees?  @relation("designations_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_designations_updated_byToemployees     employees?  @relation("designations_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  employees_employees_designation_idTodesignations employees[] @relation("employees_designation_idTodesignations")
+
+  @@index([level])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROLES  — reviewer_weight column added (was hardcoded in points_engine.py)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model roles {
+  role_id                               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role_name                             String           @unique @db.VarChar(100)
+  role_code                             String           @unique @db.VarChar(50)
+  description                           String?
+  /// Weight applied when a holder of this role writes a review.
+  /// Replaces the hardcoded ROLE_WEIGHTS dict in points_engine.py.
+  reviewer_weight                       Decimal          @default(1.0000) @db.Decimal(5, 4)
+  created_at                            DateTime         @default(now()) @db.Timestamptz(6)
+  created_by                            String?          @db.Uuid
+  updated_at                            DateTime         @db.Timestamptz(6)
+  updated_by                            String?          @db.Uuid
+  employee_roles                        employee_roles[]
+  employees_roles_created_byToemployees employees?       @relation("roles_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_roles_updated_byToemployees employees?       @relation("roles_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPLOYEE ROLES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model employee_roles {
+  employee_role_id                                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id                                     String     @db.Uuid
+  role_id                                         String     @db.Uuid
+  assigned_at                                     DateTime   @default(now()) @db.Timestamptz(6)
+  assigned_by                                     String     @db.Uuid
+  revoked_at                                      DateTime?  @db.Timestamptz(6)
+  revoked_by                                      String?    @db.Uuid
+  is_active                                       Boolean    @default(true)
+  created_at                                      DateTime   @default(now()) @db.Timestamptz(6)
+  created_by                                      String     @db.Uuid
+  updated_at                                      DateTime   @db.Timestamptz(6)
+  updated_by                                      String     @db.Uuid
+  employees_employee_roles_assigned_byToemployees employees  @relation("employee_roles_assigned_byToemployees", fields: [assigned_by], references: [employee_id])
+  employees_employee_roles_created_byToemployees  employees  @relation("employee_roles_created_byToemployees", fields: [created_by], references: [employee_id])
+  employees_employee_roles_employee_idToemployees employees  @relation("employee_roles_employee_idToemployees", fields: [employee_id], references: [employee_id], onDelete: Cascade)
+  employees_employee_roles_revoked_byToemployees  employees? @relation("employee_roles_revoked_byToemployees", fields: [revoked_by], references: [employee_id], onDelete: Restrict)
+  roles                                           roles      @relation(fields: [role_id], references: [role_id])
+  employees_employee_roles_updated_byToemployees  employees  @relation("employee_roles_updated_byToemployees", fields: [updated_by], references: [employee_id])
+
+  @@unique([employee_id, role_id, is_active])
+  @@index([assigned_at])
+  @@index([employee_id])
+  @@index([employee_id, is_active])
+  @@index([is_active])
+  @@index([revoked_at])
+  @@index([role_id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPLOYEES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model employees {
+  employee_id                                                         String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username                                                            String                @unique @db.VarChar(100)
+  email                                                               String                @unique @db.VarChar(255)
+  designation_id                                                      String                @db.Uuid
+  password_hash                                                       String                @db.VarChar(255)
+  department_id                                                       String                @db.Uuid
+  manager_id                                                          String?               @db.Uuid
+  date_of_joining                                                     DateTime              @db.Date
+  date_of_birth                                                       DateTime?             @db.Date
+  status_id                                                           String                @db.Uuid
+  created_at                                                          DateTime              @default(now()) @db.Timestamptz(6)
+  created_by                                                          String?               @db.Uuid
+  updated_at                                                          DateTime              @db.Timestamptz(6)
+  updated_by                                                          String?               @db.Uuid
+  audit_log                                                           audit_log[]
+  department_types_department_types_created_byToemployees             department_types[]    @relation("department_types_created_byToemployees")
+  department_types_department_types_updated_byToemployees             department_types[]    @relation("department_types_updated_byToemployees")
+  departments_departments_created_byToemployees                       departments[]         @relation("departments_created_byToemployees")
+  departments_departments_updated_byToemployees                       departments[]         @relation("departments_updated_byToemployees")
+  designations_designations_created_byToemployees                     designations[]        @relation("designations_created_byToemployees")
+  designations_designations_updated_byToemployees                     designations[]        @relation("designations_updated_byToemployees")
+  employee_roles_employee_roles_assigned_byToemployees                employee_roles[]      @relation("employee_roles_assigned_byToemployees")
+  employee_roles_employee_roles_created_byToemployees                 employee_roles[]      @relation("employee_roles_created_byToemployees")
+  employee_roles_employee_roles_employee_idToemployees                employee_roles[]      @relation("employee_roles_employee_idToemployees")
+  employee_roles_employee_roles_revoked_byToemployees                 employee_roles[]      @relation("employee_roles_revoked_byToemployees")
+  employee_roles_employee_roles_updated_byToemployees                 employee_roles[]      @relation("employee_roles_updated_byToemployees")
+  employees_employees_created_byToemployees                           employees?            @relation("employees_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  other_employees_employees_created_byToemployees                     employees[]           @relation("employees_created_byToemployees")
+  departments_employees_department_idTodepartments                    departments           @relation("employees_department_idTodepartments", fields: [department_id], references: [department_id])
+  designations_employees_designation_idTodesignations                 designations          @relation("employees_designation_idTodesignations", fields: [designation_id], references: [designation_id])
+  employees_employees_manager_idToemployees                           employees?            @relation("employees_manager_idToemployees", fields: [manager_id], references: [employee_id])
+  other_employees_employees_manager_idToemployees                     employees[]           @relation("employees_manager_idToemployees")
+  status_master_employees_status_idTostatus_master                    status_master         @relation("employees_status_idTostatus_master", fields: [status_id], references: [status_id])
+  employees_employees_updated_byToemployees                           employees?            @relation("employees_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  other_employees_employees_updated_byToemployees                     employees[]           @relation("employees_updated_byToemployees")
+  refresh_tokens                                                      refresh_tokens[]
+  reviews_reviews_created_byToemployees                               reviews[]             @relation("reviews_created_byToemployees")
+  reviews_reviews_receiver_idToemployees                              reviews[]             @relation("reviews_receiver_idToemployees")
+  reviews_reviews_reviewer_idToemployees                              reviews[]             @relation("reviews_reviewer_idToemployees")
+  reviews_reviews_updated_byToemployees                               reviews[]             @relation("reviews_updated_byToemployees")
+  reward_catalog_reward_catalog_created_byToemployees                 reward_catalog[]      @relation("reward_catalog_created_byToemployees")
+  reward_catalog_reward_catalog_updated_byToemployees                 reward_catalog[]      @relation("reward_catalog_updated_byToemployees")
+  reward_categories_reward_categories_created_byToemployees           reward_categories[]   @relation("reward_categories_created_byToemployees")
+  reward_categories_reward_categories_updated_byToemployees           reward_categories[]   @relation("reward_categories_updated_byToemployees")
+  reward_history_reward_history_created_byToemployees                 reward_history[]      @relation("reward_history_created_byToemployees")
+  reward_history_reward_history_granted_byToemployees                 reward_history[]      @relation("reward_history_granted_byToemployees")
+  reward_history_reward_history_updated_byToemployees                 reward_history[]      @relation("reward_history_updated_byToemployees")
+  roles_roles_created_byToemployees                                   roles[]               @relation("roles_created_byToemployees")
+  roles_roles_updated_byToemployees                                   roles[]               @relation("roles_updated_byToemployees")
+  status_master_status_master_created_byToemployees                   status_master[]       @relation("status_master_created_byToemployees")
+  status_master_status_master_updated_byToemployees                   status_master[]       @relation("status_master_updated_byToemployees")
+  transaction_types_transaction_types_created_byToemployees           transaction_types[]   @relation("transaction_types_created_byToemployees")
+  transaction_types_transaction_types_updated_byToemployees           transaction_types[]   @relation("transaction_types_updated_byToemployees")
+  transactions_transactions_created_byToemployees                     transactions[]        @relation("transactions_created_byToemployees")
+  transactions_transactions_updated_byToemployees                     transactions[]        @relation("transactions_updated_byToemployees")
+  wallets_wallets_created_byToemployees                               wallets[]             @relation("wallets_created_byToemployees")
+  wallets_wallets_employee_idToemployees                              wallets?              @relation("wallets_employee_idToemployees")
+  wallets_wallets_updated_byToemployees                               wallets[]             @relation("wallets_updated_byToemployees")
+  // ── New points-config relations ──────────────────────────────────────────
+  review_categories_review_categories_created_byToemployees           review_categories[]   @relation("review_categories_created_byToemployees")
+  review_categories_review_categories_updated_byToemployees           review_categories[]   @relation("review_categories_updated_byToemployees")
+  seasonal_multipliers_seasonal_multipliers_created_byToemployees     seasonal_multipliers[] @relation("seasonal_multipliers_created_byToemployees")
+  seasonal_multipliers_seasonal_multipliers_updated_byToemployees     seasonal_multipliers[] @relation("seasonal_multipliers_updated_byToemployees")
+  points_config_points_config_created_byToemployees                   points_config[]       @relation("points_config_created_byToemployees")
+  points_config_points_config_updated_byToemployees                   points_config[]       @relation("points_config_updated_byToemployees")
+
+  @@index([created_at])
+  @@index([date_of_joining])
+  @@index([date_of_birth])
+  @@index([department_id])
+  @@index([department_id, status_id])
+  @@index([designation_id])
+  @@index([manager_id])
+  @@index([manager_id, status_id])
+  @@index([status_id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH
+// ─────────────────────────────────────────────────────────────────────────────
+
+model refresh_tokens {
+  token_id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token_hash        String    @unique @db.VarChar(255)
+  employee_id       String    @db.Uuid
+  expires_at        DateTime  @db.Timestamptz(6)
+  revoked_at        DateTime? @db.Timestamptz(6)
+  replaced_by_token String?   @db.VarChar(255)
+  created_at        DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime  @db.Timestamptz(6)
+  employees         employees @relation(fields: [employee_id], references: [employee_id], onDelete: Cascade)
+
+  @@index([employee_id])
+  @@index([token_hash])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REVIEW CATEGORIES  (replaces CATEGORY_MULTIPLIERS dict in points_engine.py)
+//
+// 3NF fix: category_code → multiplier was a transitive dependency stored in
+// Python. Now category is its own entity with its own PK.
+// reviews.category_id  FK → review_categories.category_id
+// ─────────────────────────────────────────────────────────────────────────────
+
+model review_categories {
+  category_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Short code stored on the review row for readability, e.g. "INNOVATION"
+  category_code    String    @unique @db.VarChar(50)
+  category_name    String    @unique @db.VarChar(100)
+  /// Points multiplier applied to raw rating × reviewer_weight × seasonal_multiplier.
+  /// Replaces hardcoded CATEGORY_MULTIPLIERS dict in points_engine.py.
+  multiplier       Decimal   @db.Decimal(5, 4)
+  description      String?
+  is_active        Boolean   @default(true)
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
+  created_by       String?   @db.Uuid
+  updated_at       DateTime  @db.Timestamptz(6)
+  updated_by       String?   @db.Uuid
+
+  employees_review_categories_created_byToemployees employees? @relation("review_categories_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_review_categories_updated_byToemployees employees? @relation("review_categories_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  reviews                                           reviews[]
+
+  @@index([is_active])
+  @@index([category_code])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEASONAL MULTIPLIERS  (replaces _seasonal_multiplier() function in points_engine.py)
+//
+// 3NF fix: quarter → multiplier was embedded in Python if/elif.
+// effective_from / effective_to allow scheduling seasonal changes ahead of time
+// without code deploys. NULL means "always active".
+// ─────────────────────────────────────────────────────────────────────────────
+
+model seasonal_multipliers {
+  seasonal_multiplier_id String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Calendar quarter: 1 (Jan-Mar), 2 (Apr-Jun), 3 (Jul-Sep), 4 (Oct-Dec)
+  quarter                Int
+  label                  String    @db.VarChar(50)
+  /// Seasonal boost applied to raw point calculation.
+  /// Replaces hardcoded Q1-Q4 values in _seasonal_multiplier().
+  multiplier             Decimal   @db.Decimal(5, 4)
+  /// NULL = active from the beginning of time
+  effective_from         DateTime? @db.Date
+  /// NULL = no expiry
+  effective_to           DateTime? @db.Date
+  created_at             DateTime  @default(now()) @db.Timestamptz(6)
+  created_by             String?   @db.Uuid
+  updated_at             DateTime  @db.Timestamptz(6)
+  updated_by             String?   @db.Uuid
+
+  employees_seasonal_multipliers_created_byToemployees employees? @relation("seasonal_multipliers_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_seasonal_multipliers_updated_byToemployees employees? @relation("seasonal_multipliers_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+
+  /// Most recent config row per quarter wins; schedule future changes by inserting
+  /// a new row with a future effective_from.
+  @@unique([quarter, effective_from])
+  @@index([quarter])
+  @@index([effective_from])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POINTS CONFIG  (replaces magic constants in points_engine.py)
+//
+// 3NF fix: DECAY_RATE = 0.9 was a hardcoded constant. Any global numeric
+// setting for the points engine lives here so it can be changed by an admin
+// without a code deploy.
+//
+// Seed rows:
+//   DECAY_RATE   0.900000   "10 % quarterly decay on historical points"
+// ─────────────────────────────────────────────────────────────────────────────
+
+model points_config {
+  config_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Unique key, e.g. "DECAY_RATE"
+  config_key     String    @unique @db.VarChar(100)
+  config_value   Decimal   @db.Decimal(10, 6)
+  description    String?
+  /// NULL = active immediately and forever
+  effective_from DateTime? @db.Date
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+  created_by     String?   @db.Uuid
+  updated_at     DateTime  @db.Timestamptz(6)
+  updated_by     String?   @db.Uuid
+
+  employees_points_config_created_byToemployees employees? @relation("points_config_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_points_config_updated_byToemployees employees? @relation("points_config_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+
+  @@index([config_key])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REVIEWS
+//
+// Changes vs original:
+//   - category        String?  @db.VarChar(64)       REMOVED (was freetext)
+//   - category_id     String?  @db.Uuid              ADDED  (FK → review_categories)
+//   - category_code   String?  @db.VarChar(50)       ADDED  (denormalised snapshot for
+//                                                     fast reads without a JOIN)
+//
+// Snapshot columns (raw_points, category_multiplier, reviewer_weight,
+// seasonal_multiplier) are intentionally kept as point-in-time audit values.
+// If an admin later changes a multiplier the historical calculation is preserved.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model reviews {
+  review_id                                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reviewer_id                              String             @db.Uuid
+  receiver_id                              String             @db.Uuid
+  rating                                   Int
+  comment                                  String
+  image_url                                String?            @db.VarChar(500)
+  video_url                                String?            @db.VarChar(500)
+  status_id                                String             @db.Uuid
+  review_at                                DateTime           @default(now()) @db.Timestamptz(6)
+  created_at                               DateTime           @default(now()) @db.Timestamptz(6)
+  created_by                               String             @db.Uuid
+  updated_at                               DateTime           @db.Timestamptz(6)
+  updated_by                               String             @db.Uuid
+
+  /// FK to review_categories.  Replaces the old freetext category VarChar(64).
+  category_id                              String?            @db.Uuid
+  /// Denormalised snapshot of category_code at review time (avoids JOIN on reads).
+  category_code                            String?            @db.VarChar(50)
+
+  /// ── Points snapshot columns (frozen at write time for audit purposes) ──
+  raw_points                               Float?
+  category_multiplier                      Float?
+  reviewer_weight                          Float?
+  seasonal_multiplier                      Float?
+
+  // Relations
+  employees_reviews_created_byToemployees  employees          @relation("reviews_created_byToemployees",  fields: [created_by],   references: [employee_id])
+  employees_reviews_receiver_idToemployees employees          @relation("reviews_receiver_idToemployees", fields: [receiver_id],  references: [employee_id])
+  employees_reviews_reviewer_idToemployees employees          @relation("reviews_reviewer_idToemployees", fields: [reviewer_id],  references: [employee_id])
+  status_master                            status_master      @relation(fields: [status_id],    references: [status_id])
+  employees_reviews_updated_byToemployees  employees          @relation("reviews_updated_byToemployees",  fields: [updated_by],   references: [employee_id])
+  review_categories                        review_categories? @relation(fields: [category_id],  references: [category_id])
+
+  @@index([rating])
+  @@index([receiver_id])
+  @@index([receiver_id, status_id])
+  @@index([review_at])
+  @@index([reviewer_id])
+  @@index([reviewer_id, review_at])
+  @@index([status_id])
+  @@index([category_id])
+  @@index([receiver_id, raw_points])
+  @@index([receiver_id, review_at])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATUS MASTER
+// ─────────────────────────────────────────────────────────────────────────────
+
+model status_master {
+  status_id                                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  status_code                                   String         @unique @db.VarChar(50)
+  status_name                                   String         @db.VarChar(100)
+  description                                   String?
+  entity_type                                   String         @db.VarChar(50)
+  created_at                                    DateTime       @default(now()) @db.Timestamptz(6)
+  created_by                                    String?        @db.Uuid
+  updated_at                                    DateTime       @db.Timestamptz(6)
+  updated_by                                    String?        @db.Uuid
+  employees_employees_status_idTostatus_master  employees[]    @relation("employees_status_idTostatus_master")
+  reviews                                       reviews[]
+  employees_status_master_created_byToemployees employees?     @relation("status_master_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_status_master_updated_byToemployees employees?     @relation("status_master_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  transactions                                  transactions[]
+
+  @@index([entity_type])
+  @@index([entity_type, status_code])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSACTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model transaction_types {
+  type_id                                           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type_name                                         String         @unique @db.VarChar(100)
+  type_code                                         String         @unique @db.VarChar(50)
+  description                                       String?
+  is_credit                                         Boolean
+  created_at                                        DateTime       @default(now()) @db.Timestamptz(6)
+  created_by                                        String?        @db.Uuid
+  updated_at                                        DateTime       @db.Timestamptz(6)
+  updated_by                                        String?        @db.Uuid
+  employees_transaction_types_created_byToemployees employees?     @relation("transaction_types_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_transaction_types_updated_byToemployees employees?     @relation("transaction_types_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  transactions                                      transactions[]
+
+  @@index([is_credit])
+}
+
+model transactions {
+  transaction_id                               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  wallet_id                                    String            @db.Uuid
+  amount                                       Int
+  transaction_type_id                          String            @db.Uuid
+  status_id                                    String            @db.Uuid
+  description                                  String?
+  reference_number                             String            @unique @db.VarChar(100)
+  transaction_at                               DateTime          @default(now()) @db.Timestamptz(6)
+  created_at                                   DateTime          @default(now()) @db.Timestamptz(6)
+  created_by                                   String            @db.Uuid
+  updated_at                                   DateTime          @db.Timestamptz(6)
+  updated_by                                   String            @db.Uuid
+  employees_transactions_created_byToemployees employees         @relation("transactions_created_byToemployees", fields: [created_by], references: [employee_id])
+  status_master                                status_master     @relation(fields: [status_id], references: [status_id])
+  transaction_types                            transaction_types @relation(fields: [transaction_type_id], references: [type_id])
+  employees_transactions_updated_byToemployees employees         @relation("transactions_updated_byToemployees", fields: [updated_by], references: [employee_id])
+  wallets                                      wallets           @relation(fields: [wallet_id], references: [wallet_id], onDelete: Cascade)
+
+  @@index([created_at])
+  @@index([status_id])
+  @@index([transaction_at])
+  @@index([transaction_type_id])
+  @@index([wallet_id])
+  @@index([wallet_id, status_id])
+  @@index([wallet_id, transaction_at])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WALLETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model wallets {
+  wallet_id                                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id                              String           @unique @db.Uuid
+  available_points                         Int              @default(0)
+  redeemed_points                          Int              @default(0)
+  total_earned_points                      Int              @default(0)
+  version                                  Int              @default(1)
+  created_at                               DateTime         @default(now()) @db.Timestamptz(6)
+  created_by                               String           @db.Uuid
+  updated_at                               DateTime         @db.Timestamptz(6)
+  updated_by                               String           @db.Uuid
+  reward_history                           reward_history[]
+  transactions                             transactions[]
+  employees_wallets_created_byToemployees  employees        @relation("wallets_created_byToemployees",   fields: [created_by],   references: [employee_id])
+  employees_wallets_employee_idToemployees employees        @relation("wallets_employee_idToemployees",  fields: [employee_id],  references: [employee_id], onDelete: Cascade)
+  employees_wallets_updated_byToemployees  employees        @relation("wallets_updated_byToemployees",   fields: [updated_by],   references: [employee_id])
+
+  @@index([available_points])
+  @@index([total_earned_points])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REWARD CATALOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+model reward_catalog {
+  catalog_id                                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reward_name                                    String            @unique @db.VarChar(200)
+  reward_code                                    String            @unique @db.VarChar(50)
+  description                                    String?
+  default_points                                 Int
+  category_id                                    String            @db.Uuid
+  min_points                                     Int
+  max_points                                     Int
+  is_active                                      Boolean           @default(true)
+  available_stock                                Int               @default(0)
+  created_at                                     DateTime          @default(now()) @db.Timestamptz(6)
+  created_by                                     String?           @db.Uuid
+  updated_at                                     DateTime          @db.Timestamptz(6)
+  updated_by                                     String?           @db.Uuid
+  reward_categories                              reward_categories @relation(fields: [category_id], references: [category_id])
+  employees_reward_catalog_created_byToemployees employees?        @relation("reward_catalog_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_reward_catalog_updated_byToemployees employees?        @relation("reward_catalog_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  reward_history                                 reward_history[]
+
+  @@index([category_id])
+  @@index([category_id, is_active])
+  @@index([is_active])
+  @@index([min_points, max_points])
+}
+
+model reward_categories {
+  category_id                                       String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  category_name                                     String           @unique @db.VarChar(100)
+  category_code                                     String           @unique @db.VarChar(50)
+  description                                       String?
+  is_active                                         Boolean          @default(true)
+  created_at                                        DateTime         @default(now()) @db.Timestamptz(6)
+  created_by                                        String?          @db.Uuid
+  updated_at                                        DateTime         @db.Timestamptz(6)
+  updated_by                                        String?          @db.Uuid
+  reward_catalog                                    reward_catalog[]
+  employees_reward_categories_created_byToemployees employees?       @relation("reward_categories_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_reward_categories_updated_byToemployees employees?       @relation("reward_categories_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+
+  @@index([is_active])
+}
+
+model reward_history {
+  history_id                                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  wallet_id                                      String         @db.Uuid
+  catalog_id                                     String         @db.Uuid
+  granted_by                                     String         @db.Uuid
+  points                                         Int
+  comment                                        String?
+  granted_at                                     DateTime       @default(now()) @db.Timestamptz(6)
+  created_at                                     DateTime       @default(now()) @db.Timestamptz(6)
+  created_by                                     String         @db.Uuid
+  updated_at                                     DateTime       @db.Timestamptz(6)
+  updated_by                                     String         @db.Uuid
+  reward_catalog                                 reward_catalog @relation(fields: [catalog_id], references: [catalog_id])
+  employees_reward_history_created_byToemployees employees      @relation("reward_history_created_byToemployees", fields: [created_by], references: [employee_id])
+  employees_reward_history_granted_byToemployees employees      @relation("reward_history_granted_byToemployees", fields: [granted_by], references: [employee_id])
+  employees_reward_history_updated_byToemployees employees      @relation("reward_history_updated_byToemployees", fields: [updated_by], references: [employee_id])
+  wallets                                        wallets        @relation(fields: [wallet_id], references: [wallet_id], onDelete: Cascade)
+
+  @@index([catalog_id, granted_at])
+  @@index([catalog_id])
+  @@index([granted_at])
+  @@index([granted_by])
+  @@index([wallet_id, granted_at])
+  @@index([wallet_id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model notifications {
+  notification_id String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id     String    @db.Uuid
+  title           String    @db.VarChar(200)
+  message         String
+  type            String    @db.VarChar(50)
+  is_read         Boolean   @default(false)
+  email_sent      Boolean   @default(false)
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  read_at         DateTime? @db.Timestamptz(6)
+
+  @@index([employee_id])
+  @@index([employee_id, is_read])
+  @@index([created_at])
+  @@index([email_sent])
+}
