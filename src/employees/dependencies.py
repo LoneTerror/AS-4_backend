@@ -1,8 +1,12 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from src.core.security import decode_token
+# src/employees/dependencies.py
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="http://localhost:8001/v1/auth/login")
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials  # ← change this
+from src.core.security import decode_token
+from src.prisma.client import db
+from prisma import Prisma
+
+bearer_scheme = HTTPBearer()  # ← replaces OAuth2PasswordBearer
 
 class CurrentEmployee:
     def __init__(self, id: str, roles: list, email: str):
@@ -10,8 +14,10 @@ class CurrentEmployee:
         self.roles = roles
         self.email = email
 
-async def get_current_employee(token: str = Depends(oauth2_scheme)) -> CurrentEmployee:
-    payload = decode_token(token)
+async def get_current_employee(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)  # ← change this
+) -> CurrentEmployee:
+    payload = decode_token(credentials.credentials)  # ← .credentials extracts the token
 
     if not payload:
         raise HTTPException(
@@ -20,7 +26,6 @@ async def get_current_employee(token: str = Depends(oauth2_scheme)) -> CurrentEm
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Ensure roles is a list (handles some tokens storing it as string)
     roles = payload.get("roles", [])
     if isinstance(roles, str):
         roles = [roles]
@@ -30,3 +35,6 @@ async def get_current_employee(token: str = Depends(oauth2_scheme)) -> CurrentEm
         roles=roles,
         email=payload.get("email")
     )
+
+def get_db() -> Prisma:
+    return db
