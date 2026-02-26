@@ -183,7 +183,7 @@ pipeline {
     post {
         always {
             // 1. Archive security reports
-            archiveArtifacts artifacts: '*.json, *.html', allowEmptyArchive: true
+            archiveArtifacts artifacts: '**/*.json, **/*.html', allowEmptyArchive: true
             
             // 2. Wipe the workspace folder immediately
             cleanWs()
