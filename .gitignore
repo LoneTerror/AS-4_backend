@@ -57,7 +57,6 @@ coverage/
 # Temporary folders
 tmp/
 temp/
-tests/
 
 # Others
 setup.ps1
@@ -73,3 +72,6 @@ __pycache__/
 .db
 .sqlite3
 .sqlite
+
+#secrets report of gitleaks
+report.json

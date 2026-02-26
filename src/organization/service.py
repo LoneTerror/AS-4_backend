@@ -13,29 +13,6 @@ from src.organization import schemas
 #  DEPARTMENT SERVICE
 # ══════════════════════════════════════════════
 
-def _build_dept_response(dept, with_count: bool = False, employee_count: int = 0) -> dict:
-    """Helper: build department dict from Prisma object."""
-    dept_type = None
-    if dept.department_types:
-        dept_type = schemas.DepartmentTypeResponse(
-            department_type_id=dept.department_types.department_type_id,
-            type_name=dept.department_types.type_name,
-            type_code=dept.department_types.type_code
-        )
-
-    manager = None
-    # manager_id is stored as a scalar FK; we need the manager employee record
-    # The service functions that need manager details pass manager_record separately
-    return dept_type, manager
-
-
-async def _get_manager(manager_id: Optional[str]):
-    if not manager_id:
-        return None
-    mgr = await db.employees.find_unique(where={"employee_id": manager_id})
-    return mgr
-
-
 async def list_departments(
     page: int,
     limit: int,
@@ -45,12 +22,6 @@ async def list_departments(
 
     where: dict = {}
     and_conditions = []
-
-    if is_active is not None:
-        # departments don't have is_active column — derive from employee status or skip
-        # Per schema departments has no is_active; we'll treat is_active as a filter
-        # on whether department has a manager (active use). Skip if not in schema.
-        pass  # no is_active column on departments in schema — we'll add a virtual field below
 
     if search:
         and_conditions.append({
@@ -84,12 +55,6 @@ async def list_departments(
                 type_name=dept.department_types.type_name,
                 type_code=dept.department_types.type_code
             )
-
-        # Fetch manager separately (manager_id is a scalar on the dept? — no, it's not)
-        # Per schema, departments does NOT have a manager_id column.
-        # Manager link is: employees.department_id -> departments
-        # The API spec says manager comes from employees who manage this dept — 
-        # we'll skip manager in list view (not in schema) or return None.
 
         data.append(schemas.DepartmentListItem(
             department_id=dept.department_id,
@@ -254,8 +219,19 @@ async def update_department(
 
 
 async def list_department_types() -> list[schemas.DepartmentTypeResponse]:
+    """
+    Returns all department types as schema objects (not raw Prisma models).
+    Previously returned raw Prisma objects which would fail Pydantic serialization.
+    """
     types = await db.department_types.find_many(order={"type_name": "asc"})
-    return types
+    return [
+        schemas.DepartmentTypeResponse(
+            department_type_id=t.department_type_id,
+            type_name=t.type_name,
+            type_code=t.type_code
+        )
+        for t in types
+    ]
 
 
 # ══════════════════════════════════════════════
@@ -387,5 +363,5 @@ async def update_designation(
         where={"designation_id": designation_id},
         data=update_data
     )
-    
+
     return await get_designation_detail(designation_id)
