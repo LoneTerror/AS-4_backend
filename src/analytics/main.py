@@ -87,4 +87,4 @@ app.include_router(analytics_router, prefix="/v1/dashboard", tags=["Dashboard"])
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("src.analytics.main:app", host="0.0.0.0", port=8007, reload=True)
+    uvicorn.run("src.analytics.main:app", host="0.0.0.0", port=8008, reload=True)
