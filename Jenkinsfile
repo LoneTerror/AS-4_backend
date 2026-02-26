@@ -163,8 +163,8 @@ pipeline {
                 reportTitles: 'Bandit (SAST), Trivy (Container), OWASP ZAP (DAST)'
             ])
             
-            cleanWs() 
-            sh "docker rmi ${IMAGE}:${TAG} || true" 
+            // cleanWs() 
+            // sh "docker rmi ${IMAGE}:${TAG} || true" 
         }
         failure {
             sh "docker system prune -f" 
