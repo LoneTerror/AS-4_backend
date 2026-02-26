@@ -126,8 +126,6 @@ pipeline {
             steps {
                 script {
                     sh 'docker network create zap-net || true'
-            
-                    // Wrap the docker run in withCredentials to pull from Jenkins store
                     withCredentials([
                     string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
                     string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
