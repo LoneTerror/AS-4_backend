@@ -46,10 +46,10 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 RUN rm -rf /etc/nginx/nginx.conf /etc/nginx/sites-enabled/* /etc/nginx/sites-available/* /etc/nginx/conf.d/*
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# PERMISSIONS: Comprehensive fix
+# PERMISSIONS: Ensure appuser owns the socket and log areas
 RUN mkdir -p /var/log/nginx /var/lib/nginx /run/nginx /tmp/client_temp /var/log/supervisor && \
     chown -R appuser:appgroup /app /var/log /var/lib/nginx /run/nginx /etc/nginx /tmp && \
-    # Ensure the prisma binaries are executable
+    chmod -R 777 /tmp && \
     chmod -R +x /app/prisma_binaries
 
 USER appuser
