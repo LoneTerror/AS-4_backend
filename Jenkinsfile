@@ -119,53 +119,49 @@ pipeline {
                 --exit-code 1 \
                 $IMAGE:$TAG || true
         '''
+        }
     }
-}
 
         stage('DAST - OWASP ZAP') {
             steps {
                 script {
-                    // 1. Create a bridge network so containers can talk
                     sh 'docker network create zap-net || true'
-
+            
+                    // Wrap the docker run in withCredentials to pull from Jenkins store
+                    withCredentials([
+                    string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
+                    string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
+                    string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
+                ]) {
                     try {
-                        // 2. Run your Backend App (detached) on this network
-                        // We name it 'target-app' so ZAP can find it by hostname
+                        // Pass the actual variables into the container
                         sh """
-                        docker run -d \
+                            docker run -d \
                             --name target-app \
                             --network zap-net \
-                            -e DATABASE_URL='postgresql://...' \
-                            $IMAGE:$TAG
+                            -e DATABASE_URL="${DB_URL}" \
+                            -e SECRET_KEY="${SECRET_KEY}" \
+                            -e ALGORITHM="${ALGO}" \
+                            ${IMAGE}:${TAG}
                         """
 
-                        // 3. Wait for App to start (Give it 10s or use a healthcheck loop)
-                        sh 'sleep 10'
-
-                        // 4. Run OWASP ZAP against 'http://target-app:8000'
-                        // zap-baseline.py is a quick scan. Use zap-full-scan.py for deep scans.
+                        sh 'sleep 15' // Wait for FastAPI to bind to port 8000
+                    
+                        // Run ZAP
                         sh """
-                        docker run --rm \
-                            --user 0 \
-                            --network zap-net \
+                            docker run --rm --user 0 --network zap-net \
                             -v \$(pwd):/zap/wrk/:rw \
-                            -t ghcr.io/zaproxy/zaproxy:stable \
-                            zap-baseline.py \
-                            -t http://target-app:8000 \
-                            -r zap-report.html \
-                            || true
+                            ghcr.io/zaproxy/zaproxy:stable \
+                            zap-baseline.py -t http://target-app:8000 -r zap-report.html || true
                         """
                     } finally {
-                        // 5. Cleanup: Always stop the app and remove network, even if scan fails
-                        sh '''
-                        docker stop target-app || true
-                        docker rm target-app || true
-                        docker network rm zap-net || true
-                        '''
+                        sh 'docker stop target-app && docker rm target-app || true'
+                        sh 'docker network rm zap-net || true'
                     }
                 }
             }
         }
+    }
 
         stage('Push Image') {
             when{branch 'develop'}
