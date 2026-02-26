@@ -2,25 +2,28 @@
 FROM python:3.11-slim AS builder
 WORKDIR /app
 
-# Required for Prisma and Python dependencies
+# (Keep your apt-get and venv setup the same)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev curl && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# FIX: Force Prisma to download binaries to a path accessible in Stage 2
-ENV PRISMA_PY_BINARIES_PATH=/app/prisma_binaries
-
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
+
+# Set the binary path
+ENV PRISMA_PY_BINARIES_PATH=/app/prisma_binaries
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# NEW: Explicitly create the directory before generating
+RUN mkdir -p /app/prisma_binaries
+
 COPY prisma/schema.prisma ./prisma/
-# This generates the client and puts the binary engines in /app/prisma_binaries
-RUN prisma generate
+# Generate and verify binaries are there
+RUN prisma generate && ls -l /app/prisma_binaries
 
 # ---------- STAGE 2: RUNTIME ----------
 FROM python:3.11-slim
@@ -42,9 +45,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 curl supervisor nginx && rm -rf /var/lib/apt/lists/*
 
 # Copy the venv, prisma schema, and the engines from the builder stage
+COPY --from=builder /app/prisma_binaries /app/prisma_binaries
 COPY --from=builder /app/venv /app/venv
 COPY --from=builder /app/prisma /app/prisma
-COPY --from=builder /app/prisma_binaries /app/prisma_binaries
 
 # Copy source and configs
 COPY . .
@@ -56,7 +59,8 @@ COPY nginx.conf /etc/nginx/nginx.conf
 
 # PERMISSIONS: Fix permissions for Nginx temp folders and Prisma binaries
 RUN mkdir -p /var/log/nginx /var/lib/nginx /run/nginx /tmp/client_temp /var/log/supervisor && \
-    chown -R appuser:appgroup /app /var/log /var/lib/nginx /run/nginx /etc/nginx /tmp
+    chown -R appuser:appgroup /app /var/log /var/lib/nginx /run/nginx /etc/nginx /tmp && \
+    chmod -R +x /app/prisma_binaries
 
 USER appuser
 
