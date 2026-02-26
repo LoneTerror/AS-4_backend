@@ -499,83 +499,6 @@ model wallets {
   @@index([total_earned_points])
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// REWARD CATALOG
-// ─────────────────────────────────────────────────────────────────────────────
-
-model reward_catalog {
-  catalog_id                                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  reward_name                                    String            @unique @db.VarChar(200)
-  reward_code                                    String            @unique @db.VarChar(50)
-  description                                    String?
-  default_points                                 Int
-  category_id                                    String            @db.Uuid
-  min_points                                     Int
-  max_points                                     Int
-  is_active                                      Boolean           @default(true)
-  available_stock                                Int               @default(0)
-  created_at                                     DateTime          @default(now()) @db.Timestamptz(6)
-  created_by                                     String?           @db.Uuid
-  updated_at                                     DateTime          @db.Timestamptz(6)
-  updated_by                                     String?           @db.Uuid
-  reward_categories                              reward_categories @relation(fields: [category_id], references: [category_id])
-  employees_reward_catalog_created_byToemployees employees?        @relation("reward_catalog_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  employees_reward_catalog_updated_byToemployees employees?        @relation("reward_catalog_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-  reward_history                                 reward_history[]
-
-  @@index([category_id])
-  @@index([category_id, is_active])
-  @@index([is_active])
-  @@index([min_points, max_points])
-}
-
-model reward_categories {
-  category_id                                       String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  category_name                                     String           @unique @db.VarChar(100)
-  category_code                                     String           @unique @db.VarChar(50)
-  description                                       String?
-  is_active                                         Boolean          @default(true)
-  created_at                                        DateTime         @default(now()) @db.Timestamptz(6)
-  created_by                                        String?          @db.Uuid
-  updated_at                                        DateTime         @db.Timestamptz(6)
-  updated_by                                        String?          @db.Uuid
-  reward_catalog                                    reward_catalog[]
-  employees_reward_categories_created_byToemployees employees?       @relation("reward_categories_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  employees_reward_categories_updated_byToemployees employees?       @relation("reward_categories_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-
-  @@index([is_active])
-}
-
-model reward_history {
-  history_id                                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  wallet_id                                      String         @db.Uuid
-  catalog_id                                     String         @db.Uuid
-  granted_by                                     String         @db.Uuid
-  points                                         Int
-  comment                                        String?
-  granted_at                                     DateTime       @default(now()) @db.Timestamptz(6)
-  created_at                                     DateTime       @default(now()) @db.Timestamptz(6)
-  created_by                                     String         @db.Uuid
-  updated_at                                     DateTime       @db.Timestamptz(6)
-  updated_by                                     String         @db.Uuid
-  reward_catalog                                 reward_catalog @relation(fields: [catalog_id], references: [catalog_id])
-  employees_reward_history_created_byToemployees employees      @relation("reward_history_created_byToemployees", fields: [created_by], references: [employee_id])
-  employees_reward_history_granted_byToemployees employees      @relation("reward_history_granted_byToemployees", fields: [granted_by], references: [employee_id])
-  employees_reward_history_updated_byToemployees employees      @relation("reward_history_updated_byToemployees", fields: [updated_by], references: [employee_id])
-  wallets                                        wallets        @relation(fields: [wallet_id], references: [wallet_id], onDelete: Cascade)
-
-  @@index([catalog_id, granted_at])
-  @@index([catalog_id])
-  @@index([granted_at])
-  @@index([granted_by])
-  @@index([wallet_id, granted_at])
-  @@index([wallet_id])
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NOTIFICATIONS
-// ─────────────────────────────────────────────────────────────────────────────
-
 model notifications {
   notification_id String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   employee_id     String    @db.Uuid
@@ -587,8 +510,8 @@ model notifications {
   created_at      DateTime  @default(now()) @db.Timestamptz(6)
   read_at         DateTime? @db.Timestamptz(6)
 
-  @@index([employee_id])
-  @@index([employee_id, is_read])
   @@index([created_at])
   @@index([email_sent])
+  @@index([employee_id])
+  @@index([employee_id, is_read])
 }

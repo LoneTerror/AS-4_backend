@@ -1,3 +1,4 @@
 [tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
 asyncio_mode = "auto"
-pythonpath = [".", "src/recognition"]
