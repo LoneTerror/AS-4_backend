@@ -1,4 +1,9 @@
+# .dockerignore
 .npm/
-node_modules
-venv
-.git
+**/ .npm/
+node_modules/
+venv/
+.git/
+*.json
+*.html
+tests/
