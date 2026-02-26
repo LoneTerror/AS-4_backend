@@ -113,15 +113,14 @@ pipeline {
         stage('Container Scan - Trivy') {
             steps {
                 sh '''
-                # Scan but don't fail the build (|| true)
                 trivy image \
-                  --severity HIGH,CRITICAL \
-                  --format json \
-                  --output trivy-report.json \
-                  $IMAGE:$TAG || true
-                '''
-            }
-        }
+                --scanners vuln \
+                --severity HIGH,CRITICAL \
+                --exit-code 1 \
+                $IMAGE:$TAG || true
+        '''
+    }
+}
 
         stage('DAST - OWASP ZAP') {
             steps {
