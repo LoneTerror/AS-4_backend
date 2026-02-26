@@ -4,6 +4,9 @@ from typing import List, Callable, Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 1. Setup Security Scheme
 security = HTTPBearer()
@@ -62,7 +65,7 @@ async def get_current_user(
             department_id=data.get("department_id")
         )
 
-    except httpx.RequestError:
+    except (httpx.RequestError, httpx.InvalidURL):
         # If Auth Service is down, we can't verify users
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
