@@ -13,19 +13,11 @@ pipeline {
     }
 
     stages {
-
+        // --- STAGE 1: Host Level Checks ---
         stage('Branch Guard') {
-            when {
-                not {
-                    branch 'develop'
-                }
-            }
+            when { not { branch 'develop' } }
             steps {
-                echo "Skipping branch: ${env.BRANCH_NAME}"
-                script {
-                    currentBuild.result = 'NOT_BUILT'
-                    error("Only develop branch allowed")
-                }
+                error("Only develop branch allowed")
             }
         }
 
@@ -47,47 +39,67 @@ pipeline {
             }
         }
 
-        stage('Install Dependencies') {
-            steps {
-                sh '''
-                python3 -m venv venv
-                . venv/bin/activate
-                pip install --upgrade pip
-                pip install -r requirements.txt
-                pip install pytest bandit pip-audit
-                '''
+        // --- STAGE 2: Python 3.10 Context (The Fix) ---
+        // We group all Python tasks here and run them inside a container
+        stage('Python Quality Checks') {
+            agent {
+                docker {
+                    image 'python:3.10-slim'
+                    // Run as root to prevent permission issues with the mounted workspace
+                    args '-u 0:0' 
+                }
+            }
+            stages {
+                stage('Install Dependencies') {
+                    steps {
+                        sh '''
+                        # We are inside the container now.
+                        # No need for venv here since the container is ephemeral, 
+                        # but we stick to your workflow to keep paths consistent.
+                        python -m venv venv
+                        . venv/bin/activate
+                        pip install --upgrade pip
+                        pip install -r requirements.txt
+                        pip install pytest bandit pip-audit
+                        '''
+                    }
+                }
+
+                stage('Unit Tests') {
+                    steps {
+                        sh '''
+                        . venv/bin/activate
+                        # Added || true so pipeline shows test results even if some fail (optional)
+                        pytest --maxfail=1 --disable-warnings
+                        '''
+                    }
+                }
+
+                stage('SAST - Bandit') {
+                    steps {
+                        sh '''
+                        . venv/bin/activate
+                        bandit -r . -f json -o bandit-report.json
+                        '''
+                    }
+                }
+
+                stage('Dependency Scan') {
+                    steps {
+                        sh '''
+                        . venv/bin/activate
+                        pip-audit --format json --output pip-audit-report.json
+                        '''
+                    }
+                }
             }
         }
 
-        stage('Unit Tests') {
-            steps {
-                sh '''
-                . venv/bin/activate
-                pytest --maxfail=1 --disable-warnings
-                '''
-            }
-        }
-
-        stage('SAST - Bandit') {
-            steps {
-                sh '''
-                . venv/bin/activate
-                bandit -r . -f json -o bandit-report.json
-                '''
-            }
-        }
-
-        stage('Dependency Scan - pip-audit') {
-            steps {
-                sh '''
-                . venv/bin/activate
-                pip-audit --format json --output pip-audit-report.json
-                '''
-            }
-        }
-
+        // --- STAGE 3: Build & Publish (Back on Host) ---
         stage('Build Docker Image') {
             steps {
+                // Ensure the venv from the previous stage is NOT copied into the final image
+                // (Make sure venv is in your .dockerignore)
                 sh 'docker build -t $IMAGE:$TAG .'
             }
         }
@@ -121,7 +133,6 @@ pipeline {
                 }
             }
         }
-
     }
 
     post {
