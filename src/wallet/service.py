@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 _notif = NotificationService(db)
 
 
+logger = setup_logger(__name__)
+
 # -----------------------------
 # Utility
 # -----------------------------
@@ -56,7 +58,7 @@ async def create_transaction(data, current_user: CurrentUser):
 
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
+        raise HTTPException(status_code=404, detail="Wallet not found")
 
     txn_type = await db.transaction_types.find_unique(where={"type_id": txn_type_id})
     if not txn_type:
@@ -272,20 +274,31 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
 # -----------------------------
 
 async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
+    logger.info(
+        "Wallet fetch requested for employee_id=%s by user_id=%s",
+        employee_id,
+        current_user.id
+    )
     if not is_admin(current_user) and employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
 
     wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
+        raise HTTPException(status_code=404, detail="Wallet not found")
 
     return wallet
 
 
 async def get_wallet_balance(wallet_id: str, current_user: CurrentUser):
+    logger.info(
+        "Wallet balance fetch requested for wallet_id=%s by user_id=%s",
+        wallet_id,
+        current_user.id
+    )
+
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
+        raise HTTPException(status_code=404, detail="Wallet not found")
 
     if not is_admin(current_user) and wallet.employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
@@ -297,9 +310,14 @@ async def get_wallet_balance(wallet_id: str, current_user: CurrentUser):
 
 
 async def get_points_summary(wallet_id: str, current_user: CurrentUser):
+    logger.info(
+        "Points summary fetch requested for wallet_id=%s by user_id=%s",
+        wallet_id,
+        current_user.id
+    )
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
+        raise HTTPException(status_code=404, detail="Wallet not found")
 
     if not is_admin(current_user) and wallet.employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
@@ -315,6 +333,12 @@ async def get_points_summary(wallet_id: str, current_user: CurrentUser):
         where={"wallet_id": wallet_id, "transaction_at": {"gte": start_of_year}}
     )
 
+    logger.info(
+        "Computed summary wallet_id=%s month_txns=%d year_txns=%d",
+        wallet_id,
+        len(month_txns),
+        len(year_txns)
+    )
     return {
         "wallet_id":          wallet_id,
         "points_this_month":  sum(t.amount for t in month_txns),

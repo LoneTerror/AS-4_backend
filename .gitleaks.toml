@@ -1,0 +1,15 @@
+# .gitleaks.toml
+title = "Employee R&R Gitleaks Configuration"
+
+[allowlist]
+description = "Global allowlist for documentation placeholders and false positives"
+regexes = [
+    # Ignore the standard placeholder used in curl examples in READMEs
+    '''YOUR_TOKEN''',
+
+    # Ignore the truncated JWT example string used in Auth documentation
+    '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.\.\.''',
+
+    # Ignore the variable assignment in src/auth/main.py (mistaken for a key)
+    '''prefix=API_PREFIX'''
+]
