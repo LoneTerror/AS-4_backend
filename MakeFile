@@ -1,0 +1,39 @@
+# ── EMP R&R — Separate Coverage Per Service ──────────────────────────────────
+
+# ── Auth Service ──────────────────────────────────────────────────────────────
+cov-auth:
+	pytest src/auth/tests \
+	  --cov=src/auth \
+	  --cov-config=setup.auth.cfg \
+	  --cov-report=term-missing \
+	  --cov-report=html:htmlcov/auth \
+	  --cov-report=xml:coverage-auth.xml \
+	  --cov-fail-under=80 \
+	  -v
+	@echo.
+	@echo Auth report: start htmlcov/auth/index.html
+
+# ── Organization Service ──────────────────────────────────────────────────────
+cov-org:
+	pytest src/organization/tests \
+	  --cov=src/organization \
+	  --cov-config=setup.organization.cfg \
+	  --cov-report=term-missing \
+	  --cov-report=html:htmlcov/organization \
+	  --cov-report=xml:coverage-organization.xml \
+	  --cov-fail-under=80 \
+	  -v
+	@echo.
+	@echo Org report: start htmlcov/organization/index.html
+
+# ── Both services together ────────────────────────────────────────────────────
+cov-all:
+	$(MAKE) cov-auth
+	$(MAKE) cov-org
+
+# ── Open reports (Windows) ────────────────────────────────────────────────────
+open-auth:
+	start htmlcov/auth/index.html
+
+open-org:
+	start htmlcov/organization/index.html

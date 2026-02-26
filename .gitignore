@@ -73,3 +73,7 @@ __pycache__/
 .db
 .sqlite3
 .sqlite
+
+.coverage
+coverage.xml
+coverage-organization.xml
