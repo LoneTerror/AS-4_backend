@@ -1,4 +1,4 @@
-.npm
+.npm/
 node_modules
 venv
 .git

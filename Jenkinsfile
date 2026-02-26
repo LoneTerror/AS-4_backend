@@ -147,6 +147,7 @@ pipeline {
                         // zap-baseline.py is a quick scan. Use zap-full-scan.py for deep scans.
                         sh """
                         docker run --rm \
+                            --user 0 \
                             --network zap-net \
                             -v \$(pwd):/zap/wrk/:rw \
                             -t ghcr.io/zaproxy/zaproxy:stable \
