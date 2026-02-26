@@ -13,14 +13,6 @@ pipeline {
     }
 
     stages {
-        // --- STAGE 1: Host Level Checks ---
-        stage('Branch Guard') {
-            when { not { branch 'develop' } }
-            steps {
-                error("Only develop branch allowed")
-            }
-        }
-
         stage('Checkout') {
             steps {
                 checkout scm
@@ -119,6 +111,7 @@ pipeline {
         }
 
         stage('Push Image') {
+            when{branch 'develop'}
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-creds',
