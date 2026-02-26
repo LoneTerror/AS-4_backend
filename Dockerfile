@@ -14,32 +14,30 @@ COPY prisma/schema.prisma ./prisma/
 RUN prisma generate
 
 # ---------- STAGE 2: RUNTIME ----------
+# ---------- STAGE 2: RUNTIME ----------
 FROM python:3.11-slim
 RUN addgroup --system appgroup && adduser --system --group appuser
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 VIRTUAL_ENV=/app/venv PATH="/app/venv/bin:$PATH" HOME="/app"
 WORKDIR /app
 
-# Install runtime deps, Supervisor, AND Nginx
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 curl supervisor nginx && rm -rf /var/lib/apt/lists/*
 
-# Copy from builder
 COPY --from=builder /app/venv /app/venv
 COPY --from=builder /app/prisma /app/prisma
 
-# Copy source and configs
 COPY . .
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-RUN rm /etc/nginx/sites-enabled/default
-COPY nginx.conf /etc/nginx/sites-available/rnr-proxy.conf
-RUN ln -s /etc/nginx/sites-available/rnr-proxy.conf /etc/nginx/sites-enabled/
 
-# FIX PERMISSIONS: Ensure appuser owns everything it needs to write to
-RUN mkdir -p /var/log/supervisor /var/run /var/lib/nginx /var/log/nginx /run/nginx && \
-    chown -R appuser:appgroup /app /var/log /var/run /var/lib/nginx /etc/nginx /run/nginx
+# REMOVE default Nginx configs and use the custom one
+RUN rm -f /etc/nginx/nginx.conf /etc/nginx/sites-enabled/default
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# PERMISSIONS: Critical for non-root Nginx
+RUN mkdir -p /var/log/nginx /var/lib/nginx /run/nginx /tmp/client_temp && \
+    chown -R appuser:appgroup /app /var/log/nginx /var/lib/nginx /run/nginx /etc/nginx /tmp
 
 USER appuser
-
 EXPOSE 8000 8001 8003 8004 8005 8006 8007
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
