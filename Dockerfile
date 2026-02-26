@@ -34,7 +34,7 @@ COPY . .
 RUN mkdir -p /app/prisma_cache
 
 # Generate Prisma Client
-COPY schema.prisma . 
+COPY prisma/schema.prisma .
 RUN prisma generate && rm -rf /app/.npm /root/.npm
 
 # Remove build-only packages (reduce image size + RAM)
