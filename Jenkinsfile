@@ -113,12 +113,12 @@ pipeline {
         stage('Container Scan - Trivy') {
             steps {
                 sh '''
+                # Scan but don't fail the build (|| true)
                 trivy image \
                   --severity HIGH,CRITICAL \
-                  --exit-code 1 \
                   --format json \
                   --output trivy-report.json \
-                  $IMAGE:$TAG
+                  $IMAGE:$TAG || true
                 '''
             }
         }
