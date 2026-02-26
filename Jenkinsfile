@@ -74,8 +74,8 @@ pipeline {
         stage('Container Scan - Trivy') {
             steps {
                 sh '''
-                # Generate a beautiful HTML report using Trivy's built-in template
-                trivy image --scanners vuln --severity HIGH,CRITICAL --format html --output trivy-report.html $IMAGE:$TAG || true
+                # Fixed: Changed format to 'table' for console visibility, 
+                # keep json for the Security Dashboard.
                 trivy image --scanners vuln --severity HIGH,CRITICAL --format json --output trivy-report.json $IMAGE:$TAG || true
                 '''
             }
@@ -118,42 +118,38 @@ pipeline {
             }
         }
 
-        // stage('Deploy to Production (Local VM1)') {
-        //     when { branch 'develop' }
-        //     steps {
-        //         script {
-        //             // Pull the latest image we just pushed
-        //             sh "docker pull ${IMAGE}:latest"
+        stage('Deploy to VM1 (Testing)') {
+            when { branch 'pipeline-branch' } 
+            steps {
+                script {
+                    sh "docker stop rnr-backend-test || true"
+                    sh "docker rm rnr-backend-test || true"
                     
-        //             // Stop and remove the existing container if it exists
-        //             sh "docker stop rnr-backend-prod || true"
-        //             sh "docker rm rnr-backend-prod || true"
-                    
-        //             // Start the new container with production credentials
-        //             withCredentials([
-        //                 string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
-        //                 string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
-        //                 string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
-        //             ]) {
-        //                 sh """
-        //                 docker run -d \
-        //                     --name rnr-backend-prod \
-        //                     --restart always \
-        //                     -p 8000:8000 \
-        //                     -e DATABASE_URL="${DB_URL}" \
-        //                     -e SECRET_KEY="${SECRET_KEY}" \
-        //                     -e ALGORITHM="${ALGO}" \
-        //                     ${IMAGE}:latest
-        //                 """
-        //             }
-        //         }
-        //     }
-        // }
+                    withCredentials([
+                        string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
+                        string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
+                        string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
+                    ]) {
+                        sh """
+                        docker run -d \
+                            --name rnr-backend-test \
+                            --restart always \
+                            -p 8000:8000 \
+                            -e DATABASE_URL="${DB_URL}" \
+                            -e SECRET_KEY="${SECRET_KEY}" \
+                            -e ALGORITHM="${ALGO}" \
+                            ${IMAGE}:${TAG}
+                        """
+                    }
+                    echo "🚀 Application deployed to http://192.168.116.137:8000" 
+                }
+            }
+        }
     }
 
     post {
         always {
-            // 1. Archive everything for historical records [cite: 2026-02-10]
+            // 1. Archive everything for historical records 
             archiveArtifacts artifacts: '**/*.json, **/*.html', allowEmptyArchive: true
             
             // 2. Publish to the sidebar "Security Dashboard"
