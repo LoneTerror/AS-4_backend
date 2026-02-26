@@ -7,6 +7,7 @@ services = [
     ("recognition", "src.recognition.main:app", 8005),
     ("rewards", "src.rewards.main:app", 8006),
     ("organization", "src.organization.main:app", 8007),
+    ("analytics", "src.analytics.main:app", 8008),
 ]
 
 processes = []
