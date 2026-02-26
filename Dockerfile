@@ -33,33 +33,38 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install runtime deps + Supervisor
+# Install runtime deps, Supervisor, AND Nginx
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     supervisor \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the venv and prisma from builder
 COPY --from=builder /app/venv /app/venv
 COPY --from=builder /app/prisma /app/prisma
 
-# Copy source code and supervisor config
+# Copy source code, supervisor config, and nginx config
 COPY . .
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+# Remove default nginx config and add yours
+RUN rm /etc/nginx/sites-enabled/default
+COPY nginx.conf /etc/nginx/sites-available/rnr-proxy.conf
+RUN ln -s /etc/nginx/sites-available/rnr-proxy.conf /etc/nginx/sites-enabled/
 
-# Setup log directories and permissions for Supervisor
-RUN mkdir -p /var/log/supervisor && \
-    chown -R appuser:appgroup /app /var/log/supervisor /var/run
+# Setup directories and fix permissions for appuser (Nginx needs access to /var/lib/nginx)
+RUN mkdir -p /var/log/supervisor /var/run /var/lib/nginx /var/log/nginx && \
+    chown -R appuser:appgroup /app /var/log /var/run /var/lib/nginx /etc/nginx
 
 USER appuser
 
-# Expose all microservice ports
-EXPOSE 8001 8003 8004 8005 8006 8007
+# Expose Nginx port (8000) and Microservice ports
+EXPOSE 8000 8001 8003 8004 8005 8006 8007
 
-# Healthcheck (Checking the Auth service as a proxy for app health)
+# Updated Healthcheck to check the Nginx entrypoint
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD curl -f http://localhost:8001/health || exit 1
+  CMD curl -f http://localhost:8000/health || exit 1
 
 # Start Supervisor
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
