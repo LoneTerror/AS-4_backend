@@ -64,7 +64,33 @@ app.include_router(notifications_router, tags=["Notifications"])  # already has 
 async def health_check():
     return {"status": "healthy", "service": "Employee Service"}
 
-# ... rest of your custom_openapi() stays exactly the same
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    schema.setdefault("components", {})
+    schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
+    }
+
+    for path in schema.get("paths", {}).values():
+        for operation in path.values():
+            if isinstance(operation, dict):
+                operation["security"] = [{"BearerAuth": []}]
+
+    app.openapi_schema = schema
+    return schema
 
 if __name__ == "__main__":
     uvicorn.run("src.employees.main:app", host="0.0.0.0", port=8002, reload=True)
