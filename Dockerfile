@@ -1,45 +1,63 @@
-# ---------- BASE ----------
+# ---------- STAGE 1: BUILDER ----------
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+# Install system deps + Node.js (Required for Prisma to generate without downloading engines)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Setup Virtual Environment
+RUN python -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH"
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Generate Prisma Client 
+# Since Node.js is now installed in the OS, Prisma won't try to download it.
+COPY prisma/schema.prisma ./prisma/
+RUN prisma generate
+
+# ---------- STAGE 2: RUNTIME ----------
 FROM python:3.11-slim
 
 # Create non-root user
 RUN addgroup --system appgroup && adduser --system --group appuser
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV VIRTUAL_ENV=/app/venv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-ENV PRISMA_PY_CACHE_DIR="/app/prisma_cache"
-ENV HOME="/app"
+# Environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/app/venv \
+    PATH="/app/venv/bin:$PATH" \
+    HOME="/app"
 
 WORKDIR /app
 
-# 1. Install system dependencies (Rarely changes)
+# Install ONLY runtime dependencies (no gcc, no nodejs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
+    libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Setup Venv and Install Python deps (Changes only when requirements.txt changes)
-RUN python -m venv $VIRTUAL_ENV
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy the venv (including generated prisma client) from builder
+COPY --from=builder /app/venv /app/venv
+# Copy the schema (prisma needs it at runtime)
+COPY --from=builder /app/prisma /app/prisma
 
-# 3. Generate Prisma Client (Changes only when schema changes)
-# This is the "Heavy" layer we want to protect with caching
-COPY prisma/schema.prisma ./prisma/
-RUN prisma generate && rm -rf /app/.npm /root/.npm 
-
-# 4. Copy source code (Changes MOST often - keep it near the bottom)
+# Copy source code
 COPY . .
 
-# 5. Cleanup and Permissions
-RUN mkdir -p /app/prisma_cache && \
-    apt-get purge -y gcc && \
-    apt-get autoremove -y && \
-    chown -R appuser:appgroup /app
-
+# Set permissions
+RUN chown -R appuser:appgroup /app
 USER appuser
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
