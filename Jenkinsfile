@@ -117,6 +117,38 @@ pipeline {
                 }
             }
         }
+
+        // stage('Deploy to Production (Local VM1)') {
+        //     when { branch 'develop' }
+        //     steps {
+        //         script {
+        //             // Pull the latest image we just pushed
+        //             sh "docker pull ${IMAGE}:latest"
+                    
+        //             // Stop and remove the existing container if it exists
+        //             sh "docker stop rnr-backend-prod || true"
+        //             sh "docker rm rnr-backend-prod || true"
+                    
+        //             // Start the new container with production credentials
+        //             withCredentials([
+        //                 string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
+        //                 string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
+        //                 string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
+        //             ]) {
+        //                 sh """
+        //                 docker run -d \
+        //                     --name rnr-backend-prod \
+        //                     --restart always \
+        //                     -p 8000:8000 \
+        //                     -e DATABASE_URL="${DB_URL}" \
+        //                     -e SECRET_KEY="${SECRET_KEY}" \
+        //                     -e ALGORITHM="${ALGO}" \
+        //                     ${IMAGE}:latest
+        //                 """
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     post {
