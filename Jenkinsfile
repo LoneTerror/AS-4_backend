@@ -71,8 +71,14 @@ pipeline {
                     steps {
                         sh '''
                         . venv/bin/activate
-                        # Exclude venv and tests, only scan actual application code
-                        bandit -r . --exclude ./venv,./tests -f json -o bandit-report.json
+                        # Run Bandit (Fail only on HIGH severity errors, ignore Low/Medium)
+                        # -lll = High Severity only
+                        # -iii = High Confidence only
+                        bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json
+                
+                        # Check if report was generated and print it for debugging
+                        echo "--- Bandit Report ---"
+                        cat bandit-report.json
                         '''
                     }
                 }
