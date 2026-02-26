@@ -79,7 +79,8 @@ pipeline {
                     steps {
                         sh '''
                         . venv/bin/activate
-                        bandit -r . -f json -o bandit-report.json
+                        # Exclude venv and tests, only scan actual application code
+                        bandit -r . --exclude ./venv,./tests -f json -o bandit-report.json
                         '''
                     }
                 }
