@@ -4,20 +4,23 @@ from datetime import datetime
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
-# -------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # CREATE REQUEST
-# -------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+
 class ReviewCreateRequest(BaseModel):
     """
     Request schema for creating a new review.
-    
+
     Validates:
-    - receiver_id: Must be a valid UUID
-    - rating: Integer between 1-5
-    - comment: String between 10-2000 characters
-    - image_url: Optional valid HTTPS URL (max 500 chars)
-    - video_url: Optional valid HTTPS URL (max 500 chars)
-    
+    - receiver_id  : Must be a valid UUID
+    - rating       : Integer 1–5
+    - comment      : 10–2000 characters
+    - category_id  : UUID of an active review_categories row
+                     (replaces the old freetext category / ReviewCategory enum
+                      now that categories live in the DB)
+    - image_url    : Optional valid HTTPS URL (max 500 chars)
+    - video_url    : Optional valid HTTPS URL (max 500 chars)
     """
     receiver_id: UUID = Field(
         ...,
@@ -33,7 +36,17 @@ class ReviewCreateRequest(BaseModel):
         ...,
         min_length=10,
         max_length=2000,
-        description="Review comment text"
+        description="Review comment text (10–2000 characters)"
+    )
+    # ── Category is now a FK to the review_categories table ──────────────────
+    # Clients send a category_id (UUID).  The service resolves the multiplier
+    # and category_code from the DB.  No more hardcoded enum in the engine.
+    category_id: UUID = Field(
+        ...,
+        description=(
+            "UUID of the review category (from GET /v1/review-categories). "
+            "Determines the points multiplier applied to this review."
+        )
     )
     image_url: Optional[HttpUrl] = Field(
         None,
@@ -45,11 +58,12 @@ class ReviewCreateRequest(BaseModel):
     )
 
     model_config = {
-        "extra": "forbid",  
+        "extra": "forbid",
         "json_schema_extra": {
             "example": {
                 "receiver_id": "550e8400-e29b-41d4-a716-446655440000",
                 "rating": 4,
+                "category_id": "770e8400-e29b-41d4-a716-446655440001",
                 "comment": "Excellent work on the Q1 project. Great collaboration and technical skills.",
                 "image_url": "https://cdn.company.com/reviews/image123.jpg",
                 "video_url": "https://cdn.company.com/reviews/video123.mp4"
@@ -57,34 +71,42 @@ class ReviewCreateRequest(BaseModel):
         }
     }
 
-    @field_validator('image_url', 'video_url')
+    @field_validator("image_url", "video_url")
     @classmethod
     def validate_url_length(cls, v):
-        """Ensure URLs don't exceed 500 characters"""
+        """Ensure URLs don't exceed 500 characters."""
         if v and len(str(v)) > 500:
-            raise ValueError('URL must not exceed 500 characters')
+            raise ValueError("URL must not exceed 500 characters")
         return v
 
 
-# -------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # UPDATE REQUEST
-# -------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+
 class ReviewUpdateRequest(BaseModel):
     """
     Request schema for updating an existing review.
+    At least one field must be supplied.
 
+    If category_id or rating changes the service recalculates points.
     """
     rating: Optional[int] = Field(
         None,
         ge=1,
         le=5,
-        description="Updated rating value between 1-5"
+        description="Updated rating value (1–5)"
     )
     comment: Optional[str] = Field(
         None,
         min_length=10,
         max_length=2000,
         description="Updated comment text"
+    )
+    # FK to review_categories (replaces old category enum)
+    category_id: Optional[UUID] = Field(
+        None,
+        description="Updated review category UUID"
     )
     image_url: Optional[HttpUrl] = Field(
         None,
@@ -100,91 +122,149 @@ class ReviewUpdateRequest(BaseModel):
         "json_schema_extra": {
             "example": {
                 "rating": 5,
+                "category_id": "880e8400-e29b-41d4-a716-446655440002",
                 "comment": "Updated: Outstanding performance throughout the quarter."
             }
         }
     }
 
-    @field_validator('image_url', 'video_url')
+    @field_validator("image_url", "video_url")
     @classmethod
     def validate_url_length(cls, v):
-        """Ensure URLs don't exceed 500 characters"""
+        """Ensure URLs don't exceed 500 characters."""
         if v and len(str(v)) > 500:
-            raise ValueError('URL must not exceed 500 characters')
+            raise ValueError("URL must not exceed 500 characters")
         return v
 
     @model_validator(mode="after")
     def validate_not_empty(self):
-        """Ensure at least one field is provided for update"""
+        """Ensure at least one field is provided for update."""
         if not any(self.model_dump(exclude_none=True).values()):
             raise ValueError("At least one field must be provided for update")
         return self
 
 
-# -------------------------
-# RESPONSE MODELS
-# -------------------------
-class ReviewResponse(BaseModel):
-    """
-    Response schema for review data.
+# ─────────────────────────────────────────────────────────────────────────────
+# REVIEW CATEGORY RESPONSE  (new — for GET /v1/review-categories)
+# ─────────────────────────────────────────────────────────────────────────────
 
+class ReviewCategoryResponse(BaseModel):
     """
-    review_id: UUID = Field(..., description="Unique review identifier")
-    reviewer_id: UUID = Field(..., description="Employee who gave the review")
-    receiver_id: UUID = Field(..., description="Employee who received the review")
-    rating: int = Field(..., description="Rating value (1-5)")
-    comment: str = Field(..., description="Review comment text")
-    image_url: Optional[str] = Field(None, description="Image URL if provided")
-    video_url: Optional[str] = Field(None, description="Video URL if provided")
-    status_id: UUID = Field(..., description="Current review status")
-    review_at: datetime = Field(..., description="When the review was given")
-    created_at: datetime = Field(..., description="When the record was created")
-    created_by: UUID = Field(..., description="Employee who created the record")
-    updated_at: datetime = Field(..., description="When the record was last updated")
-    updated_by: UUID = Field(..., description="Employee who last updated the record")
+    Public representation of a review_categories row.
+    Clients use category_id when creating / updating reviews.
+    """
+    category_id:   UUID    = Field(..., description="Unique category identifier")
+    category_code: str     = Field(..., description="Short code, e.g. INNOVATION")
+    category_name: str     = Field(..., description="Human-readable name")
+    multiplier:    float   = Field(..., description="Points multiplier for this category")
+    description:   Optional[str] = Field(None, description="Optional description")
+    is_active:     bool    = Field(..., description="Whether this category is selectable")
 
     model_config = {
-        "from_attributes": True, 
+        "from_attributes": True,
         "json_schema_extra": {
             "example": {
-                "review_id": "990e8400-e29b-41d4-a716-446655440004",
-                "reviewer_id": "880e8400-e29b-41d4-a716-446655440000",
-                "receiver_id": "550e8400-e29b-41d4-a716-446655440000",
-                "rating": 4,
-                "comment": "Excellent work on the Q1 project. Great collaboration and technical skills.",
-                "image_url": "https://cdn.company.com/reviews/image123.jpg",
-                "video_url": "https://cdn.company.com/reviews/video123.mp4",
-                "status_id": "aa0e8400-e29b-41d4-a716-446655440005",
-                "review_at": "2026-02-06T10:30:00.000Z",
-                "created_at": "2026-02-06T10:30:00.000Z",
-                "created_by": "880e8400-e29b-41d4-a716-446655440000",
-                "updated_at": "2026-02-06T10:30:00.000Z",
-                "updated_by": "880e8400-e29b-41d4-a716-446655440000"
+                "category_id":   "770e8400-e29b-41d4-a716-446655440001",
+                "category_code": "INNOVATION",
+                "category_name": "Innovation",
+                "multiplier":    1.4,
+                "description":   "Recognises creative problem-solving and novel ideas",
+                "is_active":     True,
             }
         }
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# REVIEW RESPONSE
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ReviewResponse(BaseModel):
+    """
+    Response schema for review data.
+
+    Points-related fields are all Optional so that older DB rows
+    (without points data) serialise cleanly.
+
+    category_code is a denormalised snapshot included for convenience —
+    clients don't need a separate lookup to display the category label.
+    """
+    # ── Core contract fields ─────────────────────────────────────────────────
+    review_id:   UUID     = Field(..., description="Unique review identifier")
+    reviewer_id: UUID     = Field(..., description="Employee who gave the review")
+    receiver_id: UUID     = Field(..., description="Employee who received the review")
+    rating:      int      = Field(..., description="Rating value (1–5)")
+    comment:     str      = Field(..., description="Review comment text")
+    image_url:   Optional[str] = Field(None, description="Image URL if provided")
+    video_url:   Optional[str] = Field(None, description="Video URL if provided")
+    status_id:   UUID     = Field(..., description="Current review status")
+    review_at:   datetime = Field(..., description="When the review was given")
+    created_at:  datetime = Field(..., description="When the record was created")
+    created_by:  UUID     = Field(..., description="Employee who created the record")
+    updated_at:  datetime = Field(..., description="When the record was last updated")
+    updated_by:  UUID     = Field(..., description="Employee who last updated the record")
+
+    # ── Category reference (DB-driven, replaces old freetext string) ─────────
+    category_id:   Optional[UUID] = Field(None, description="FK to review_categories")
+    category_code: Optional[str]  = Field(None, description="Denormalised category code snapshot, e.g. INNOVATION")
+
+    # ── Points enrichment fields (additive — never break existing consumers) ─
+    raw_points:           Optional[float] = Field(None, description="Points awarded at review time (before decay)")
+    effective_points:     Optional[float] = Field(None, description="Points after quarterly decay (recalculated on each read)")
+    category_multiplier:  Optional[float] = Field(None, description="Category multiplier snapshot at review time")
+    reviewer_weight:      Optional[float] = Field(None, description="Reviewer-role weight snapshot at review time")
+    seasonal_multiplier:  Optional[float] = Field(None, description="Seasonal boost snapshot at review time")
+
+    model_config = {
+        "from_attributes": True,
+        "json_schema_extra": {
+            "example": {
+                "review_id":            "990e8400-e29b-41d4-a716-446655440004",
+                "reviewer_id":          "880e8400-e29b-41d4-a716-446655440000",
+                "receiver_id":          "550e8400-e29b-41d4-a716-446655440000",
+                "rating":               4,
+                "comment":              "Excellent work on the Q1 project.",
+                "category_id":          "770e8400-e29b-41d4-a716-446655440001",
+                "category_code":        "INNOVATION",
+                "image_url":            "https://cdn.company.com/reviews/image123.jpg",
+                "video_url":            "https://cdn.company.com/reviews/video123.mp4",
+                "status_id":            "aa0e8400-e29b-41d4-a716-446655440005",
+                "review_at":            "2026-02-06T10:30:00.000Z",
+                "created_at":           "2026-02-06T10:30:00.000Z",
+                "created_by":           "880e8400-e29b-41d4-a716-446655440000",
+                "updated_at":           "2026-02-06T10:30:00.000Z",
+                "updated_by":           "880e8400-e29b-41d4-a716-446655440000",
+                "raw_points":           8.96,
+                "effective_points":     8.96,
+                "category_multiplier":  1.4,
+                "reviewer_weight":      1.6,
+                "seasonal_multiplier":  1.0,
+            }
+        }
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGINATION
+# ─────────────────────────────────────────────────────────────────────────────
+
 class PaginationMeta(BaseModel):
-    """
-    Pagination metadata .
-    
-    """
-    current_page: int = Field(..., description="Current page number (1-indexed)")
-    per_page: int = Field(..., description="Number of items per page")
-    total: int = Field(..., description="Total number of items across all pages")
-    total_pages: int = Field(..., description="Total number of pages")
-    has_next: bool = Field(..., description="Whether there is a next page")
+    """Pagination metadata."""
+    current_page: int  = Field(..., description="Current page number (1-indexed)")
+    per_page:     int  = Field(..., description="Number of items per page")
+    total:        int  = Field(..., description="Total number of items across all pages")
+    total_pages:  int  = Field(..., description="Total number of pages")
+    has_next:     bool = Field(..., description="Whether there is a next page")
     has_previous: bool = Field(..., description="Whether there is a previous page")
 
     model_config = {
         "json_schema_extra": {
             "example": {
                 "current_page": 1,
-                "per_page": 20,
-                "total": 150,
-                "total_pages": 8,
-                "has_next": True,
+                "per_page":     20,
+                "total":        150,
+                "total_pages":  8,
+                "has_next":     True,
                 "has_previous": False
             }
         }
@@ -192,41 +272,12 @@ class PaginationMeta(BaseModel):
 
 
 class PaginatedReviewResponse(BaseModel):
-    """
-    Paginated response containing list of reviews and pagination metadata.
-    
-    """
-    data: List[ReviewResponse] = Field(..., description="List of reviews")
-    pagination: PaginationMeta = Field(..., description="Pagination metadata")
+    """Paginated response containing list of reviews and pagination metadata."""
+    data:       List[ReviewResponse] = Field(..., description="List of reviews")
+    pagination: PaginationMeta       = Field(..., description="Pagination metadata")
 
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "data": [
-                    {
-                        "review_id": "990e8400-e29b-41d4-a716-446655440004",
-                        "reviewer_id": "880e8400-e29b-41d4-a716-446655440000",
-                        "receiver_id": "550e8400-e29b-41d4-a716-446655440000",
-                        "rating": 4,
-                        "comment": "Great work!",
-                        "image_url": None,
-                        "video_url": None,
-                        "status_id": "aa0e8400-e29b-41d4-a716-446655440005",
-                        "review_at": "2026-02-06T10:30:00.000Z",
-                        "created_at": "2026-02-06T10:30:00.000Z",
-                        "created_by": "880e8400-e29b-41d4-a716-446655440000",
-                        "updated_at": "2026-02-06T10:30:00.000Z",
-                        "updated_by": "880e8400-e29b-41d4-a716-446655440000"
-                    }
-                ],
-                "pagination": {
-                    "current_page": 1,
-                    "per_page": 20,
-                    "total": 150,
-                    "total_pages": 8,
-                    "has_next": True,
-                    "has_previous": False
-                }
-            }
-        }
-    }
+
+class PaginatedReviewCategoryResponse(BaseModel):
+    """Paginated response for review categories."""
+    data:       List[ReviewCategoryResponse] = Field(..., description="List of review categories")
+    pagination: PaginationMeta               = Field(..., description="Pagination metadata")

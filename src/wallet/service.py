@@ -357,7 +357,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
         breakdown = {
             "source":              "stored",
             "raw_points":          review.raw_points,
-            "category":            review.category,
+            "category":            review.category_code,
             "category_multiplier": review.category_multiplier,
             "reviewer_weight":     review.reviewer_weight,
             "seasonal_multiplier": review.seasonal_multiplier,
@@ -382,7 +382,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
             seasonal_multiplier = seasonal_multiplier,
             decay_rate          = decay_rate,
             review_dt           = review_dt,
-            category_code       = review.category or "UNKNOWN",
+            category_code       = review.category_code or "UNKNOWN",
         )
         points    = max(1, round(pts.raw_points))
         breakdown = pts.as_dict()
@@ -416,7 +416,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     reference     = f"REVIEW-{review_id}"
     new_available = wallet.available_points    + points
     new_total     = wallet.total_earned_points + points
-    category_label = review.category or "REVIEW"
+    category_label = review.category_code or "REVIEW"
 
     try:
         async with db.tx() as txn:
@@ -513,3 +513,176 @@ async def get_transaction_types(current_user: CurrentUser):
         }
         for t in types
     ]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REVIEW UPDATE → WALLET ADJUSTMENT
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def adjust_wallet_for_review_update(
+    review_id: str,
+    delta_points: float,
+    current_user: CurrentUser,
+):
+    """
+    Adjust the receiver's wallet when a review's raw_points change on update.
+
+    delta_points = new_raw_points - old_raw_points
+      > 0  →  credit  (rating/category increased)
+      < 0  →  debit   (rating/category decreased)
+
+    Uses optimistic locking (version field) and a unique reference_number to
+    stay idempotent.  The reference pattern is:
+        REVIEW-UPDATE-{review_id}-{iso_timestamp_seconds}
+
+    If the wallet has insufficient points for a debit the adjustment is skipped
+    and logged (we never leave the wallet negative due to an admin edit).
+
+    Raises HTTPException on hard failures; caller should catch and log.
+    """
+    review_id = str(review_id)
+    int_delta = round(delta_points)   # wallet operates in integer points
+
+    if int_delta == 0:
+        return {"message": "No wallet adjustment needed (delta rounds to zero)",
+                "credited_points": 0, "new_balance": None}
+
+    # ── 1. Fetch review (for receiver + audit) ────────────────────────────
+    review = await db.reviews.find_unique(where={"review_id": review_id})
+    if not review:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+
+    employee_id = review.receiver_id
+    updated_by  = current_user.id
+
+    # ── 2. Fetch wallet ───────────────────────────────────────────────────
+    wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
+    if not wallet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=WNF)
+
+    # ── 3. Debit floor guard ──────────────────────────────────────────────
+    # Never let an admin edit drive the wallet negative.
+    if int_delta < 0 and wallet.available_points + int_delta < 0:
+        logger.warning(
+            "Skipping wallet debit for review update %s — would go negative "
+            "(available=%d delta=%d)",
+            review_id, wallet.available_points, int_delta,
+        )
+        return {
+            "message":         "Wallet debit skipped — insufficient balance",
+            "credited_points": int_delta,
+            "new_balance":     wallet.available_points,
+        }
+
+    # ── 4. Resolve transaction type (CREDIT or DEBIT) ─────────────────────
+    type_code = "CREDIT" if int_delta > 0 else "DEBIT"
+    txn_type  = await db.transaction_types.find_unique(where={"type_code": type_code})
+    if not txn_type:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"{type_code} transaction type missing. Run seed_transaction_types.py",
+        )
+
+    # ── 5. Resolve APPROVED status ────────────────────────────────────────
+    status_record = await db.status_master.find_first(where={"status_code": "APPROVED"})
+    if not status_record:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="APPROVED status not found in status_master.",
+        )
+
+    # ── 6. Compute new balances ───────────────────────────────────────────
+    abs_delta     = abs(int_delta)
+    new_available = wallet.available_points + int_delta
+    # total_earned_points only increases; debit does not reduce it.
+    new_total     = wallet.total_earned_points + (int_delta if int_delta > 0 else 0)
+
+    # Unique reference per adjustment — timestamp-scoped so a second edit on
+    # the same review within the same second still gets a unique ref.
+    now       = datetime.now(timezone.utc)
+    reference = f"REVIEW-UPDATE-{review_id}-{now.strftime('%Y%m%dT%H%M%S')}"
+
+    category_label = review.category_code or "REVIEW"
+    direction_word = "adjusted +" if int_delta > 0 else "adjusted "
+
+    try:
+        async with db.tx() as txn:
+            new_txn = await txn.transactions.create(
+                data={
+                    "wallet_id":           wallet.wallet_id,
+                    "amount":              abs_delta,
+                    "transaction_type_id": txn_type.type_id,
+                    "status_id":           status_record.status_id,
+                    "description":         (
+                        f"Review update: {review.rating}★ {category_label} "
+                        f"→ wallet {direction_word}{int_delta:+d} pts "
+                        f"(raw delta={delta_points:+.4f})"
+                    ),
+                    "reference_number": reference,
+                    "created_by":       updated_by,
+                    "updated_by":       updated_by,
+                    "created_at":       now,
+                    "updated_at":       now,
+                }
+            )
+
+            result = await txn.wallets.update_many(
+                where={"wallet_id": wallet.wallet_id, "version": wallet.version},
+                data={
+                    "available_points":    new_available,
+                    "total_earned_points": new_total,
+                    "version":             wallet.version + 1,
+                    "updated_by":          updated_by,
+                    "updated_at":          now,
+                },
+            )
+
+            if result == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Wallet updated concurrently — please retry",
+                )
+
+        # ── Notify receiver (non-blocking) ────────────────────────────────
+        try:
+            emoji = "💰" if int_delta > 0 else "📉"
+            await _notif.create_notification(
+                employee_id = employee_id,
+                title       = f"Your wallet was adjusted {emoji}",
+                message     = (
+                    f"A review you received was updated. "
+                    f"Your wallet was adjusted by {int_delta:+d} pts. "
+                    f"New balance: {new_available} pts."
+                ),
+                type = NotificationType.REWARD,
+            )
+        except Exception:
+            logger.exception(
+                "Adjustment notification failed for review update %s — "
+                "wallet was adjusted successfully",
+                review_id,
+            )
+
+        logger.info(
+            "Wallet adjusted for review update | employee=%s review=%s "
+            "delta=%d new_available=%d new_total=%d",
+            employee_id, review_id, int_delta, new_available, new_total,
+        )
+
+        return {
+            "transaction_id":  str(new_txn.transaction_id),
+            "wallet_id":       str(wallet.wallet_id),
+            "credited_points": int_delta,
+            "new_balance":     new_available,
+            "message":         f"Wallet adjusted by {int_delta:+d} points",
+        }
+
+    except UniqueViolationError:
+        # Two simultaneous updates — the second one collides on the reference.
+        # Not a hard error; the first adjustment already went through.
+        logger.warning(
+            "Duplicate adjustment reference for review %s — skipping", review_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Wallet adjustment already recorded for this review update",
+        )

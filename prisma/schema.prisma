@@ -1,13 +1,18 @@
 generator client {
-  provider             = "prisma-client-py"
-  interface            = "asyncio"
-  recursive_type_depth = "5"
+  provider                    = "prisma-client-py"
+  interface                   = "asyncio"
+  recursive_type_depth        = "5"
+  enable_experimental_decimal = true
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────────────────────────────────────────
 
 model audit_log {
   audit_id       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -30,6 +35,10 @@ model audit_log {
   @@index([table_name, record_id])
   @@index([table_name, record_id, performed_at])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPARTMENTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 model department_types {
   department_type_id                               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -61,6 +70,10 @@ model departments {
   @@index([department_type_id])
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DESIGNATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
 model designations {
   designation_id                                   String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   designation_name                                 String      @unique @db.VarChar(100)
@@ -76,6 +89,31 @@ model designations {
 
   @@index([level])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROLES  — reviewer_weight column added (was hardcoded in points_engine.py)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model roles {
+  role_id                               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role_name                             String           @unique @db.VarChar(100)
+  role_code                             String           @unique @db.VarChar(50)
+  description                           String?
+  /// Weight applied when a holder of this role writes a review.
+  /// Replaces the hardcoded ROLE_WEIGHTS dict in points_engine.py.
+  reviewer_weight                       Decimal          @default(1.0000) @db.Decimal(5, 4)
+  created_at                            DateTime         @default(now()) @db.Timestamptz(6)
+  created_by                            String?          @db.Uuid
+  updated_at                            DateTime         @db.Timestamptz(6)
+  updated_by                            String?          @db.Uuid
+  employee_roles                        employee_roles[]
+  employees_roles_created_byToemployees employees?       @relation("roles_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_roles_updated_byToemployees employees?       @relation("roles_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPLOYEE ROLES
+// ─────────────────────────────────────────────────────────────────────────────
 
 model employee_roles {
   employee_role_id                                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -106,67 +144,80 @@ model employee_roles {
   @@index([role_id])
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPLOYEES
+// ─────────────────────────────────────────────────────────────────────────────
+
 model employees {
-  employee_id                                               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  username                                                  String              @unique @db.VarChar(100)
-  email                                                     String              @unique @db.VarChar(255)
-  designation_id                                            String              @db.Uuid
-  password_hash                                             String              @db.VarChar(255)
-  department_id                                             String              @db.Uuid
-  manager_id                                                String?             @db.Uuid
-  date_of_joining                                           DateTime            @db.Date
-  status_id                                                 String              @db.Uuid
-  created_at                                                DateTime            @default(now()) @db.Timestamptz(6)
-  created_by                                                String?             @db.Uuid
-  updated_at                                                DateTime            @db.Timestamptz(6)
-  updated_by                                                String?             @db.Uuid
-  audit_log                                                 audit_log[]
-  department_types_department_types_created_byToemployees   department_types[]  @relation("department_types_created_byToemployees")
-  department_types_department_types_updated_byToemployees   department_types[]  @relation("department_types_updated_byToemployees")
-  departments_departments_created_byToemployees             departments[]       @relation("departments_created_byToemployees")
-  departments_departments_updated_byToemployees             departments[]       @relation("departments_updated_byToemployees")
-  designations_designations_created_byToemployees           designations[]      @relation("designations_created_byToemployees")
-  designations_designations_updated_byToemployees           designations[]      @relation("designations_updated_byToemployees")
-  employee_roles_employee_roles_assigned_byToemployees      employee_roles[]    @relation("employee_roles_assigned_byToemployees")
-  employee_roles_employee_roles_created_byToemployees       employee_roles[]    @relation("employee_roles_created_byToemployees")
-  employee_roles_employee_roles_employee_idToemployees      employee_roles[]    @relation("employee_roles_employee_idToemployees")
-  employee_roles_employee_roles_revoked_byToemployees       employee_roles[]    @relation("employee_roles_revoked_byToemployees")
-  employee_roles_employee_roles_updated_byToemployees       employee_roles[]    @relation("employee_roles_updated_byToemployees")
-  employees_employees_created_byToemployees                 employees?          @relation("employees_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  other_employees_employees_created_byToemployees           employees[]         @relation("employees_created_byToemployees")
-  departments_employees_department_idTodepartments          departments         @relation("employees_department_idTodepartments", fields: [department_id], references: [department_id])
-  designations_employees_designation_idTodesignations       designations        @relation("employees_designation_idTodesignations", fields: [designation_id], references: [designation_id])
-  employees_employees_manager_idToemployees                 employees?          @relation("employees_manager_idToemployees", fields: [manager_id], references: [employee_id])
-  other_employees_employees_manager_idToemployees           employees[]         @relation("employees_manager_idToemployees")
-  status_master_employees_status_idTostatus_master          status_master       @relation("employees_status_idTostatus_master", fields: [status_id], references: [status_id])
-  employees_employees_updated_byToemployees                 employees?          @relation("employees_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-  other_employees_employees_updated_byToemployees           employees[]         @relation("employees_updated_byToemployees")
-  refresh_tokens                                            refresh_tokens[]
-  reviews_reviews_created_byToemployees                     reviews[]           @relation("reviews_created_byToemployees")
-  reviews_reviews_receiver_idToemployees                    reviews[]           @relation("reviews_receiver_idToemployees")
-  reviews_reviews_reviewer_idToemployees                    reviews[]           @relation("reviews_reviewer_idToemployees")
-  reviews_reviews_updated_byToemployees                     reviews[]           @relation("reviews_updated_byToemployees")
-  reward_catalog_reward_catalog_created_byToemployees       reward_catalog[]    @relation("reward_catalog_created_byToemployees")
-  reward_catalog_reward_catalog_updated_byToemployees       reward_catalog[]    @relation("reward_catalog_updated_byToemployees")
-  reward_categories_reward_categories_created_byToemployees reward_categories[] @relation("reward_categories_created_byToemployees")
-  reward_categories_reward_categories_updated_byToemployees reward_categories[] @relation("reward_categories_updated_byToemployees")
-  reward_history_reward_history_created_byToemployees       reward_history[]    @relation("reward_history_created_byToemployees")
-  reward_history_reward_history_granted_byToemployees       reward_history[]    @relation("reward_history_granted_byToemployees")
-  reward_history_reward_history_updated_byToemployees       reward_history[]    @relation("reward_history_updated_byToemployees")
-  roles_roles_created_byToemployees                         roles[]             @relation("roles_created_byToemployees")
-  roles_roles_updated_byToemployees                         roles[]             @relation("roles_updated_byToemployees")
-  status_master_status_master_created_byToemployees         status_master[]     @relation("status_master_created_byToemployees")
-  status_master_status_master_updated_byToemployees         status_master[]     @relation("status_master_updated_byToemployees")
-  transaction_types_transaction_types_created_byToemployees transaction_types[] @relation("transaction_types_created_byToemployees")
-  transaction_types_transaction_types_updated_byToemployees transaction_types[] @relation("transaction_types_updated_byToemployees")
-  transactions_transactions_created_byToemployees           transactions[]      @relation("transactions_created_byToemployees")
-  transactions_transactions_updated_byToemployees           transactions[]      @relation("transactions_updated_byToemployees")
-  wallets_wallets_created_byToemployees                     wallets[]           @relation("wallets_created_byToemployees")
-  wallets_wallets_employee_idToemployees                    wallets?            @relation("wallets_employee_idToemployees")
-  wallets_wallets_updated_byToemployees                     wallets[]           @relation("wallets_updated_byToemployees")
+  employee_id                                                         String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username                                                            String                @unique @db.VarChar(100)
+  email                                                               String                @unique @db.VarChar(255)
+  designation_id                                                      String                @db.Uuid
+  password_hash                                                       String                @db.VarChar(255)
+  department_id                                                       String                @db.Uuid
+  manager_id                                                          String?               @db.Uuid
+  date_of_joining                                                     DateTime              @db.Date
+  date_of_birth                                                       DateTime?             @db.Date
+  status_id                                                           String                @db.Uuid
+  created_at                                                          DateTime              @default(now()) @db.Timestamptz(6)
+  created_by                                                          String?               @db.Uuid
+  updated_at                                                          DateTime              @db.Timestamptz(6)
+  updated_by                                                          String?               @db.Uuid
+  audit_log                                                           audit_log[]
+  department_types_department_types_created_byToemployees             department_types[]    @relation("department_types_created_byToemployees")
+  department_types_department_types_updated_byToemployees             department_types[]    @relation("department_types_updated_byToemployees")
+  departments_departments_created_byToemployees                       departments[]         @relation("departments_created_byToemployees")
+  departments_departments_updated_byToemployees                       departments[]         @relation("departments_updated_byToemployees")
+  designations_designations_created_byToemployees                     designations[]        @relation("designations_created_byToemployees")
+  designations_designations_updated_byToemployees                     designations[]        @relation("designations_updated_byToemployees")
+  employee_roles_employee_roles_assigned_byToemployees                employee_roles[]      @relation("employee_roles_assigned_byToemployees")
+  employee_roles_employee_roles_created_byToemployees                 employee_roles[]      @relation("employee_roles_created_byToemployees")
+  employee_roles_employee_roles_employee_idToemployees                employee_roles[]      @relation("employee_roles_employee_idToemployees")
+  employee_roles_employee_roles_revoked_byToemployees                 employee_roles[]      @relation("employee_roles_revoked_byToemployees")
+  employee_roles_employee_roles_updated_byToemployees                 employee_roles[]      @relation("employee_roles_updated_byToemployees")
+  employees_employees_created_byToemployees                           employees?            @relation("employees_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  other_employees_employees_created_byToemployees                     employees[]           @relation("employees_created_byToemployees")
+  departments_employees_department_idTodepartments                    departments           @relation("employees_department_idTodepartments", fields: [department_id], references: [department_id])
+  designations_employees_designation_idTodesignations                 designations          @relation("employees_designation_idTodesignations", fields: [designation_id], references: [designation_id])
+  employees_employees_manager_idToemployees                           employees?            @relation("employees_manager_idToemployees", fields: [manager_id], references: [employee_id])
+  other_employees_employees_manager_idToemployees                     employees[]           @relation("employees_manager_idToemployees")
+  status_master_employees_status_idTostatus_master                    status_master         @relation("employees_status_idTostatus_master", fields: [status_id], references: [status_id])
+  employees_employees_updated_byToemployees                           employees?            @relation("employees_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  other_employees_employees_updated_byToemployees                     employees[]           @relation("employees_updated_byToemployees")
+  refresh_tokens                                                      refresh_tokens[]
+  reviews_reviews_created_byToemployees                               reviews[]             @relation("reviews_created_byToemployees")
+  reviews_reviews_receiver_idToemployees                              reviews[]             @relation("reviews_receiver_idToemployees")
+  reviews_reviews_reviewer_idToemployees                              reviews[]             @relation("reviews_reviewer_idToemployees")
+  reviews_reviews_updated_byToemployees                               reviews[]             @relation("reviews_updated_byToemployees")
+  reward_catalog_reward_catalog_created_byToemployees                 reward_catalog[]      @relation("reward_catalog_created_byToemployees")
+  reward_catalog_reward_catalog_updated_byToemployees                 reward_catalog[]      @relation("reward_catalog_updated_byToemployees")
+  reward_categories_reward_categories_created_byToemployees           reward_categories[]   @relation("reward_categories_created_byToemployees")
+  reward_categories_reward_categories_updated_byToemployees           reward_categories[]   @relation("reward_categories_updated_byToemployees")
+  reward_history_reward_history_created_byToemployees                 reward_history[]      @relation("reward_history_created_byToemployees")
+  reward_history_reward_history_granted_byToemployees                 reward_history[]      @relation("reward_history_granted_byToemployees")
+  reward_history_reward_history_updated_byToemployees                 reward_history[]      @relation("reward_history_updated_byToemployees")
+  roles_roles_created_byToemployees                                   roles[]               @relation("roles_created_byToemployees")
+  roles_roles_updated_byToemployees                                   roles[]               @relation("roles_updated_byToemployees")
+  status_master_status_master_created_byToemployees                   status_master[]       @relation("status_master_created_byToemployees")
+  status_master_status_master_updated_byToemployees                   status_master[]       @relation("status_master_updated_byToemployees")
+  transaction_types_transaction_types_created_byToemployees           transaction_types[]   @relation("transaction_types_created_byToemployees")
+  transaction_types_transaction_types_updated_byToemployees           transaction_types[]   @relation("transaction_types_updated_byToemployees")
+  transactions_transactions_created_byToemployees                     transactions[]        @relation("transactions_created_byToemployees")
+  transactions_transactions_updated_byToemployees                     transactions[]        @relation("transactions_updated_byToemployees")
+  wallets_wallets_created_byToemployees                               wallets[]             @relation("wallets_created_byToemployees")
+  wallets_wallets_employee_idToemployees                              wallets?              @relation("wallets_employee_idToemployees")
+  wallets_wallets_updated_byToemployees                               wallets[]             @relation("wallets_updated_byToemployees")
+  // ── New points-config relations ──────────────────────────────────────────
+  review_categories_review_categories_created_byToemployees           review_categories[]   @relation("review_categories_created_byToemployees")
+  review_categories_review_categories_updated_byToemployees           review_categories[]   @relation("review_categories_updated_byToemployees")
+  seasonal_multipliers_seasonal_multipliers_created_byToemployees     seasonal_multipliers[] @relation("seasonal_multipliers_created_byToemployees")
+  seasonal_multipliers_seasonal_multipliers_updated_byToemployees     seasonal_multipliers[] @relation("seasonal_multipliers_updated_byToemployees")
+  points_config_points_config_created_byToemployees                   points_config[]       @relation("points_config_created_byToemployees")
+  points_config_points_config_updated_byToemployees                   points_config[]       @relation("points_config_updated_byToemployees")
 
   @@index([created_at])
   @@index([date_of_joining])
+  @@index([date_of_birth])
   @@index([department_id])
   @@index([department_id, status_id])
   @@index([designation_id])
@@ -174,6 +225,10 @@ model employees {
   @@index([manager_id, status_id])
   @@index([status_id])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH
+// ─────────────────────────────────────────────────────────────────────────────
 
 model refresh_tokens {
   token_id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -190,25 +245,149 @@ model refresh_tokens {
   @@index([token_hash])
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REVIEW CATEGORIES  (replaces CATEGORY_MULTIPLIERS dict in points_engine.py)
+//
+// 3NF fix: category_code → multiplier was a transitive dependency stored in
+// Python. Now category is its own entity with its own PK.
+// reviews.category_id  FK → review_categories.category_id
+// ─────────────────────────────────────────────────────────────────────────────
+
+model review_categories {
+  category_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Short code stored on the review row for readability, e.g. "INNOVATION"
+  category_code    String    @unique @db.VarChar(50)
+  category_name    String    @unique @db.VarChar(100)
+  /// Points multiplier applied to raw rating × reviewer_weight × seasonal_multiplier.
+  /// Replaces hardcoded CATEGORY_MULTIPLIERS dict in points_engine.py.
+  multiplier       Decimal   @db.Decimal(5, 4)
+  description      String?
+  is_active        Boolean   @default(true)
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
+  created_by       String?   @db.Uuid
+  updated_at       DateTime  @db.Timestamptz(6)
+  updated_by       String?   @db.Uuid
+
+  employees_review_categories_created_byToemployees employees? @relation("review_categories_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_review_categories_updated_byToemployees employees? @relation("review_categories_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  reviews                                           reviews[]
+
+  @@index([is_active])
+  @@index([category_code])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEASONAL MULTIPLIERS  (replaces _seasonal_multiplier() function in points_engine.py)
+//
+// 3NF fix: quarter → multiplier was embedded in Python if/elif.
+// effective_from / effective_to allow scheduling seasonal changes ahead of time
+// without code deploys. NULL means "always active".
+// ─────────────────────────────────────────────────────────────────────────────
+
+model seasonal_multipliers {
+  seasonal_multiplier_id String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Calendar quarter: 1 (Jan-Mar), 2 (Apr-Jun), 3 (Jul-Sep), 4 (Oct-Dec)
+  quarter                Int
+  label                  String    @db.VarChar(50)
+  /// Seasonal boost applied to raw point calculation.
+  /// Replaces hardcoded Q1-Q4 values in _seasonal_multiplier().
+  multiplier             Decimal   @db.Decimal(5, 4)
+  /// NULL = active from the beginning of time
+  effective_from         DateTime? @db.Date
+  /// NULL = no expiry
+  effective_to           DateTime? @db.Date
+  created_at             DateTime  @default(now()) @db.Timestamptz(6)
+  created_by             String?   @db.Uuid
+  updated_at             DateTime  @db.Timestamptz(6)
+  updated_by             String?   @db.Uuid
+
+  employees_seasonal_multipliers_created_byToemployees employees? @relation("seasonal_multipliers_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_seasonal_multipliers_updated_byToemployees employees? @relation("seasonal_multipliers_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+
+  /// Most recent config row per quarter wins; schedule future changes by inserting
+  /// a new row with a future effective_from.
+  @@unique([quarter, effective_from])
+  @@index([quarter])
+  @@index([effective_from])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POINTS CONFIG  (replaces magic constants in points_engine.py)
+//
+// 3NF fix: DECAY_RATE = 0.9 was a hardcoded constant. Any global numeric
+// setting for the points engine lives here so it can be changed by an admin
+// without a code deploy.
+//
+// Seed rows:
+//   DECAY_RATE   0.900000   "10 % quarterly decay on historical points"
+// ─────────────────────────────────────────────────────────────────────────────
+
+model points_config {
+  config_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Unique key, e.g. "DECAY_RATE"
+  config_key     String    @unique @db.VarChar(100)
+  config_value   Decimal   @db.Decimal(10, 6)
+  description    String?
+  /// NULL = active immediately and forever
+  effective_from DateTime? @db.Date
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+  created_by     String?   @db.Uuid
+  updated_at     DateTime  @db.Timestamptz(6)
+  updated_by     String?   @db.Uuid
+
+  employees_points_config_created_byToemployees employees? @relation("points_config_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_points_config_updated_byToemployees employees? @relation("points_config_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+
+  @@index([config_key])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REVIEWS
+//
+// Changes vs original:
+//   - category        String?  @db.VarChar(64)       REMOVED (was freetext)
+//   - category_id     String?  @db.Uuid              ADDED  (FK → review_categories)
+//   - category_code   String?  @db.VarChar(50)       ADDED  (denormalised snapshot for
+//                                                     fast reads without a JOIN)
+//
+// Snapshot columns (raw_points, category_multiplier, reviewer_weight,
+// seasonal_multiplier) are intentionally kept as point-in-time audit values.
+// If an admin later changes a multiplier the historical calculation is preserved.
+// ─────────────────────────────────────────────────────────────────────────────
+
 model reviews {
-  review_id                                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  reviewer_id                              String        @db.Uuid
-  receiver_id                              String        @db.Uuid
+  review_id                                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reviewer_id                              String             @db.Uuid
+  receiver_id                              String             @db.Uuid
   rating                                   Int
   comment                                  String
-  image_url                                String?       @db.VarChar(500)
-  video_url                                String?       @db.VarChar(500)
-  status_id                                String        @db.Uuid
-  review_at                                DateTime      @default(now()) @db.Timestamptz(6)
-  created_at                               DateTime      @default(now()) @db.Timestamptz(6)
-  created_by                               String        @db.Uuid
-  updated_at                               DateTime      @db.Timestamptz(6)
-  updated_by                               String        @db.Uuid
-  employees_reviews_created_byToemployees  employees     @relation("reviews_created_byToemployees", fields: [created_by], references: [employee_id])
-  employees_reviews_receiver_idToemployees employees     @relation("reviews_receiver_idToemployees", fields: [receiver_id], references: [employee_id])
-  employees_reviews_reviewer_idToemployees employees     @relation("reviews_reviewer_idToemployees", fields: [reviewer_id], references: [employee_id])
-  status_master                            status_master @relation(fields: [status_id], references: [status_id])
-  employees_reviews_updated_byToemployees  employees     @relation("reviews_updated_byToemployees", fields: [updated_by], references: [employee_id])
+  image_url                                String?            @db.VarChar(500)
+  video_url                                String?            @db.VarChar(500)
+  status_id                                String             @db.Uuid
+  review_at                                DateTime           @default(now()) @db.Timestamptz(6)
+  created_at                               DateTime           @default(now()) @db.Timestamptz(6)
+  created_by                               String             @db.Uuid
+  updated_at                               DateTime           @db.Timestamptz(6)
+  updated_by                               String             @db.Uuid
+
+  /// FK to review_categories.  Replaces the old freetext category VarChar(64).
+  category_id                              String?            @db.Uuid
+  /// Denormalised snapshot of category_code at review time (avoids JOIN on reads).
+  category_code                            String?            @db.VarChar(50)
+
+  /// ── Points snapshot columns (frozen at write time for audit purposes) ──
+  raw_points                               Float?
+  category_multiplier                      Float?
+  reviewer_weight                          Float?
+  seasonal_multiplier                      Float?
+
+  // Relations
+  employees_reviews_created_byToemployees  employees          @relation("reviews_created_byToemployees",  fields: [created_by],   references: [employee_id])
+  employees_reviews_receiver_idToemployees employees          @relation("reviews_receiver_idToemployees", fields: [receiver_id],  references: [employee_id])
+  employees_reviews_reviewer_idToemployees employees          @relation("reviews_reviewer_idToemployees", fields: [reviewer_id],  references: [employee_id])
+  status_master                            status_master      @relation(fields: [status_id],    references: [status_id])
+  employees_reviews_updated_byToemployees  employees          @relation("reviews_updated_byToemployees",  fields: [updated_by],   references: [employee_id])
+  review_categories                        review_categories? @relation(fields: [category_id],  references: [category_id])
 
   @@index([rating])
   @@index([receiver_id])
@@ -217,7 +396,112 @@ model reviews {
   @@index([reviewer_id])
   @@index([reviewer_id, review_at])
   @@index([status_id])
+  @@index([category_id])
+  @@index([receiver_id, raw_points])
+  @@index([receiver_id, review_at])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATUS MASTER
+// ─────────────────────────────────────────────────────────────────────────────
+
+model status_master {
+  status_id                                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  status_code                                   String         @unique @db.VarChar(50)
+  status_name                                   String         @db.VarChar(100)
+  description                                   String?
+  entity_type                                   String         @db.VarChar(50)
+  created_at                                    DateTime       @default(now()) @db.Timestamptz(6)
+  created_by                                    String?        @db.Uuid
+  updated_at                                    DateTime       @db.Timestamptz(6)
+  updated_by                                    String?        @db.Uuid
+  employees_employees_status_idTostatus_master  employees[]    @relation("employees_status_idTostatus_master")
+  reviews                                       reviews[]
+  employees_status_master_created_byToemployees employees?     @relation("status_master_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_status_master_updated_byToemployees employees?     @relation("status_master_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  transactions                                  transactions[]
+
+  @@index([entity_type])
+  @@index([entity_type, status_code])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSACTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model transaction_types {
+  type_id                                           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type_name                                         String         @unique @db.VarChar(100)
+  type_code                                         String         @unique @db.VarChar(50)
+  description                                       String?
+  is_credit                                         Boolean
+  created_at                                        DateTime       @default(now()) @db.Timestamptz(6)
+  created_by                                        String?        @db.Uuid
+  updated_at                                        DateTime       @db.Timestamptz(6)
+  updated_by                                        String?        @db.Uuid
+  employees_transaction_types_created_byToemployees employees?     @relation("transaction_types_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_transaction_types_updated_byToemployees employees?     @relation("transaction_types_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  transactions                                      transactions[]
+
+  @@index([is_credit])
+}
+
+model transactions {
+  transaction_id                               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  wallet_id                                    String            @db.Uuid
+  amount                                       Int
+  transaction_type_id                          String            @db.Uuid
+  status_id                                    String            @db.Uuid
+  description                                  String?
+  reference_number                             String            @unique @db.VarChar(100)
+  transaction_at                               DateTime          @default(now()) @db.Timestamptz(6)
+  created_at                                   DateTime          @default(now()) @db.Timestamptz(6)
+  created_by                                   String            @db.Uuid
+  updated_at                                   DateTime          @db.Timestamptz(6)
+  updated_by                                   String            @db.Uuid
+  employees_transactions_created_byToemployees employees         @relation("transactions_created_byToemployees", fields: [created_by], references: [employee_id])
+  status_master                                status_master     @relation(fields: [status_id], references: [status_id])
+  transaction_types                            transaction_types @relation(fields: [transaction_type_id], references: [type_id])
+  employees_transactions_updated_byToemployees employees         @relation("transactions_updated_byToemployees", fields: [updated_by], references: [employee_id])
+  wallets                                      wallets           @relation(fields: [wallet_id], references: [wallet_id], onDelete: Cascade)
+
+  @@index([created_at])
+  @@index([status_id])
+  @@index([transaction_at])
+  @@index([transaction_type_id])
+  @@index([wallet_id])
+  @@index([wallet_id, status_id])
+  @@index([wallet_id, transaction_at])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WALLETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model wallets {
+  wallet_id                                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id                              String           @unique @db.Uuid
+  available_points                         Int              @default(0)
+  redeemed_points                          Int              @default(0)
+  total_earned_points                      Int              @default(0)
+  version                                  Int              @default(1)
+  created_at                               DateTime         @default(now()) @db.Timestamptz(6)
+  created_by                               String           @db.Uuid
+  updated_at                               DateTime         @db.Timestamptz(6)
+  updated_by                               String           @db.Uuid
+  reward_history                           reward_history[]
+  transactions                             transactions[]
+  employees_wallets_created_byToemployees  employees        @relation("wallets_created_byToemployees",   fields: [created_by],   references: [employee_id])
+  employees_wallets_employee_idToemployees employees        @relation("wallets_employee_idToemployees",  fields: [employee_id],  references: [employee_id], onDelete: Cascade)
+  employees_wallets_updated_byToemployees  employees        @relation("wallets_updated_byToemployees",   fields: [updated_by],   references: [employee_id])
+
+  @@index([available_points])
+  @@index([total_earned_points])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REWARD CATALOG
+// ─────────────────────────────────────────────────────────────────────────────
 
 model reward_catalog {
   catalog_id                                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -229,11 +513,11 @@ model reward_catalog {
   min_points                                     Int
   max_points                                     Int
   is_active                                      Boolean           @default(true)
+  available_stock                                Int               @default(0)
   created_at                                     DateTime          @default(now()) @db.Timestamptz(6)
   created_by                                     String?           @db.Uuid
   updated_at                                     DateTime          @db.Timestamptz(6)
   updated_by                                     String?           @db.Uuid
-  available_stock                                Int               @default(0)
   reward_categories                              reward_categories @relation(fields: [category_id], references: [category_id])
   employees_reward_catalog_created_byToemployees employees?        @relation("reward_catalog_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
   employees_reward_catalog_updated_byToemployees employees?        @relation("reward_catalog_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
@@ -288,102 +572,23 @@ model reward_history {
   @@index([wallet_id])
 }
 
-model roles {
-  role_id                               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  role_name                             String           @unique @db.VarChar(100)
-  role_code                             String           @unique @db.VarChar(50)
-  description                           String?
-  created_at                            DateTime         @default(now()) @db.Timestamptz(6)
-  created_by                            String?          @db.Uuid
-  updated_at                            DateTime         @db.Timestamptz(6)
-  updated_by                            String?          @db.Uuid
-  employee_roles                        employee_roles[]
-  employees_roles_created_byToemployees employees?       @relation("roles_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  employees_roles_updated_byToemployees employees?       @relation("roles_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────────────────────
 
-model status_master {
-  status_id                                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  status_code                                   String         @unique @db.VarChar(50)
-  status_name                                   String         @db.VarChar(100)
-  description                                   String?
-  entity_type                                   String         @db.VarChar(50)
-  created_at                                    DateTime       @default(now()) @db.Timestamptz(6)
-  created_by                                    String?        @db.Uuid
-  updated_at                                    DateTime       @db.Timestamptz(6)
-  updated_by                                    String?        @db.Uuid
-  employees_employees_status_idTostatus_master  employees[]    @relation("employees_status_idTostatus_master")
-  reviews                                       reviews[]
-  employees_status_master_created_byToemployees employees?     @relation("status_master_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  employees_status_master_updated_byToemployees employees?     @relation("status_master_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-  transactions                                  transactions[]
+model notifications {
+  notification_id String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id     String    @db.Uuid
+  title           String    @db.VarChar(200)
+  message         String
+  type            String    @db.VarChar(50)
+  is_read         Boolean   @default(false)
+  email_sent      Boolean   @default(false)
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  read_at         DateTime? @db.Timestamptz(6)
 
-  @@index([entity_type])
-  @@index([entity_type, status_code])
-}
-
-model transaction_types {
-  type_id                                           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  type_name                                         String         @unique @db.VarChar(100)
-  type_code                                         String         @unique @db.VarChar(50)
-  description                                       String?
-  is_credit                                         Boolean
-  created_at                                        DateTime       @default(now()) @db.Timestamptz(6)
-  created_by                                        String?        @db.Uuid
-  updated_at                                        DateTime       @db.Timestamptz(6)
-  updated_by                                        String?        @db.Uuid
-  employees_transaction_types_created_byToemployees employees?     @relation("transaction_types_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  employees_transaction_types_updated_byToemployees employees?     @relation("transaction_types_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-  transactions                                      transactions[]
-
-  @@index([is_credit])
-}
-
-model transactions {
-  transaction_id                               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  wallet_id                                    String            @db.Uuid
-  amount                                       Int
-  transaction_type_id                          String            @db.Uuid
-  status_id                                    String            @db.Uuid
-  description                                  String?
-  reference_number                             String            @unique @db.VarChar(100)
-  transaction_at                               DateTime          @default(now()) @db.Timestamptz(6)
-  created_at                                   DateTime          @default(now()) @db.Timestamptz(6)
-  created_by                                   String            @db.Uuid
-  updated_at                                   DateTime          @db.Timestamptz(6)
-  updated_by                                   String            @db.Uuid
-  employees_transactions_created_byToemployees employees         @relation("transactions_created_byToemployees", fields: [created_by], references: [employee_id])
-  status_master                                status_master     @relation(fields: [status_id], references: [status_id])
-  transaction_types                            transaction_types @relation(fields: [transaction_type_id], references: [type_id])
-  employees_transactions_updated_byToemployees employees         @relation("transactions_updated_byToemployees", fields: [updated_by], references: [employee_id])
-  wallets                                      wallets           @relation(fields: [wallet_id], references: [wallet_id], onDelete: Cascade)
-
+  @@index([employee_id])
+  @@index([employee_id, is_read])
   @@index([created_at])
-  @@index([status_id])
-  @@index([transaction_at])
-  @@index([transaction_type_id])
-  @@index([wallet_id])
-  @@index([wallet_id, status_id])
-  @@index([wallet_id, transaction_at])
-}
-
-model wallets {
-  wallet_id                                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employee_id                              String           @unique @db.Uuid
-  available_points                         Int              @default(0)
-  redeemed_points                          Int              @default(0)
-  total_earned_points                      Int              @default(0)
-  version                                  Int              @default(1)
-  created_at                               DateTime         @default(now()) @db.Timestamptz(6)
-  created_by                               String           @db.Uuid
-  updated_at                               DateTime         @db.Timestamptz(6)
-  updated_by                               String           @db.Uuid
-  reward_history                           reward_history[]
-  transactions                             transactions[]
-  employees_wallets_created_byToemployees  employees        @relation("wallets_created_byToemployees", fields: [created_by], references: [employee_id])
-  employees_wallets_employee_idToemployees employees        @relation("wallets_employee_idToemployees", fields: [employee_id], references: [employee_id], onDelete: Cascade)
-  employees_wallets_updated_byToemployees  employees        @relation("wallets_updated_byToemployees", fields: [updated_by], references: [employee_id])
-
-  @@index([available_points])
-  @@index([total_earned_points])
+  @@index([email_sent])
 }
