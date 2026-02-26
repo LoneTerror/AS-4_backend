@@ -182,8 +182,19 @@ pipeline {
 
     post {
         always {
+            // 1. Archive security reports
             archiveArtifacts artifacts: '*.json, *.html', allowEmptyArchive: true
+            
+            // 2. Wipe the workspace folder immediately
             cleanWs()
+            
+            // 3. Remove the specific image built in this run to save disk
+            sh "docker rmi ${IMAGE}:${TAG} || true"
+        }
+        
+        failure {
+            // Optional: Only prune everything if a build fails to clear "bad" state
+            sh "docker system prune -f"
         }
     }
 }
