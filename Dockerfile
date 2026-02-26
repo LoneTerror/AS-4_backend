@@ -23,13 +23,11 @@ RUN prisma generate
 FROM python:3.11-slim
 RUN addgroup --system appgroup && adduser --system --group appuser
 
+# Set these so they are available if you run manual commands
 ENV PRISMA_PY_BINARIES_PATH=/app/prisma_binaries \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    VIRTUAL_ENV=/app/venv \
-    PATH="/app/venv/bin:$PATH" \
     PYTHONPATH=/app \
-    HOME="/app"
+    VIRTUAL_ENV=/app/venv \
+    PATH="/app/venv/bin:$PATH"
 
 WORKDIR /app
 
@@ -43,20 +41,17 @@ COPY --from=builder /app/prisma /app/prisma
 COPY . .
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-RUN rm -rf /etc/nginx/nginx.conf /etc/nginx/sites-enabled/* /etc/nginx/sites-available/* /etc/nginx/conf.d/*
+# Nginx config fix
+RUN rm -rf /etc/nginx/nginx.conf /etc/nginx/sites-enabled/*
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# PERMISSIONS: Ensure appuser owns the socket and log areas
+# PERMISSIONS: Ensure appuser owns the app and the binaries are executable
 RUN mkdir -p /var/log/nginx /var/lib/nginx /run/nginx /tmp/client_temp /var/log/supervisor && \
     chown -R appuser:appgroup /app /var/log /var/lib/nginx /run/nginx /etc/nginx /tmp && \
     chmod -R 777 /tmp && \
     chmod -R +x /app/prisma_binaries
 
 USER appuser
-
 EXPOSE 8000 8001 8003 8004 8005 8006 8007
-
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
 
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
