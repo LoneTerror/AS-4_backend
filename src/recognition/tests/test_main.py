@@ -43,7 +43,9 @@ sys.modules["src.prisma.client"].db = _fake_db
 # Fake router
 from fastapi import APIRouter
 _fake_router = APIRouter()
+_fake_categories_router = APIRouter()
 sys.modules["src.recognition.router"].router = _fake_router
+sys.modules["src.recognition.router"].categories_router = _fake_categories_router
 
 # Fake middleware functions
 async def _fake_rate_limit(request, call_next):
