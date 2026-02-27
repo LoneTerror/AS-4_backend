@@ -1,6 +1,7 @@
 generator client {
   provider             = "prisma-client-py"
   recursive_type_depth = "5"
+  recursive_type_depth = "5"
   interface            = "asyncio"
   enable_experimental_decimal = true
   // enable_experimental_decimal = true

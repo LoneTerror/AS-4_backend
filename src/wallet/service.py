@@ -19,6 +19,20 @@ from src.recognition.points_engine import (
 logger = logging.getLogger(__name__)
 _notif = NotificationService(db)
 
+# ── Points engine import ───────────────────────────────────────────────────────
+# ReviewCategory was removed when multipliers moved to the DB.
+# Only the pure calculation helpers are still needed here (legacy fallback path).
+from src.recognition.points_engine import (
+    calculate_points,
+    quarters_elapsed,
+    apply_decay,
+)
+
+logger = logging.getLogger(__name__)
+_notif = NotificationService(db)
+
+
+logger = setup_logger(__name__)
 
 # -----------------------------
 # Utility
@@ -57,13 +71,12 @@ async def create_transaction(data, current_user: CurrentUser):
 
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
+        raise HTTPException(status_code=404, detail="Wallet not found")
 
     txn_type = await db.transaction_types.find_unique(where={"type_id": txn_type_id})
     if not txn_type:
         raise HTTPException(status_code=404, detail="Transaction type not found")
 
-    # Look up transaction status — DB uses APPROVED for transactions
     success_status = await db.status_master.find_first(
         where={"status_code": "APPROVED"}
     )
@@ -72,7 +85,7 @@ async def create_transaction(data, current_user: CurrentUser):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="APPROVED status not found in status_master. Run seed_transaction_types.py"
         )
-    
+
     status_id = success_status.status_id
 
     # Debit check
@@ -92,7 +105,6 @@ async def create_transaction(data, current_user: CurrentUser):
 
     try:
         async with db.tx() as transaction:
-
             new_txn = await transaction.transactions.create(
                 data={
                     "wallet_id":          wallet_id,
@@ -255,7 +267,6 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
         if not wallet or wallet.employee_id != current_user.id:
             raise HTTPException(status_code=403, detail=AD)
 
-    # Transform to response format
     return {
         "transaction_id":   txn.transaction_id,
         "wallet_id":        txn.wallet_id,
@@ -281,16 +292,23 @@ async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
         raise HTTPException(status_code=403, detail=AD)
     wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
 
+    wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
+        raise HTTPException(status_code=404, detail="Wallet not found")
 
     return wallet
 
 
 async def get_wallet_balance(wallet_id: str, current_user: CurrentUser):
+    logger.info(
+        "Wallet balance fetch requested for wallet_id=%s by user_id=%s",
+        wallet_id,
+        current_user.id
+    )
+
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
+        raise HTTPException(status_code=404, detail="Wallet not found")
 
     if not is_admin(current_user) and wallet.employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
@@ -302,9 +320,14 @@ async def get_wallet_balance(wallet_id: str, current_user: CurrentUser):
 
 
 async def get_points_summary(wallet_id: str, current_user: CurrentUser):
+    logger.info(
+        "Points summary fetch requested for wallet_id=%s by user_id=%s",
+        wallet_id,
+        current_user.id
+    )
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
     if not wallet:
-        raise HTTPException(status_code=404, detail=WNF)
+        raise HTTPException(status_code=404, detail="Wallet not found")
 
     if not is_admin(current_user) and wallet.employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
@@ -316,16 +339,26 @@ async def get_points_summary(wallet_id: str, current_user: CurrentUser):
     month_txns = await db.transactions.find_many(
         where={"wallet_id": wallet_id, "transaction_at": {"gte": start_of_month}}
     )
-
     year_txns = await db.transactions.find_many(
         where={"wallet_id": wallet_id, "transaction_at": {"gte": start_of_year}}
     )
 
+    logger.info(
+        "Computed summary wallet_id=%s month_txns=%d year_txns=%d",
+        wallet_id,
+        len(month_txns),
+        len(year_txns)
+    )
     return {
         "wallet_id":          wallet_id,
         "points_this_month":  sum(t.amount for t in month_txns),
         "points_this_year":   sum(t.amount for t in year_txns),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REVIEW → WALLET CREDIT  (the key function)
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     """

@@ -1,3 +1,5 @@
+# src/employees/dependencies.py
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.core.security import decode_token
@@ -24,7 +26,6 @@ async def get_current_employee(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Ensure roles is a list (handles some tokens storing it as string)
     roles = payload.get("roles", [])
     if isinstance(roles, str):
         roles = [roles]

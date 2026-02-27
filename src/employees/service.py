@@ -97,7 +97,6 @@ async def list_employees(
         desig = emp.designations_employees_designation_idTodesignations
         stat = emp.status_master_employees_status_idTostatus_master
         mgr = emp.employees_employees_manager_idToemployees
-
         is_emp_active = stat.status_code == "ACTIVE" if stat else False
 
         data.append(schemas.EmployeeListItem(
@@ -130,6 +129,7 @@ async def list_employees(
         )
     )
 
+
 async def get_employee_detail(employee_id: str):
 
     emp = await db.employees.find_unique(
@@ -157,7 +157,6 @@ async def get_employee_detail(employee_id: str):
 
     emp_roles = emp.employee_roles_employee_roles_employee_idToemployees
     roles_list = []
-    
     if emp_roles:
         for er in emp_roles:
             if er.roles:
@@ -187,33 +186,28 @@ async def get_employee_detail(employee_id: str):
         email=emp.email,
         date_of_joining=emp.date_of_joining,
         is_active=is_active,
-        
         designation=schemas.DesignationResponse(
             designation_id=emp.designations_employees_designation_idTodesignations.designation_id,
             designation_name=emp.designations_employees_designation_idTodesignations.designation_name,
             designation_code=emp.designations_employees_designation_idTodesignations.designation_code,
             level=emp.designations_employees_designation_idTodesignations.level
         ) if emp.designations_employees_designation_idTodesignations else None,
-        
         department=schemas.DepartmentResponse(
             department_id=dept.department_id,
             department_name=dept.department_name,
             department_code=dept.department_code,
             department_type=dept_type_resp
         ) if dept else None,
-        
         manager=schemas.ManagerResponse(
             employee_id=mgr.employee_id,
             username=mgr.username,
             email=mgr.email
         ) if mgr else None,
-        
         status=schemas.StatusResponse(
             status_id=stat.status_id,
             status_code=stat.status_code,
             status_name=stat.status_name
         ) if stat else None,
-        
         wallet=schemas.WalletResponse(
             wallet_id=wallet.wallet_id,
             available_points=wallet.available_points,
@@ -221,13 +215,13 @@ async def get_employee_detail(employee_id: str):
             total_earned_points=wallet.total_earned_points,
             version=wallet.version
         ) if wallet else None,
-        
         roles=roles_list,
         created_at=emp.created_at,
         created_by=emp.created_by,
         updated_at=emp.updated_at,
         updated_by=emp.updated_by
     )
+
 
 async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: str):
 
@@ -293,7 +287,6 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
                 }
             )
 
-            # 5. Construct Response (Flattened)
             is_active = False
             if new_emp.status_master_employees_status_idTostatus_master:
                 if new_emp.status_master_employees_status_idTostatus_master.status_code == "ACTIVE":
@@ -349,6 +342,7 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
         logger.exception("Error creating employee")
         raise HTTPException(status_code=400, detail=f"Creation failed: {str(e)}")
 
+
 async def update_employee(employee_id: str, data: schemas.UpdateEmployeeRequest, updated_by_id: str):
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items()}
     if not update_data:
@@ -358,7 +352,7 @@ async def update_employee(employee_id: str, data: schemas.UpdateEmployeeRequest,
     for key in ["designation_id", "department_id", "manager_id", "status_id"]:
         if key in update_data and update_data[key]:
             update_data[key] = str(update_data[key])
-    
+
     update_data["updated_by"] = updated_by_id
     update_data["updated_at"] = datetime.now()
 
@@ -366,8 +360,9 @@ async def update_employee(employee_id: str, data: schemas.UpdateEmployeeRequest,
         where={"employee_id": employee_id},
         data=update_data
     )
-    
+
     return await get_employee_detail(employee_id)
+
 
 async def patch_employee(employee_id: str, updated_by_id: str):
     inactive_status = await db.status_master.find_first(
