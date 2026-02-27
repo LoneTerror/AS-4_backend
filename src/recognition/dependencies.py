@@ -19,16 +19,16 @@ class CurrentUser(BaseModel):
 
 async def get_current_user(
     request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> CurrentUser:
     """
     Validates the authentication token and returns the current user.
-    
+
     Raises:
         HTTPException 401: Invalid or expired authentication token
         HTTPException 503: Authentication service unavailable
     """
-    token = credentials.credentials
+    token      = credentials.credentials
     request_id = request.headers.get("X-Request-ID")
 
     try:
@@ -36,13 +36,13 @@ async def get_current_user(
             response = await client.post(
                 AUTH_SERVICE_URL,
                 json={"token": token},
-                headers={"X-Request-ID": request_id} if request_id else None
+                headers={"X-Request-ID": request_id} if request_id else None,
             )
 
         if response.status_code != 200:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired authentication token"
+                detail="Invalid or expired authentication token",
             )
 
         data = response.json()
@@ -50,7 +50,7 @@ async def get_current_user(
         if not data.get("valid"):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired authentication token"
+                detail="Invalid or expired authentication token",
             )
 
         roles = [r.upper() for r in data.get("roles", [])]
@@ -59,23 +59,22 @@ async def get_current_user(
             id=data["user_id"],
             email=data["email"],
             roles=roles,
-            department_id=data.get("department_id")
+            department_id=data.get("department_id"),
         )
 
     except httpx.RequestError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Authentication service unavailable"
+            detail="Authentication service unavailable",
         )
 
 
 def require_roles(*allowed_roles: str) -> Callable:
     """
     Dependency factory that creates a dependency requiring specific roles.
-    
     """
     async def role_checker(
-        current_user: CurrentUser = Depends(get_current_user)
+        current_user: CurrentUser = Depends(get_current_user),
     ) -> CurrentUser:
 
         if "SUPER_ADMIN" in current_user.roles:
@@ -86,7 +85,7 @@ def require_roles(*allowed_roles: str) -> Callable:
         if not any(role in current_user.roles for role in normalized_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions for this operation"
+                detail="Insufficient permissions for this operation",
             )
 
         return current_user

@@ -1,10 +1,9 @@
 generator client {
-  provider             = "prisma-client-py"
-  recursive_type_depth = "5"
-  recursive_type_depth = "5"
-  interface            = "asyncio"
-  enable_experimental_decimal = true
-  // enable_experimental_decimal = true
+  provider                    = "prisma-client-py"
+  enable_experimental_decimal = "true"
+  // enable_experimental_decimal = "true"
+  interface                   = "asyncio"
+  recursive_type_depth        = "5"
 }
 
 datasource db {
@@ -176,6 +175,7 @@ model employees {
   wallets_wallets_updated_byToemployees                           wallets[]              @relation("wallets_updated_byToemployees")
 
   @@index([created_at])
+  @@index([date_of_birth])
   @@index([date_of_joining])
   @@index([department_id])
   @@index([department_id, status_id])
@@ -183,7 +183,39 @@ model employees {
   @@index([manager_id])
   @@index([manager_id, status_id])
   @@index([status_id])
-  @@index([date_of_birth])
+}
+
+model notifications {
+  notification_id String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id     String    @db.Uuid
+  title           String    @db.VarChar(200)
+  message         String
+  type            String    @db.VarChar(50)
+  is_read         Boolean   @default(false)
+  email_sent      Boolean   @default(false)
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  read_at         DateTime? @db.Timestamptz(6)
+
+  @@index([created_at])
+  @@index([email_sent])
+  @@index([employee_id])
+  @@index([employee_id, is_read])
+}
+
+model points_config {
+  config_id                                     String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  config_key                                    String     @unique @db.VarChar(100)
+  config_value                                  Decimal    @db.Decimal(10, 6)
+  description                                   String?
+  effective_from                                DateTime?  @db.Date
+  created_at                                    DateTime   @default(now()) @db.Timestamptz(6)
+  created_by                                    String?    @db.Uuid
+  updated_at                                    DateTime   @db.Timestamptz(6)
+  updated_by                                    String?    @db.Uuid
+  employees_points_config_created_byToemployees employees? @relation("points_config_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_points_config_updated_byToemployees employees? @relation("points_config_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+
+  @@index([config_key])
 }
 
 model refresh_tokens {
@@ -199,6 +231,25 @@ model refresh_tokens {
 
   @@index([employee_id])
   @@index([token_hash])
+}
+
+model review_categories {
+  category_id                                       String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  category_code                                     String     @unique @db.VarChar(50)
+  category_name                                     String     @unique @db.VarChar(100)
+  multiplier                                        Decimal    @db.Decimal(5, 4)
+  description                                       String?
+  is_active                                         Boolean    @default(true)
+  created_at                                        DateTime   @default(now()) @db.Timestamptz(6)
+  created_by                                        String?    @db.Uuid
+  updated_at                                        DateTime   @db.Timestamptz(6)
+  updated_by                                        String?    @db.Uuid
+  employees_review_categories_created_byToemployees employees? @relation("review_categories_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_review_categories_updated_byToemployees employees? @relation("review_categories_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  reviews                                           reviews[]
+
+  @@index([category_code])
+  @@index([is_active])
 }
 
 model reviews {
@@ -228,16 +279,16 @@ model reviews {
   status_master                            status_master      @relation(fields: [status_id], references: [status_id])
   employees_reviews_updated_byToemployees  employees          @relation("reviews_updated_byToemployees", fields: [updated_by], references: [employee_id])
 
+  @@index([category_id])
   @@index([rating])
   @@index([receiver_id])
+  @@index([receiver_id, raw_points])
+  @@index([receiver_id, review_at])
   @@index([receiver_id, status_id])
   @@index([review_at])
   @@index([reviewer_id])
   @@index([reviewer_id, review_at])
   @@index([status_id])
-  @@index([category_id])
-  @@index([receiver_id, raw_points])
-  @@index([receiver_id, review_at])
 }
 
 model reward_catalog {
@@ -324,6 +375,25 @@ model roles {
   employees_roles_updated_byToemployees employees?       @relation("roles_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
 }
 
+model seasonal_multipliers {
+  seasonal_multiplier_id                               String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  quarter                                              Int
+  label                                                String     @db.VarChar(50)
+  multiplier                                           Decimal    @db.Decimal(5, 4)
+  effective_from                                       DateTime?  @db.Date
+  effective_to                                         DateTime?  @db.Date
+  created_at                                           DateTime   @default(now()) @db.Timestamptz(6)
+  created_by                                           String?    @db.Uuid
+  updated_at                                           DateTime   @db.Timestamptz(6)
+  updated_by                                           String?    @db.Uuid
+  employees_seasonal_multipliers_created_byToemployees employees? @relation("seasonal_multipliers_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  employees_seasonal_multipliers_updated_byToemployees employees? @relation("seasonal_multipliers_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+
+  @@unique([quarter, effective_from])
+  @@index([effective_from])
+  @@index([quarter])
+}
+
 model status_master {
   status_id                                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   status_code                                   String         @unique @db.VarChar(50)
@@ -408,75 +478,4 @@ model wallets {
 
   @@index([available_points])
   @@index([total_earned_points])
-}
-
-model notifications {
-  notification_id String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employee_id     String    @db.Uuid
-  title           String    @db.VarChar(200)
-  message         String
-  type            String    @db.VarChar(50)
-  is_read         Boolean   @default(false)
-  email_sent      Boolean   @default(false)
-  created_at      DateTime  @default(now()) @db.Timestamptz(6)
-  read_at         DateTime? @db.Timestamptz(6)
-
-  @@index([created_at])
-  @@index([email_sent])
-  @@index([employee_id])
-  @@index([employee_id, is_read])
-}
-
-model points_config {
-  config_id                                     String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  config_key                                    String     @unique @db.VarChar(100)
-  config_value                                  Decimal    @db.Decimal(10, 6)
-  description                                   String?
-  effective_from                                DateTime?  @db.Date
-  created_at                                    DateTime   @default(now()) @db.Timestamptz(6)
-  created_by                                    String?    @db.Uuid
-  updated_at                                    DateTime   @db.Timestamptz(6)
-  updated_by                                    String?    @db.Uuid
-  employees_points_config_created_byToemployees employees? @relation("points_config_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  employees_points_config_updated_byToemployees employees? @relation("points_config_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-
-  @@index([config_key])
-}
-
-model review_categories {
-  category_id                                       String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  category_code                                     String     @unique @db.VarChar(50)
-  category_name                                     String     @unique @db.VarChar(100)
-  multiplier                                        Decimal    @db.Decimal(5, 4)
-  description                                       String?
-  is_active                                         Boolean    @default(true)
-  created_at                                        DateTime   @default(now()) @db.Timestamptz(6)
-  created_by                                        String?    @db.Uuid
-  updated_at                                        DateTime   @db.Timestamptz(6)
-  updated_by                                        String?    @db.Uuid
-  employees_review_categories_created_byToemployees employees? @relation("review_categories_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  employees_review_categories_updated_byToemployees employees? @relation("review_categories_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-  reviews                                           reviews[]
-
-  @@index([category_code])
-  @@index([is_active])
-}
-
-model seasonal_multipliers {
-  seasonal_multiplier_id                               String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  quarter                                              Int
-  label                                                String     @db.VarChar(50)
-  multiplier                                           Decimal    @db.Decimal(5, 4)
-  effective_from                                       DateTime?  @db.Date
-  effective_to                                         DateTime?  @db.Date
-  created_at                                           DateTime   @default(now()) @db.Timestamptz(6)
-  created_by                                           String?    @db.Uuid
-  updated_at                                           DateTime   @db.Timestamptz(6)
-  updated_by                                           String?    @db.Uuid
-  employees_seasonal_multipliers_created_byToemployees employees? @relation("seasonal_multipliers_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  employees_seasonal_multipliers_updated_byToemployees employees? @relation("seasonal_multipliers_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-
-  @@unique([quarter, effective_from])
-  @@index([effective_from])
-  @@index([quarter])
 }
