@@ -5,6 +5,16 @@ Unit tests for src/recognition/router.py
 Uses FastAPI TestClient with all auth dependencies overridden so no
 real token validation or DB calls happen. Tests routing, HTTP methods,
 query/path param validation, response codes, and service error propagation.
+
+FIXED:
+- _valid_body() now includes category_id — required field after DB refactor.
+  Without it every POST /v1/reviews call returns 422 "category_id: Field
+  required" before the service is even called, breaking all create tests.
+- test_create_review_missing_* tests now omit exactly the field under test
+  and include all other required fields (including category_id).
+- ReviewCreateRequest and ReviewUpdateRequest schema stubs in the loader
+  section now include category_id so the router's Pydantic validation uses
+  the correct field set.
 """
 
 import os
@@ -25,9 +35,23 @@ for _p in [
     "src", "src.prisma", "src.prisma.client",
     "src.recognition", "src.recognition.dependencies",
     "src.recognition.schemas", "src.recognition.service",
+    "src.recognition.points_engine",
     "src.common", "src.common.middleware",
 ]:
     sys.modules.setdefault(_p, types.ModuleType(_p))
+
+# Load the REAL points_engine into the stub namespace (same as conftest.py).
+import pathlib as _pathlib_pe
+_pe_mod_path = _pathlib_pe.Path(__file__).parent.parent / "points_engine.py"
+import importlib.util as _ilu_pe
+_pe_mod_spec = _ilu_pe.spec_from_file_location("_real_pe_router", _pe_mod_path)
+_real_pe_mod = _ilu_pe.module_from_spec(_pe_mod_spec)
+_pe_mod_spec.loader.exec_module(_real_pe_mod)
+_pe_mod = sys.modules["src.recognition.points_engine"]
+_pe_mod.calculate_points = _real_pe_mod.calculate_points
+_pe_mod.quarters_elapsed = _real_pe_mod.quarters_elapsed
+_pe_mod.apply_decay      = _real_pe_mod.apply_decay
+_pe_mod.PointsResult     = _real_pe_mod.PointsResult
 
 from pydantic import BaseModel
 from typing import List
@@ -58,6 +82,26 @@ sys.modules["src.recognition.schemas"].ReviewCreateRequest      = _schemas.Revie
 sys.modules["src.recognition.schemas"].ReviewUpdateRequest      = _schemas.ReviewUpdateRequest
 sys.modules["src.recognition.schemas"].ReviewResponse           = _schemas.ReviewResponse
 sys.modules["src.recognition.schemas"].PaginatedReviewResponse  = _schemas.PaginatedReviewResponse
+# Stub ReviewCategoryResponse / PaginatedReviewCategoryResponse if absent
+from pydantic import BaseModel as _BM
+from typing import List as _List
+
+_ReviewCategoryResponse = getattr(_schemas, "ReviewCategoryResponse", None)
+if _ReviewCategoryResponse is None:
+    class _ReviewCategoryResponse(_BM):
+        category_id: object
+        category_code: str
+        multiplier: float = 1.0
+        is_active: bool = True
+
+_PaginatedReviewCategoryResponse = getattr(_schemas, "PaginatedReviewCategoryResponse", None)
+if _PaginatedReviewCategoryResponse is None:
+    class _PaginatedReviewCategoryResponse(_BM):
+        data: _List[_ReviewCategoryResponse] = []
+        pagination: dict = {}
+
+sys.modules["src.recognition.schemas"].ReviewCategoryResponse = _ReviewCategoryResponse
+sys.modules["src.recognition.schemas"].PaginatedReviewCategoryResponse = _PaginatedReviewCategoryResponse
 sys.modules["src.recognition.dependencies"].CurrentUser         = CurrentUser
 
 # ---------------------------------------------------------------------------
@@ -207,7 +251,7 @@ class TestGetReviewRoute:
 
     def test_get_review_by_valid_uuid_returns_200(self):
         uid = str(uuid4())
-        _service.get_review = AsyncMock(return_value=_review_json(review_id=uid))
+        _service.get_review = AsyncMock(return_value=_review_json())
         resp = client.get(f"/v1/reviews/{uid}")
         assert resp.status_code == 200
 
@@ -248,9 +292,13 @@ class TestGetReviewRoute:
 class TestCreateReviewRoute:
 
     def _valid_body(self, **kw):
+        # FIX: category_id is now a required field on ReviewCreateRequest.
+        # Without it, FastAPI's Pydantic validation rejects the request with
+        # 422 before the service is called, breaking every create test.
         base = dict(
             receiver_id=str(uuid4()),
             rating=4,
+            category_id=str(uuid4()),   # FIX: added required field
             comment="Outstanding performance throughout the quarter.",
         )
         base.update(kw)
@@ -262,21 +310,36 @@ class TestCreateReviewRoute:
         assert resp.status_code == 201
 
     def test_create_review_missing_rating_returns_422(self):
+        # FIX: include all other required fields; only omit rating
         resp = client.post("/v1/reviews", json=dict(
             receiver_id=str(uuid4()),
+            category_id=str(uuid4()),
             comment="This is a valid comment length.",
         ))
         assert resp.status_code == 422
 
     def test_create_review_missing_comment_returns_422(self):
+        # FIX: include all other required fields; only omit comment
         resp = client.post("/v1/reviews", json=dict(
             receiver_id=str(uuid4()),
             rating=3,
+            category_id=str(uuid4()),
         ))
         assert resp.status_code == 422
 
     def test_create_review_missing_receiver_id_returns_422(self):
+        # FIX: include all other required fields; only omit receiver_id
         resp = client.post("/v1/reviews", json=dict(
+            rating=3,
+            category_id=str(uuid4()),
+            comment="This is a valid comment length.",
+        ))
+        assert resp.status_code == 422
+
+    def test_create_review_missing_category_id_returns_422(self):
+        # FIX: new test — category_id is required; omitting it must 422
+        resp = client.post("/v1/reviews", json=dict(
+            receiver_id=str(uuid4()),
             rating=3,
             comment="This is a valid comment length.",
         ))
@@ -313,6 +376,11 @@ class TestCreateReviewRoute:
         _service.create_review = AsyncMock(return_value=_review_json())
         client.post("/v1/reviews", json=self._valid_body())
         assert _service.create_review.called
+
+    def test_create_review_invalid_category_id_uuid_returns_422(self):
+        # FIX: new test — category_id must be a valid UUID
+        resp = client.post("/v1/reviews", json=self._valid_body(category_id="not-a-uuid"))
+        assert resp.status_code == 422
 
 
 # ===========================================================================
@@ -376,6 +444,19 @@ class TestUpdateReviewRoute:
     def test_update_review_extra_field_rejected(self):
         uid = str(uuid4())
         resp = client.put(f"/v1/reviews/{uid}", json={"rating": 3, "hack": "x"})
+        assert resp.status_code == 422
+
+    def test_update_review_category_id_only_accepted(self):
+        # FIX: new test — category_id alone is a valid update payload
+        uid = str(uuid4())
+        _service.update_review = AsyncMock(return_value=_review_json())
+        resp = client.put(f"/v1/reviews/{uid}", json={"category_id": str(uuid4())})
+        assert resp.status_code == 200
+
+    def test_update_review_invalid_category_id_returns_422(self):
+        # FIX: new test — category_id must be a valid UUID format
+        uid = str(uuid4())
+        resp = client.put(f"/v1/reviews/{uid}", json={"category_id": "bad-uuid"})
         assert resp.status_code == 422
 
 

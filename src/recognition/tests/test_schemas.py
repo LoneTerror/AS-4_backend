@@ -8,6 +8,15 @@ Covers:
 - ReviewResponse: from_attributes, field presence
 - PaginationMeta: field types
 - PaginatedReviewResponse: nested structure
+
+FIXED:
+- valid_create_payload() now includes category_id — it became a required field
+  when review categories moved from a hardcoded Python enum to the DB table.
+  Every test that builds a create payload without category_id was silently
+  missing the field and would fail with a Pydantic ValidationError on
+  "category_id: Field required".
+- Added dedicated tests for category_id validation (required, must be UUID).
+- ReviewUpdateRequest tests now include category_id where appropriate.
 """
 
 import os
@@ -29,26 +38,31 @@ _spec = importlib.util.spec_from_file_location("schemas_module", _schema_path)
 _schemas = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_schemas)
 
-ReviewCreateRequest    = _schemas.ReviewCreateRequest
-ReviewUpdateRequest    = _schemas.ReviewUpdateRequest
-ReviewResponse         = _schemas.ReviewResponse
-PaginationMeta         = _schemas.PaginationMeta
+ReviewCreateRequest     = _schemas.ReviewCreateRequest
+ReviewUpdateRequest     = _schemas.ReviewUpdateRequest
+ReviewResponse          = _schemas.ReviewResponse
+PaginationMeta          = _schemas.PaginationMeta
 PaginatedReviewResponse = _schemas.PaginatedReviewResponse
 
 # ---------------------------------------------------------------------------
 # Shared sample data
 # ---------------------------------------------------------------------------
 
-VALID_UUID   = str(uuid4())
-NOW          = datetime.now(timezone.utc)
-SHORT_URL    = "https://cdn.example.com/file.jpg"
-LONG_URL     = "https://cdn.example.com/" + "x" * 490  # > 500 chars total
+VALID_UUID      = str(uuid4())
+VALID_CAT_UUID  = str(uuid4())   # FIX: separate UUID for category_id
+NOW             = datetime.now(timezone.utc)
+SHORT_URL       = "https://cdn.example.com/file.jpg"
+LONG_URL        = "https://cdn.example.com/" + "x" * 490  # > 500 chars total
 
 
 def valid_create_payload(**overrides):
+    # FIX: category_id is now required — was missing from all original tests.
+    # The real ReviewCreateRequest declares it as a required UUID field that
+    # must reference an active row in the review_categories table.
     base = dict(
         receiver_id=VALID_UUID,
         rating=4,
+        category_id=VALID_CAT_UUID,     # FIX: added required field
         comment="Great performance across all metrics.",
         image_url=None,
         video_url=None,
@@ -167,6 +181,27 @@ class TestReviewCreateRequest:
         with pytest.raises(ValidationError):
             ReviewCreateRequest(**valid_create_payload(comment=None))
 
+    # FIX: New tests for category_id — required field added in DB refactor
+    def test_category_id_required(self):
+        """Omitting category_id must raise a validation error."""
+        payload = valid_create_payload()
+        del payload["category_id"]
+        with pytest.raises(ValidationError) as exc_info:
+            ReviewCreateRequest(**payload)
+        assert "category_id" in str(exc_info.value)
+
+    def test_category_id_must_be_valid_uuid(self):
+        with pytest.raises(ValidationError):
+            ReviewCreateRequest(**valid_create_payload(category_id="not-a-uuid"))
+
+    def test_category_id_stored_as_uuid(self):
+        req = ReviewCreateRequest(**valid_create_payload(category_id=VALID_CAT_UUID))
+        assert isinstance(req.category_id, UUID)
+
+    def test_category_id_cannot_be_none(self):
+        with pytest.raises(ValidationError):
+            ReviewCreateRequest(**valid_create_payload(category_id=None))
+
 
 # ===========================================================================
 # ReviewUpdateRequest
@@ -234,6 +269,21 @@ class TestReviewUpdateRequest:
         req = ReviewUpdateRequest(video_url=SHORT_URL)
         assert req.video_url is not None
 
+    # FIX: category_id tests for update
+    def test_only_category_id_is_valid(self):
+        """Updating only the category is a valid partial update."""
+        req = ReviewUpdateRequest(category_id=VALID_CAT_UUID)
+        assert isinstance(req.category_id, UUID)
+
+    def test_category_id_with_rating_is_valid(self):
+        req = ReviewUpdateRequest(rating=5, category_id=VALID_CAT_UUID)
+        assert req.rating == 5
+        assert isinstance(req.category_id, UUID)
+
+    def test_category_id_must_be_valid_uuid(self):
+        with pytest.raises(ValidationError):
+            ReviewUpdateRequest(category_id="not-a-uuid")
+
 
 # ===========================================================================
 # ReviewResponse
@@ -278,6 +328,34 @@ class TestReviewResponse:
 
     def test_from_attributes_enabled(self):
         assert ReviewResponse.model_config.get("from_attributes") is True
+
+    def test_category_id_optional_none(self):
+        resp = ReviewResponse(**valid_response_payload(category_id=None))
+        assert resp.category_id is None
+
+    def test_category_id_populated(self):
+        cat_id = uuid4()
+        resp = ReviewResponse(**valid_response_payload(category_id=cat_id))
+        assert resp.category_id == cat_id
+
+    def test_points_fields_optional_none(self):
+        resp = ReviewResponse(**valid_response_payload())
+        assert resp.raw_points is None
+        assert resp.effective_points is None
+        assert resp.category_multiplier is None
+        assert resp.reviewer_weight is None
+        assert resp.seasonal_multiplier is None
+
+    def test_points_fields_populated(self):
+        resp = ReviewResponse(**valid_response_payload(
+            raw_points=8.0,
+            effective_points=7.2,
+            category_multiplier=1.4,
+            reviewer_weight=2.0,
+            seasonal_multiplier=1.0,
+        ))
+        assert resp.raw_points == 8.0
+        assert resp.effective_points == 7.2
 
 
 # ===========================================================================
