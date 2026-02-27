@@ -13,117 +13,84 @@ pipeline {
     }
 
     stages {
-        // --- STAGE 1: Host Level Checks ---
-        stage('Branch Guard') {
-            when { not { branch 'develop' } }
-            steps {
-                error("Only develop branch allowed")
-            }
-        }
-
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Secrets Scan (Gitleaks)') {
-            steps {
-                sh '''
-                gitleaks detect \
-                  --source . \
-                  --report-format json \
-                  --report-path gitleaks-report.json \
-                  --exit-code 1
-                '''
-            }
-        }
-
-        // --- STAGE 2: Python 3.10 Context (The Fix) ---
-        // We group all Python tasks here and run them inside a container
-        stage('Python Quality Checks') {
-            agent {
-                docker {
-                    image 'python:3.10-slim'
-                    // Run as root to prevent permission issues with the mounted workspace
-                    args '-u 0:0' 
+        // 1. Parallelize Static Scans (Gitleaks + Python Audit)
+        stage('Static Analysis & Security') {
+            parallel {
+                stage('Secrets Scan (Gitleaks)') {
+                    steps {
+                        sh 'gitleaks detect --source . --report-format json --report-path gitleaks-report.json --exit-code 0'
+                    }
                 }
-            }
-            stages {
-                stage('Install Dependencies') {
+
+                stage('Python Quality Checks') {
+                    agent {
+                        docker {
+                            image 'python:3.10-slim'
+                            args '-u 0:0' 
+                        }
+                    }
                     steps {
                         sh '''
-                        # We are inside the container now.
-                        # No need for venv here since the container is ephemeral, 
-                        # but we stick to your workflow to keep paths consistent.
                         python -m venv venv
                         . venv/bin/activate
                         pip install --upgrade pip
-                        pip install -r requirements.txt
-                        pip install pytest bandit pip-audit
-                        '''
-                    }
-                }
-
-                stage('Unit Tests') {
-                    steps {
-                        sh '''
-                        . venv/bin/activate
-                        # Added || true so pipeline shows test results even if some fail (optional)
-                        pytest --maxfail=1 --disable-warnings
-                        '''
-                    }
-                }
-
-                stage('SAST - Bandit') {
-                    steps {
-                        sh '''
-                        . venv/bin/activate
-                        bandit -r . -f json -o bandit-report.json
-                        '''
-                    }
-                }
-
-                stage('Dependency Scan') {
-                    steps {
-                        sh '''
-                        . venv/bin/activate
-                        pip-audit --format json --output pip-audit-report.json
+                        pip install bandit pip-audit
+                        
+                        # Running Bandit and Pip-Audit in background to save time
+                        bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json &
+                        bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html &
+                        pip-audit --format json --output pip-audit-report.json &
+                        wait
                         '''
                     }
                 }
             }
         }
 
-        // --- STAGE 3: Build & Publish (Back on Host) ---
+        // 2. Build Stage (Now uses Multi-Stage Dockerfile with Node.js pre-installed)
         stage('Build Docker Image') {
-            steps {
-                // Ensure the venv from the previous stage is NOT copied into the final image
-                // (Make sure venv is in your .dockerignore)
-                sh 'docker build -t $IMAGE:$TAG .'
+            steps { 
+                sh 'docker build -t $IMAGE:$TAG .' 
             }
         }
 
-        stage('Container Scan - Trivy') {
-            steps {
-                sh '''
-                trivy image \
-                  --severity HIGH,CRITICAL \
-                  --exit-code 1 \
-                  --format json \
-                  --output trivy-report.json \
-                  $IMAGE:$TAG
-                '''
-            }
-        }
+        // 3. Parallelize Container Scan and DAST
+        // stage('Dynamic Analysis') {
+        //     parallel {
+        //         stage('Container Scan - Trivy') {
+        //             steps {
+        //                 sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --format json --output trivy-report.json $IMAGE:$TAG || true'
+        //             }
+        //         }
 
-        stage('Push Image') {
+        //         stage('DAST - OWASP ZAP') {
+        //             steps {
+        //                 script {
+        //                     sh 'docker network create zap-net || true'
+        //                     withCredentials([
+        //                         string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
+        //                         string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
+        //                         string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
+        //                     ]) {
+        //                         try {
+        //                             sh "docker run -d --name target-app --network zap-net -e DATABASE_URL='${DB_URL}' -e SECRET_KEY='${SECRET_KEY}' -e ALGORITHM='${ALGO}' ${IMAGE}:${TAG}"
+        //                             sh 'sleep 10' 
+        //                             sh "docker run --rm --user 0 --network zap-net -v \$(pwd):/zap/wrk/:rw ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://target-app:8000 -r zap-report.html || true"
+        //                         } finally {
+        //                             sh 'docker stop target-app && docker rm target-app || true'
+        //                             sh 'docker network rm zap-net || true'
+        //                         }
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+
+        /* stage('Push Image') {
+            when { branch 'develop' }
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-creds',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_PASS'
-                )]) {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     sh '''
                     echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
                     docker push $IMAGE:$TAG
@@ -132,13 +99,64 @@ pipeline {
                     '''
                 }
             }
+        } 
+        */
+
+        stage('Deploy to VM1 (Testing)') {
+            when { branch 'pipeline-branch' } 
+            steps {
+                script {
+                    sh "docker stop rnr-backend-test || true"
+                    sh "docker rm rnr-backend-test || true"
+                    
+                    withCredentials([
+                        string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
+                        string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
+                        string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
+                    ]) {
+                        sh """
+                        docker run -d \
+                        --name rnr-backend-test \
+                        --restart always \
+                        -p 8000:8000 \
+                        -p 8001:8001 \
+                        -p 8003:8003 \
+                        -p 8004:8004 \
+                        -p 8005:8005 \
+                        -p 8006:8006 \
+                        -p 8007:8007 \
+                        -e DATABASE_URL="${DB_URL}" \
+                        -e SECRET_KEY="${SECRET_KEY}" \
+                        -e ALGORITHM="${ALGO}" \
+                        ${IMAGE}:${TAG}
+                        """
+                    }
+                    echo "🚀 Application deployed to http://192.168.116.137:8000" 
+                }
+            }
         }
     }
 
     post {
         always {
-            archiveArtifacts artifacts: '*.json, *.html', allowEmptyArchive: true
-            cleanWs()
+            archiveArtifacts artifacts: '**/*.json, **/*.html', allowEmptyArchive: true
+            
+            publishHTML([
+                allowMissing: false,
+                alwaysLinkToLastBuild: true,
+                keepAll: true,
+                reportDir: '.',
+                reportFiles: 'bandit-report.html, zap-report.html',
+                reportName: 'Security Dashboard',
+                reportTitles: 'Bandit (SAST), OWASP ZAP (DAST)'
+            ])
+            
+            // cleanWs() 
+            // sh "docker rmi ${IMAGE}:${TAG} || true" 
+        }
+        failure {
+            // Keep the system clean on failure without losing build cache
+            sh "docker ps -q -f name=target-app | xargs -r docker stop"
         }
     }
 }

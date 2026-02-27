@@ -1,0 +1,9 @@
+# .dockerignore
+.npm/
+**/ .npm/
+node_modules/
+venv/
+.git/
+*.json
+*.html
+tests/
