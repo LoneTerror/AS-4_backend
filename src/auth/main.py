@@ -18,6 +18,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Auth Service",
     version="1.0.0",
+    root_path="/auth"
     openapi_url="/v1/openapi.json",
     docs_url="/v1/docs",
     lifespan=lifespan
