@@ -10,6 +10,7 @@ from src.employees import schemas
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
 
+
 logger = logging.getLogger(__name__)
 _notif = NotificationService(db)
 
@@ -33,6 +34,7 @@ async def list_employees(
     sort_by: Optional[str] = "created_at",
     sort_order: Optional[str] = "desc"
 ) -> schemas.EmployeeListResponse:
+    
 
     where_clause = {}
     and_conditions = []
@@ -63,9 +65,13 @@ async def list_employees(
     if and_conditions:
         where_clause["AND"] = and_conditions
 
+
     total_count = await db.employees.count(where=where_clause)
+
+
     total_pages = math.ceil(total_count / limit)
     skip = (page - 1) * limit
+
 
     allowed_sorts = ["created_at", "username", "date_of_joining"]
     sort_field = sort_by if sort_by in allowed_sorts else "created_at"
@@ -83,6 +89,7 @@ async def list_employees(
             "employees_employees_manager_idToemployees": True
         }
     )
+
 
     data = []
     for emp in employees:
@@ -124,6 +131,7 @@ async def list_employees(
 
 
 async def get_employee_detail(employee_id: str):
+
     emp = await db.employees.find_unique(
         where={"employee_id": employee_id},
         include={
@@ -134,6 +142,8 @@ async def get_employee_detail(employee_id: str):
             "status_master_employees_status_idTostatus_master": True,
             "employees_employees_manager_idToemployees": True,
             "wallets_wallets_employee_idToemployees": True,
+            
+
             "employee_roles_employee_roles_employee_idToemployees": {
                 "where": {"is_active": True},
                 "include": {"roles": True}
@@ -143,6 +153,7 @@ async def get_employee_detail(employee_id: str):
 
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
+
 
     emp_roles = emp.employee_roles_employee_roles_employee_idToemployees
     roles_list = []
@@ -154,6 +165,7 @@ async def get_employee_detail(employee_id: str):
                     role_name=er.roles.role_name,
                     role_code=er.roles.role_code
                 ))
+
 
     dept = emp.departments_employees_department_idTodepartments
     dept_type_resp = None
@@ -212,23 +224,23 @@ async def get_employee_detail(employee_id: str):
 
 
 async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: str):
-    # 1. Check uniqueness
+
     existing = await db.employees.find_first(
         where={"OR": [{"username": data.username}, {"email": data.email}]}
     )
     if existing:
         raise HTTPException(status_code=400, detail="Username or Email already exists")
 
-    # 2. Get Default Role
+
     default_role = await db.roles.find_unique(where={"role_code": "EMPLOYEE"})
     if not default_role:
         raise HTTPException(status_code=500, detail="Default 'EMPLOYEE' role not found")
 
-    # 3. Hash Password
+
     hashed_pwd = get_password_hash(data.password)
     now = datetime.now()
 
-    # 4. Atomic Transaction
+
     try:
         async with db.tx() as transaction:
             # A. Create Employee
@@ -325,6 +337,7 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
 
     except HTTPException:
         raise  # re-raise HTTP errors as-is
+
     except Exception as e:
         logger.exception("Error creating employee")
         raise HTTPException(status_code=400, detail=f"Creation failed: {str(e)}")
@@ -334,6 +347,7 @@ async def update_employee(employee_id: str, data: schemas.UpdateEmployeeRequest,
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items()}
     if not update_data:
         return await get_employee_detail(employee_id)
+
 
     for key in ["designation_id", "department_id", "manager_id", "status_id"]:
         if key in update_data and update_data[key]:

@@ -9,7 +9,6 @@ from src.core.logger import logger
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
 
-
 class RewardService:
     def __init__(self, db: Prisma):
         self.db = db
@@ -238,6 +237,7 @@ class RewardService:
             else:
                 status_msg = "In Stock"
 
+            # 3. Create Response Object
             mapped_data.append(schemas.RewardItemResponse(
                 catalog_id=item.catalog_id,
                 reward_name=item.reward_name,
@@ -392,7 +392,7 @@ class RewardService:
         3. START DB TRANSACTION
         4. Atomically deduct points & decrement stock with in-tx guard
         5. Create Transaction & History Records
-        6. Notify recipient (outside transaction — never rolls back the grant)
+          6. Notify recipient (outside transaction — never rolls back the grant)
         """
         logger.info(f"Initiating grant_reward. Catalog ID: {request.catalog_id}, Wallet ID: {request.wallet_id}")
 
@@ -536,7 +536,7 @@ class RewardService:
     # ─────────────────────────────────────────────────────────────────────────
     async def get_history(
         self,
-        wallet_id: Optional[str] = None,
+        wallet_id: Optional[str] = None, 
         page: int = 1,
         size: int = 10
     ):

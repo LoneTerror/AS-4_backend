@@ -1,5 +1,3 @@
-# src/notifications/email_sender.py
-
 """
 Lightweight async SMTP mailer.
 

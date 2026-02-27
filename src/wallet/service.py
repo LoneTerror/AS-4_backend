@@ -19,6 +19,18 @@ from src.recognition.points_engine import (
 logger = logging.getLogger(__name__)
 _notif = NotificationService(db)
 
+# ── Points engine import ───────────────────────────────────────────────────────
+# ReviewCategory was removed when multipliers moved to the DB.
+# Only the pure calculation helpers are still needed here (legacy fallback path).
+from src.recognition.points_engine import (
+    calculate_points,
+    quarters_elapsed,
+    apply_decay,
+)
+
+logger = logging.getLogger(__name__)
+_notif = NotificationService(db)
+
 
 logger = setup_logger(__name__)
 
@@ -29,9 +41,10 @@ logger = setup_logger(__name__)
 WNF = "Wallet not found"
 AD  = "Access Denied"
 
-
 def is_admin(user: CurrentUser) -> bool:
     return any(role in user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
+
+
 
 
 # -----------------------------
@@ -48,7 +61,7 @@ async def create_transaction(data, current_user: CurrentUser):
     wallet_id   = str(data.wallet_id)
     txn_type_id = str(data.transaction_type_id)
     created_by  = current_user.id
-    amount      = data.amount
+    amount = data.amount
 
     if amount <= 0:
         raise HTTPException(
@@ -110,8 +123,8 @@ async def create_transaction(data, current_user: CurrentUser):
             result = await transaction.wallets.update_many(
                 where={"wallet_id": wallet_id, "version": wallet.version},
                 data={
-                    "available_points":   new_available,
-                    "redeemed_points":    new_redeemed,
+                    "available_points":  new_available,
+                    "redeemed_points":   new_redeemed,
                     "total_earned_points": new_total,
                     "version":            wallet.version + 1,
                     "updated_by":         created_by,
@@ -145,6 +158,7 @@ async def create_transaction(data, current_user: CurrentUser):
                 new_txn.transaction_id,
             )
 
+
         final_txn = await db.transactions.find_unique(
             where={"transaction_id": new_txn.transaction_id},
             include={"status_master": True, "transaction_types": True}
@@ -175,14 +189,14 @@ async def get_transactions(
     if not wallet:
         raise HTTPException(status_code=404, detail=WNF)
 
-    if not is_admin(current_user) and wallet.employee_id != current_user.id:
-        raise HTTPException(status_code=403, detail=AD)
+        if not is_admin(current_user) and wallet.employee_id != current_user.id:
+            raise HTTPException(status_code=403, detail=AD)
 
-    page  = max(page, 1)
+    page = max(page, 1)
     limit = min(max(limit, 1), 100)
-    skip  = (page - 1) * limit
+    skip = (page - 1) * limit
 
-    where_clause: dict = {"wallet_id": wallet_id}
+    where_clause = {"wallet_id": wallet_id}
 
     if start_date or end_date:
         where_clause["transaction_at"] = {}
@@ -191,7 +205,7 @@ async def get_transactions(
         if end_date:
             where_clause["transaction_at"]["lte"] = end_date
 
-    if status_code:
+        if status_code:
         status_record = await db.status_master.find_unique(
             where={"status_code": status_code.upper()}
         )
@@ -206,7 +220,7 @@ async def get_transactions(
         include={"status_master": True, "transaction_types": True},
     )
 
-    total = await db.transactions.count(where=where_clause)
+     total = await db.transactions.count(where=where_clause)
 
     formatted = []
     for txn in transactions:
@@ -274,13 +288,9 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
 # -----------------------------
 
 async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
-    logger.info(
-        "Wallet fetch requested for employee_id=%s by user_id=%s",
-        employee_id,
-        current_user.id
-    )
     if not is_admin(current_user) and employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
+    wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
 
     wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
     if not wallet:
@@ -305,7 +315,7 @@ async def get_wallet_balance(wallet_id: str, current_user: CurrentUser):
 
     return {
         "wallet_id":        str(wallet.wallet_id),
-        "available_points": wallet.available_points,
+        "available_points": wallet.available_points
     }
 
 
@@ -481,7 +491,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                     detail="Wallet updated concurrently — please retry"
                 )
 
-        # ── Notify receiver (non-blocking) ────────────────────────────────
+         # ── Notify receiver (non-blocking) ────────────────────────────────
         try:
             stars = "⭐" * review.rating
             await _notif.create_notification(
@@ -523,6 +533,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
 
 
 async def get_transaction_types(current_user: CurrentUser):
+
     if not is_admin(current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=AD)
 

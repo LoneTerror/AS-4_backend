@@ -17,6 +17,7 @@ async def lifespan(app: FastAPI):
     await db.connect()
     print("Employee Service: 🟢 Database Connected")
 
+
     smtp_config = SMTPConfig.from_env()
     email_sender = EmailSender(smtp_config)
 
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
         name="email_notification_worker",
     )
     print("Employee Service: 📧 Email worker started")
+
 
     yield
 
@@ -58,7 +60,7 @@ app.add_middleware(
 
 API_PREFIX = "/v1"
 app.include_router(emp_router, prefix=API_PREFIX + "/employees", tags=["Employees"])
-app.include_router(notifications_router, tags=["Notifications"])  # already has /v1/notifications prefix
+app.include_router(notifications_router, tags=["Notifications"])
 
 @app.get("/health", tags=["System"])
 async def health_check():

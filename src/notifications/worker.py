@@ -1,5 +1,3 @@
-# src/notifications/worker.py
-
 """
 Background Email Worker
 ═══════════════════════
