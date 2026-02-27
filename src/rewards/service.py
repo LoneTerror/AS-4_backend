@@ -1,15 +1,18 @@
-import json,uuid
+import json, uuid
 from fastapi import HTTPException, status, Request
 from prisma import Prisma, Json
 from uuid import UUID
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone 
+from datetime import datetime, timezone
 from . import schemas
 from src.core.logger import logger
+from src.notifications.service import NotificationService
+from src.notifications.schemas import NotificationType
 
 class RewardService:
     def __init__(self, db: Prisma):
         self.db = db
+        self._notif = NotificationService(db)
 
     # 🕵️ AUDIT LOG HELPER (Private Method)
     async def _log_change(
@@ -52,7 +55,7 @@ class RewardService:
         )
         if not record:
             raise HTTPException(
-                status_code=500, 
+                status_code=500,
                 detail=f"System Configuration Error: {code_value} not found in {table}"
             )
         if table == "transaction_types": return record.type_id
@@ -74,7 +77,7 @@ class RewardService:
             logger.warning(f"Category creation failed: code '{request.category_code}' already exists")
             raise HTTPException(status_code=400, detail="Category code already exists")
 
-        new_category =  await self.db.reward_categories.create(
+        new_category = await self.db.reward_categories.create(
             data={
                 "category_name": request.category_name,
                 "category_code": request.category_code,
@@ -118,7 +121,7 @@ class RewardService:
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
 
-        updated_category =  await self.db.reward_categories.update(
+        updated_category = await self.db.reward_categories.update(
             where={"category_id": category_id},
             data=update_data
         )
@@ -237,7 +240,7 @@ class RewardService:
                 status_msg = "In Stock"
 
             # 3. Create Response Object
-            mapped_item = schemas.RewardItemResponse(
+            mapped_data.append(schemas.RewardItemResponse(
                 catalog_id=item.catalog_id,
                 reward_name=item.reward_name,
                 reward_code=item.reward_code,
@@ -249,9 +252,8 @@ class RewardService:
                 created_at=item.created_at,
                 category=cat_data,
                 stock_status=status_msg,
-                available_stock=item.available_stock 
-            )
-            mapped_data.append(mapped_item)
+                available_stock=item.available_stock
+            ))
 
         total_pages = (total_items + size - 1) // size
         
@@ -336,7 +338,10 @@ class RewardService:
         new_max = request.max_points if request.max_points is not None else existing_item.max_points
         
         if new_min > new_max:
-            raise HTTPException(status_code=400, detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})"
+            )
 
         update_data = request.model_dump(exclude_unset=True)
         if not update_data:
@@ -383,7 +388,7 @@ class RewardService:
             created_at=updated_item.created_at,
             category=cat_data,
             stock_status=self._get_stock_status(updated_item.available_stock),
-            available_stock=updated_item.available_stock  # ✅ FIX 1
+            available_stock=updated_item.available_stock
         )
 
     # REDEMPTION / GRANTING LOGIC (WITH INVENTORY)
@@ -395,6 +400,7 @@ class RewardService:
         3. START DB TRANSACTION
         4. Atomically deduct points & decrement stock with in-tx guard
         5. Create Transaction & History Records
+          6. Notify recipient (outside transaction — never rolls back the grant)
         """
         logger.info(f"Initiating grant_reward. Catalog ID: {request.catalog_id}, Wallet ID: {request.wallet_id}")
         reward_item = await self.db.reward_catalog.find_unique(
@@ -492,15 +498,37 @@ class RewardService:
                     }
                 )
 
-                logger.info(f"Transaction {ref_number} completed successfully for wallet {request.wallet_id}")
-                return {
-                    "history_id": history_record.history_id,
-                    "points": history_record.points,
-                    "granted_at": history_record.granted_at,
-                    "status": "COMPLETED",
-                    # Use live post-decrement value instead of stale pre-fetch snapshot
-                    "new_stock_level": updated_catalog.available_stock
-                }
+            # ── Notify recipient ───────────────────────────────────────────
+            # Intentionally OUTSIDE the db.tx() block so a notification
+            # failure can never roll back the redemption that just committed.
+            try:
+                new_balance = wallet.available_points - request.points
+                await self._notif.create_notification(
+                    employee_id=wallet.employee_id,
+                    title=f"You redeemed \"{reward_item.reward_name}\" 🎁",
+                    message=(
+                        f"{request.points} points were used to redeem "
+                        f"\"{reward_item.reward_name}\". "
+                        f"Your remaining balance is {new_balance} points."
+                        + (f" Note: {request.comment}" if request.comment else "")
+                    ),
+                    type=NotificationType.REWARD,
+                )
+            except Exception:
+                logger.exception(
+                    "Redemption notification failed for history %s — redemption was completed successfully",
+                    history_record.history_id,
+                )
+
+            logger.info(f"Transaction {ref_number} completed successfully for wallet {request.wallet_id}")
+            return {
+                "history_id": history_record.history_id,
+                "points": history_record.points,
+                "granted_at": history_record.granted_at,
+                "status": "COMPLETED",
+                # Use live post-decrement value instead of stale pre-fetch snapshot
+                "new_stock_level": updated_catalog.available_stock
+            }
 
         except HTTPException:
             # Re-raise clean HTTP errors (e.g. the out-of-stock guard above) without
@@ -511,9 +539,9 @@ class RewardService:
             raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
         
     async def get_history(
-        self, 
+        self,
         wallet_id: Optional[str] = None, 
-        page: int = 1, 
+        page: int = 1,
         size: int = 10
     ):
         skip_count = (page - 1) * size
@@ -526,10 +554,10 @@ class RewardService:
             where=where_clause,
             skip=skip_count,
             take=size,
-            order={"granted_at": "desc"}, 
+            order={"granted_at": "desc"},
             include={
                 "reward_catalog": True,
-                "employees_reward_history_granted_byToemployees": True 
+                "employees_reward_history_granted_byToemployees": True
             }
         )
 

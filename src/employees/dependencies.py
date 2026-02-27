@@ -1,8 +1,10 @@
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.core.security import decode_token
+from src.prisma.client import db
+from prisma import Prisma
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="http://localhost:8001/v1/auth/login")
+bearer_scheme = HTTPBearer()
 
 class CurrentEmployee:
     def __init__(self, id: str, roles: list, email: str):
@@ -10,8 +12,10 @@ class CurrentEmployee:
         self.roles = roles
         self.email = email
 
-async def get_current_employee(token: str = Depends(oauth2_scheme)) -> CurrentEmployee:
-    payload = decode_token(token)
+async def get_current_employee(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+) -> CurrentEmployee:
+    payload = decode_token(credentials.credentials)
 
     if not payload:
         raise HTTPException(
@@ -29,4 +33,7 @@ async def get_current_employee(token: str = Depends(oauth2_scheme)) -> CurrentEm
         id=payload.get("sub"),
         roles=roles,
         email=payload.get("email")
-    )
+     )
+
+def get_db() -> Prisma:
+    return db

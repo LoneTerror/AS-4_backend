@@ -1,3 +1,4 @@
+import logging
 import math
 from typing import List, Optional
 from uuid import UUID
@@ -6,12 +7,20 @@ from passlib.context import CryptContext
 from fastapi import HTTPException, status
 from src.prisma.client import db
 from src.employees import schemas
+from src.notifications.service import NotificationService
+from src.notifications.schemas import NotificationType
+
+
+logger = logging.getLogger(__name__)
+_notif = NotificationService(db)
 
 # Password Hashing Config
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
 
 async def list_employees(
     page: int,
@@ -26,7 +35,7 @@ async def list_employees(
     sort_order: Optional[str] = "desc"
 ) -> schemas.EmployeeListResponse:
     
-    # 1. Build Where Clause
+
     where_clause = {}
     and_conditions = []
 
@@ -38,12 +47,12 @@ async def list_employees(
         and_conditions.append({"status_id": str(status_id)})
     if manager_id:
         and_conditions.append({"manager_id": str(manager_id)})
-    
+
     if is_active is not None:
         if is_active:
-             and_conditions.append({"status_master_employees_status_idTostatus_master": {"is": {"status_code": "ACTIVE"}}})
+            and_conditions.append({"status_master_employees_status_idTostatus_master": {"is": {"status_code": "ACTIVE"}}})
         else:
-             and_conditions.append({"status_master_employees_status_idTostatus_master": {"is_not": {"status_code": "ACTIVE"}}})
+            and_conditions.append({"status_master_employees_status_idTostatus_master": {"is_not": {"status_code": "ACTIVE"}}})
 
     if search:
         and_conditions.append({
@@ -56,14 +65,14 @@ async def list_employees(
     if and_conditions:
         where_clause["AND"] = and_conditions
 
-    # 2. Count Total
+
     total_count = await db.employees.count(where=where_clause)
 
-    # 3. Pagination
+
     total_pages = math.ceil(total_count / limit)
     skip = (page - 1) * limit
 
-    # 4. Fetch Data
+
     allowed_sorts = ["created_at", "username", "date_of_joining"]
     sort_field = sort_by if sort_by in allowed_sorts else "created_at"
     order = sort_order if sort_order in ["asc", "desc"] else "desc"
@@ -81,7 +90,7 @@ async def list_employees(
         }
     )
 
-    # 5. Transform Data
+
     data = []
     for emp in employees:
         dept = emp.departments_employees_department_idTodepartments
@@ -122,7 +131,7 @@ async def list_employees(
     )
 
 async def get_employee_detail(employee_id: str):
-    # Fetch with specific, deep includes
+
     emp = await db.employees.find_unique(
         where={"employee_id": employee_id},
         include={
@@ -134,12 +143,10 @@ async def get_employee_detail(employee_id: str):
             "employees_employees_manager_idToemployees": True,
             "wallets_wallets_employee_idToemployees": True,
             
-            # Roles relation (Deep fetch)
+
             "employee_roles_employee_roles_employee_idToemployees": {
                 "where": {"is_active": True},
-                "include": {
-                    "roles": True
-                }
+                "include": {"roles": True}
             }
         }
     )
@@ -147,7 +154,7 @@ async def get_employee_detail(employee_id: str):
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    # Map Roles
+
     emp_roles = emp.employee_roles_employee_roles_employee_idToemployees
     roles_list = []
     
@@ -160,7 +167,7 @@ async def get_employee_detail(employee_id: str):
                     role_code=er.roles.role_code
                 ))
 
-    # Helpers
+
     dept = emp.departments_employees_department_idTodepartments
     dept_type_resp = None
     if dept and dept.department_types:
@@ -223,26 +230,26 @@ async def get_employee_detail(employee_id: str):
     )
 
 async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: str):
-    # 1. Check uniqueness
+
     existing = await db.employees.find_first(
         where={"OR": [{"username": data.username}, {"email": data.email}]}
     )
     if existing:
         raise HTTPException(status_code=400, detail="Username or Email already exists")
 
-    # 2. Get Default Role
+
     default_role = await db.roles.find_unique(where={"role_code": "EMPLOYEE"})
     if not default_role:
         raise HTTPException(status_code=500, detail="Default 'EMPLOYEE' role not found")
 
-    # 3. Hash Password
+
     hashed_pwd = get_password_hash(data.password)
     now = datetime.now()
 
-    # 4. Atomic Transaction
+
     try:
         async with db.tx() as transaction:
-            # A. Create Employee (Use Scalars for IDs)
+            # A. Create Employee
             new_emp = await transaction.employees.create(
                 data={
                     "username": data.username,
@@ -292,7 +299,7 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
                 if new_emp.status_master_employees_status_idTostatus_master.status_code == "ACTIVE":
                     is_active = True
 
-            return schemas.EmployeeCreatedResponse(
+            response = schemas.EmployeeCreatedResponse(
                 employee_id=new_emp.employee_id,
                 username=new_emp.username,
                 email=new_emp.email,
@@ -313,8 +320,33 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
                 )
             )
 
+        # ── Welcome notification (outside transaction) ─────────────────────
+        # Runs after the transaction commits so the employee record is
+        # guaranteed to exist before we reference their ID.
+        # Failure here never rolls back the employee creation.
+        try:
+            await _notif.create_notification(
+                employee_id=new_emp.employee_id,
+                title="Welcome to the platform! 🎉",
+                message=(
+                    f"Hi {new_emp.username}, your account is ready. "
+                    "You can now give and receive recognition from your peers."
+                ),
+                type=NotificationType.SYSTEM,
+            )
+        except Exception:
+            logger.exception(
+                "Welcome notification failed for employee %s — account was created successfully",
+                new_emp.employee_id,
+            )
+
+        return response
+
+    except HTTPException:
+        raise  # re-raise HTTP errors as-is
+
     except Exception as e:
-        print(f"Error creating employee: {e}")
+        logger.exception("Error creating employee")
         raise HTTPException(status_code=400, detail=f"Creation failed: {str(e)}")
 
 async def update_employee(employee_id: str, data: schemas.UpdateEmployeeRequest, updated_by_id: str):
@@ -322,7 +354,7 @@ async def update_employee(employee_id: str, data: schemas.UpdateEmployeeRequest,
     if not update_data:
         return await get_employee_detail(employee_id)
 
-    # Convert UUIDs to strings
+
     for key in ["designation_id", "department_id", "manager_id", "status_id"]:
         if key in update_data and update_data[key]:
             update_data[key] = str(update_data[key])
@@ -342,7 +374,7 @@ async def patch_employee(employee_id: str, updated_by_id: str):
         where={"status_code": "INACTIVE"}
     )
     if not inactive_status:
-         raise HTTPException(status_code=500, detail="INACTIVE status not found")
+        raise HTTPException(status_code=500, detail="INACTIVE status not found")
 
     await db.employees.update(
         where={"employee_id": employee_id},
