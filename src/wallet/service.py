@@ -7,14 +7,7 @@ from src.wallet.dependencies import CurrentUser
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
 
-# ── Points engine import ───────────────────────────────────────────────────────
-# ReviewCategory was removed when multipliers moved to the DB.
-# Only the pure calculation helpers are still needed here (legacy fallback path).
-from src.recognition.points_engine import (
-    calculate_points,
-    quarters_elapsed,
-    apply_decay,
-)
+from src.recognition.points_engine import calculate_points
 
 logger = logging.getLogger(__name__)
 _notif = NotificationService(db)
@@ -316,30 +309,35 @@ async def get_points_summary(wallet_id: str, current_user: CurrentUser):
     )
 
     return {
-        "wallet_id":          wallet_id,
-        "points_this_month":  sum(t.amount for t in month_txns),
-        "points_this_year":   sum(t.amount for t in year_txns),
+        "wallet_id":         wallet_id,
+        "points_this_month": sum(t.amount for t in month_txns),
+        "points_this_year":  sum(t.amount for t in year_txns),
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REVIEW → WALLET CREDIT  (the key function)
+# REVIEW → WALLET CREDIT
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     """
     Credit the receiver's wallet for a review.
 
-    Points formula (via points_engine):
-        raw_points = rating × category_multiplier × reviewer_weight × seasonal_multiplier
+    Points are read from reviews.raw_points (frozen at write time by the
+    recognition service).  For legacy rows that pre-date raw_points storage,
+    we re-derive it by summing multiplier_snapshots from review_category_tags
+    and looking up the reviewer_weight and seasonal_multiplier from their
+    source tables.
 
-    The integer part of raw_points is credited to the wallet.
     Idempotent: a UniqueViolationError on reference_number means already credited.
     """
     review_id = str(review_id)
 
-    # ── 1. Fetch the review ───────────────────────────────────────────────
-    review = await db.reviews.find_unique(where={"review_id": review_id})
+    # ── 1. Fetch review ───────────────────────────────────────────────────
+    review = await db.reviews.find_unique(
+        where={"review_id": review_id},
+        include={"review_category_tags": True},
+    )
     if not review:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
 
@@ -347,46 +345,74 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     created_by  = review.created_by
 
     # ── 2. Resolve points ─────────────────────────────────────────────────
-    #
-    # Happy path: use pre-computed raw_points stored on the review row.
-    # Legacy path: recalculate using multipliers stored on the review row,
-    #              falling back to 1.0 defaults if they were never stored.
-    #
     if review.raw_points is not None:
+        # Happy path: use the value frozen at write time.
         points = max(1, round(review.raw_points))
         breakdown = {
-            "source":              "stored",
-            "raw_points":          review.raw_points,
-            "category":            review.category_code,
-            "category_multiplier": review.category_multiplier,
-            "reviewer_weight":     review.reviewer_weight,
-            "seasonal_multiplier": review.seasonal_multiplier,
+            "source":     "stored",
+            "raw_points": review.raw_points,
         }
     else:
-        # Legacy review — recalculate with the new engine signature.
-        # All multipliers are read from the review row itself; if absent,
-        # default to 1.0 (neutral) so the rating alone determines points.
+        # Legacy path: review predates raw_points column.
+        # Re-derive from source tables — never read dropped columns.
         logger.warning(
-            "review %s has no raw_points — recalculating with defaults", review_id
+            "review %s has no raw_points — recalculating from source tables", review_id
         )
-        category_multiplier = float(review.category_multiplier or 1.0)
-        reviewer_weight     = float(review.reviewer_weight     or 1.0)
-        seasonal_multiplier = float(review.seasonal_multiplier or 1.0)
-        decay_rate          = 0.9   # sensible default; ideally read from points_config
-        review_dt           = review.review_at or datetime.now(timezone.utc)
+        tags = getattr(review, "review_category_tags", []) or []
+        total_category_multiplier = (
+            sum(float(t.multiplier_snapshot) for t in tags) if tags else 1.0
+        )
+
+        # Reviewer weight from roles table
+        from src.recognition.service import _ROLE_PRIORITY
+        reviewer_weight = 1.0
+        reviewer = await db.employees.find_unique(
+            where={"employee_id": review.reviewer_id},
+            include={"employee_roles": {"include": {"roles": True}, "where": {"is_active": True}}},
+        )
+        if reviewer and reviewer.employee_roles:
+            active_role_codes = [
+                er.roles.role_code
+                for er in reviewer.employee_roles
+                if er.roles
+            ]
+            for role_code in _ROLE_PRIORITY:
+                if role_code in active_role_codes:
+                    role_row = await db.roles.find_first(where={"role_code": role_code})
+                    if role_row:
+                        reviewer_weight = float(role_row.reviewer_weight)
+                    break
+
+        # Seasonal multiplier from seasonal_multipliers table
+        review_dt = review.review_at or datetime.now(timezone.utc)
+        if review_dt.tzinfo is None:
+            review_dt = review_dt.replace(tzinfo=timezone.utc)
+        quarter = (review_dt.month - 1) // 3 + 1
+        seasonal_row = await db.seasonal_multipliers.find_first(
+            where={
+                "quarter": quarter,
+                "OR": [
+                    {"effective_from": None},
+                    {"effective_from": {"lte": review_dt}},
+                ],
+            },
+            order={"effective_from": "desc"},
+        )
+        seasonal_multiplier = float(seasonal_row.multiplier) if seasonal_row else 1.0
+
+        category_codes = ",".join(
+            t.category_code_snapshot for t in tags
+        ) if tags else "UNKNOWN"
 
         pts = calculate_points(
-            rating              = review.rating,
-            category_multiplier = category_multiplier,
-            reviewer_weight     = reviewer_weight,
-            seasonal_multiplier = seasonal_multiplier,
-            decay_rate          = decay_rate,
-            review_dt           = review_dt,
-            category_code       = review.category_code or "UNKNOWN",
+            rating                    = review.rating,
+            total_category_multiplier = total_category_multiplier,
+            reviewer_weight           = reviewer_weight,
+            seasonal_multiplier       = seasonal_multiplier,
+            category_code             = category_codes,
         )
         points    = max(1, round(pts.raw_points))
-        breakdown = pts.as_dict()
-        breakdown["source"] = "recalculated"
+        breakdown = {**pts.as_dict(), "source": "recalculated"}
 
     if points == 0:
         return {"message": "No points awarded for this rating", "credited_points": 0}
@@ -412,11 +438,15 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
             detail="APPROVED status not found in status_master. Run seed_transaction_types.py"
         )
 
-    # ── 6. Idempotent reference — one credit per review, forever ──────────
+    # ── 6. Write transaction + update wallet ──────────────────────────────
     reference     = f"REVIEW-{review_id}"
     new_available = wallet.available_points    + points
     new_total     = wallet.total_earned_points + points
-    category_label = review.category_code or "REVIEW"
+
+    tags        = getattr(review, "review_category_tags", []) or []
+    category_label = (
+        ",".join(t.category_code_snapshot for t in tags) if tags else "REVIEW"
+    )
 
     try:
         async with db.tx() as txn:
@@ -427,17 +457,13 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                     "transaction_type_id": txn_type.type_id,
                     "status_id":           status_record.status_id,
                     "description":         (
-                        f"{review.rating}★ {category_label} review "
-                        f"→ {points} pts "
-                        f"(×{review.category_multiplier or 1.0} cat, "
-                        f"×{review.reviewer_weight or 1.0} role, "
-                        f"×{review.seasonal_multiplier or 1.0} seasonal)"
+                        f"{review.rating}★ {category_label} review → {points} pts"
                     ),
-                    "reference_number":    reference,
-                    "created_by":          created_by,
-                    "updated_by":          created_by,
-                    "created_at":          datetime.now(timezone.utc),
-                    "updated_at":          datetime.now(timezone.utc),
+                    "reference_number": reference,
+                    "created_by":       created_by,
+                    "updated_by":       created_by,
+                    "created_at":       datetime.now(timezone.utc),
+                    "updated_at":       datetime.now(timezone.utc),
                 }
             )
 
@@ -514,6 +540,7 @@ async def get_transaction_types(current_user: CurrentUser):
         for t in types
     ]
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # REVIEW UPDATE → WALLET ADJUSTMENT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -529,24 +556,15 @@ async def adjust_wallet_for_review_update(
     delta_points = new_raw_points - old_raw_points
       > 0  →  credit  (rating/category increased)
       < 0  →  debit   (rating/category decreased)
-
-    Uses optimistic locking (version field) and a unique reference_number to
-    stay idempotent.  The reference pattern is:
-        REVIEW-UPDATE-{review_id}-{iso_timestamp_seconds}
-
-    If the wallet has insufficient points for a debit the adjustment is skipped
-    and logged (we never leave the wallet negative due to an admin edit).
-
-    Raises HTTPException on hard failures; caller should catch and log.
     """
     review_id = str(review_id)
-    int_delta = round(delta_points)   # wallet operates in integer points
+    int_delta = round(delta_points)
 
     if int_delta == 0:
         return {"message": "No wallet adjustment needed (delta rounds to zero)",
                 "credited_points": 0, "new_balance": None}
 
-    # ── 1. Fetch review (for receiver + audit) ────────────────────────────
+    # ── 1. Fetch review ───────────────────────────────────────────────────
     review = await db.reviews.find_unique(where={"review_id": review_id})
     if not review:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
@@ -560,7 +578,6 @@ async def adjust_wallet_for_review_update(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=WNF)
 
     # ── 3. Debit floor guard ──────────────────────────────────────────────
-    # Never let an admin edit drive the wallet negative.
     if int_delta < 0 and wallet.available_points + int_delta < 0:
         logger.warning(
             "Skipping wallet debit for review update %s — would go negative "
@@ -573,7 +590,7 @@ async def adjust_wallet_for_review_update(
             "new_balance":     wallet.available_points,
         }
 
-    # ── 4. Resolve transaction type (CREDIT or DEBIT) ─────────────────────
+    # ── 4. Resolve transaction type ───────────────────────────────────────
     type_code = "CREDIT" if int_delta > 0 else "DEBIT"
     txn_type  = await db.transaction_types.find_unique(where={"type_code": type_code})
     if not txn_type:
@@ -593,15 +610,10 @@ async def adjust_wallet_for_review_update(
     # ── 6. Compute new balances ───────────────────────────────────────────
     abs_delta     = abs(int_delta)
     new_available = wallet.available_points + int_delta
-    # total_earned_points only increases; debit does not reduce it.
     new_total     = wallet.total_earned_points + (int_delta if int_delta > 0 else 0)
 
-    # Unique reference per adjustment — timestamp-scoped so a second edit on
-    # the same review within the same second still gets a unique ref.
     now       = datetime.now(timezone.utc)
     reference = f"REVIEW-UPDATE-{review_id}-{now.strftime('%Y%m%dT%H%M%S')}"
-
-    category_label = review.category_code or "REVIEW"
     direction_word = "adjusted +" if int_delta > 0 else "adjusted "
 
     try:
@@ -613,7 +625,7 @@ async def adjust_wallet_for_review_update(
                     "transaction_type_id": txn_type.type_id,
                     "status_id":           status_record.status_id,
                     "description":         (
-                        f"Review update: {review.rating}★ {category_label} "
+                        f"Review update: {review.rating}★ "
                         f"→ wallet {direction_word}{int_delta:+d} pts "
                         f"(raw delta={delta_points:+.4f})"
                     ),
@@ -677,8 +689,6 @@ async def adjust_wallet_for_review_update(
         }
 
     except UniqueViolationError:
-        # Two simultaneous updates — the second one collides on the reference.
-        # Not a hard error; the first adjustment already went through.
         logger.warning(
             "Duplicate adjustment reference for review %s — skipping", review_id
         )
