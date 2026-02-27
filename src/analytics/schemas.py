@@ -1,42 +1,10 @@
-"""Pydantic response models for the ``GET /v1/dashboard/summary`` endpoint.
 
-This module defines the complete response schema for the dashboard
-summary API. Each model maps to a logical section of the response.
 
-Models:
-    EmployeeSummary: Authenticated employee's profile.
-    RecentReview: A single review received by the employee.
-    LeaderboardEntry: One row in the top‑N leaderboard.
-    MetricWithGrowth: A numeric KPI with month‑over‑month growth.
-    PlatformStats: Collection of platform‑wide KPIs.
-    DashboardSummaryResponse: Top‑level response returned by the endpoint.
-"""
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
 
-
-class EmployeeSummary(BaseModel):
-    """Profile snapshot for the authenticated employee.
-
-    Attributes:
-        employee_id: Unique UUID of the employee.
-        username: Display name (e.g. ``john.doe``).
-        designation: Job title resolved from the ``designations`` table.
-            Falls back to ``"N/A"`` when the relation is missing.
-        department: Department name resolved from the ``departments`` table.
-            Falls back to ``"N/A"`` when the relation is missing.
-    """
-
-    employee_id: UUID
-    username: str
-    designation: str
-    department: str
-
-    class Config:
-        from_attributes = True
 
 
 class RecentReview(BaseModel):
@@ -59,8 +27,7 @@ class RecentReview(BaseModel):
     comment: str
     review_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LeaderboardEntry(BaseModel):
@@ -83,30 +50,25 @@ class LeaderboardEntry(BaseModel):
     department: str
     total_earned_points: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MetricWithGrowth(BaseModel):
-    """A numeric KPI paired with its month‑over‑month growth rate.
+    """A numeric KPI paired with this month vs last month values.
 
     Attributes:
         value: The lifetime or current total count/amount.
-        growth_percent: Percentage change compared to the previous month.
-            Positive values indicate growth, negative values indicate decline.
-            If last month was 0 and this month is > 0, growth is ``100.0``.
-            If both months are 0, growth is ``0.0``.
+        this_month: Value for the current month.
+        last_month: Value for the previous month.
 
     Example::
 
-        {"value": 3000, "growth_percent": 25.0}
+        {"value": 3000, "this_month": 500, "last_month": 400}
     """
 
     value: int = Field(0, description="Lifetime / current total value")
-    growth_percent: float = Field(
-        0.0,
-        description="Percent change vs. last month (positive = increase)"
-    )
+    this_month: int = Field(0, description="Value for the current month")
+    last_month: int = Field(0, description="Value for the previous month")
 
 
 class PlatformStats(BaseModel):
@@ -129,19 +91,4 @@ class PlatformStats(BaseModel):
     active_users: MetricWithGrowth
 
 
-class DashboardSummaryResponse(BaseModel):
-    """Top‑level response for ``GET /v1/dashboard/summary``.
 
-    Attributes:
-        employee: Profile snapshot of the authenticated employee.
-        recent_reviews: Up to 5 most recent reviews received, newest first.
-        leaderboard: Top 10 employees ranked by total earned points.
-        platform_stats: Four KPIs (total_points, rewards_redeemed,
-            reviews_received, active_users), each with a lifetime value
-            and a month‑over‑month growth percentage.
-    """
-
-    employee: EmployeeSummary
-    recent_reviews: List[RecentReview] = []
-    leaderboard: List[LeaderboardEntry] = []
-    platform_stats: PlatformStats
