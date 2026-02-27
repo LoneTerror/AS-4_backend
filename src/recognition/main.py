@@ -5,21 +5,31 @@ from contextlib import asynccontextmanager
 
 from src.prisma.client import db
 from src.recognition.router import router as recognition_router
+from src.recognition.router import categories_router as review_categories_router
 from src.common.middleware import (
     request_rate_limit_middleware,
     http_exception_handler,
     validation_exception_handler,
-    generic_exception_handler
+    generic_exception_handler,
 )
 
-# Lifespan
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIFESPAN
+# ─────────────────────────────────────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
-    print("Recogntion Service: 🟢 Database Connected")
+    print("Recognition Service: 🟢 Database Connected")
     yield
     await db.disconnect()
     print("Recognition Service: 🔴 Database Disconnected")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APP
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="Recognition Service",
@@ -27,18 +37,27 @@ app = FastAPI(
     openapi_url="/v1/openapi.json",
     docs_url="/v1/docs",
     redoc_url="/v1/redoc",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# Register middleware
+# ─────────────────────────────────────────────────────────────────────────────
+# MIDDLEWARE
+# ─────────────────────────────────────────────────────────────────────────────
+
 app.middleware("http")(request_rate_limit_middleware)
 
-# Register exception handlers
+# ─────────────────────────────────────────────────────────────────────────────
+# EXCEPTION HANDLERS
+# ─────────────────────────────────────────────────────────────────────────────
+
 app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 
+# ─────────────────────────────────────────────────────────────────────────────
 # CORS
+# ─────────────────────────────────────────────────────────────────────────────
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -59,13 +78,26 @@ app.add_middleware(
     ],
 )
 
-# Router
-app.include_router(recognition_router, prefix="/v1", tags=["Recognition"])
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUTERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# /v1/reviews  — CRUD for reviews
+app.include_router(recognition_router,      prefix="/v1", tags=["Reviews"])
+
+# /v1/review-categories  — DB-driven category list (replaces hardcoded enum)
+app.include_router(review_categories_router, prefix="/v1", tags=["Review Categories"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "src.main:app",  
+        "src.main:app",
         host="0.0.0.0",
         port=8005,
-        reload=True
+        reload=True,
     )
