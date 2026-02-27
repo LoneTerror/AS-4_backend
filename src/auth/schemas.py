@@ -1,6 +1,21 @@
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, StringConstraints
+from typing import Optional, List, Annotated
 from uuid import UUID
+
+
+class SignUpRequest(BaseModel):
+    username: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+    ]
+    email: EmailStr
+    password: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
+    ]
+    designation_id: UUID
+    department_id: UUID
+    manager_id: Optional[UUID] = None
 
 
 # --- Shared Models ---
@@ -15,14 +30,7 @@ class EmployeeResponse(BaseModel):
         from_attributes = True
 
 
-# --- Request Schemas ---
-class SignUpRequest(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-    designation_id: UUID
-    department_id: UUID
-    manager_id: Optional[UUID] = None
+
 
 
 class LoginRequest(BaseModel):
