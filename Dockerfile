@@ -18,15 +18,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Set cache dirs to /app-owned paths BEFORE generating
+# Must be set BEFORE prisma generate so the binary lands in /app, not /root/.cache
 ENV XDG_CACHE_HOME="/app/.cache"
 ENV PRISMA_HOME="/app/.prisma"
 ENV PRISMA_PY_BINARIES_PATH="/app/prisma_binaries"
 
 RUN prisma generate
-
-# Make sure appuser will be able to read the binaries
-RUN chmod -R 755 /app/.cache /app/.prisma || true
 
 
 # =========================
@@ -44,15 +41,10 @@ COPY --from=builder /app /app
 
 RUN addgroup --system appgroup && adduser --system --group appuser
 
-# chown must happen BEFORE switching user, and must cover the cache dirs
+# /app/.cache and /app/.prisma are subdirectories of /app, so this covers them
 RUN chown -R appuser:appgroup /app
 
 USER appuser
-
-# These must match what was used during prisma generate
-ENV XDG_CACHE_HOME="/app/.cache"
-ENV PRISMA_HOME="/app/.prisma"
-ENV PRISMA_PY_BINARIES_PATH="/app/prisma_binaries"
 
 EXPOSE 8000 8001 8003 8004 8005 8006 8007
 

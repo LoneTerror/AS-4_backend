@@ -50,7 +50,7 @@ pipeline {
         // 2. Build Stage (Now uses Multi-Stage Dockerfile with Node.js pre-installed)
         stage('Build Docker Image') {
             steps { 
-                sh 'docker build -t $IMAGE:$TAG .' 
+                sh 'docker build --no-cache -t $IMAGE:$TAG .' 
             }
         }
 
