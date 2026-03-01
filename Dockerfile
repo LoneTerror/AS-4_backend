@@ -29,7 +29,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Generate Prisma client + engine
 RUN mkdir -p /app/prisma_binaries /app/.prisma /app/.cache
 COPY prisma/schema.prisma ./prisma/
-RUN prisma db pull
 RUN prisma generate
 
 

@@ -127,7 +127,7 @@ pipeline {
                         -p 8005:8005 \
                         -p 8006:8006 \
                         -p 8007:8007 \
-                        -e DATABASE_URL="${DB_URL}" \
+                        -e DATABASE_URL="${DATABASE_URL}" \
                         -e SECRET_KEY="${SECRET_KEY}" \
                         -e SMTP_PASSWORD="${SMTP_PASSWORD}" \
                         -e SMTP_USERNAME="${SMTP_USERNAME}" \
