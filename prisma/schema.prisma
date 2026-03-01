@@ -1,8 +1,8 @@
 generator client {
   provider                    = "prisma-client-py"
-  enable_experimental_decimal = "true"
   interface                   = "asyncio"
   recursive_type_depth        = "5"
+  enable_experimental_decimal = "true"
 }
 
 datasource db {
@@ -502,4 +502,19 @@ model wallets {
 
   @@index([available_points])
   @@index([total_earned_points])
+}
+
+model review_category_tags {
+  tag_id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  review_id              String            @db.Uuid
+  category_id            String            @db.Uuid
+  multiplier_snapshot    Decimal           @db.Decimal(5, 4)
+  category_code_snapshot String            @db.VarChar(50)
+  created_at             DateTime          @default(now()) @db.Timestamptz(6)
+  review_categories      review_categories @relation(fields: [category_id], references: [category_id])
+  reviews                reviews           @relation(fields: [review_id], references: [review_id], onDelete: Cascade)
+
+  @@unique([review_id, category_id])
+  @@index([category_id])
+  @@index([review_id])
 }
