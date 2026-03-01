@@ -63,6 +63,10 @@ COPY --from=builder /app/prisma /app/prisma
 COPY --from=builder /app/.prisma /app/.prisma
 COPY --from=builder /app/.cache /app/.cache
 
+# Generate Prisma client + engine in runtime
+RUN mkdir -p /app/prisma_binaries /app/.prisma /app/.cache && \
+    prisma generate
+
 # Copy app source
 COPY . .
 
