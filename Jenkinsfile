@@ -68,9 +68,10 @@ pipeline {
                         script {
                             sh 'docker network create zap-net || true'
                             withCredentials([
-                                string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
+                                string(credentialsId: 'rr-backend-db-url', variable: 'DATABASE_URL'),
                                 string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
-                                string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
+                                string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
+                                string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME')
                             ]) {
                                 try {
                                     sh "docker run -d --name target-app --network zap-net -e DATABASE_URL='${DB_URL}' -e SECRET_KEY='${SECRET_KEY}' -e ALGORITHM='${ALGO}' ${IMAGE}:${TAG}"
@@ -110,9 +111,10 @@ pipeline {
                     sh "docker rm rnr-backend-test || true"
                     
                     withCredentials([
-                        string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
+                        string(credentialsId: 'rr-backend-db-url', variable: 'DATABASE_URL'),
                         string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
-                        string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
+                        string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
+                        string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME')
                     ]) {
                         sh """
                         docker run -d \
@@ -127,7 +129,14 @@ pipeline {
                         -p 8007:8007 \
                         -e DATABASE_URL="${DB_URL}" \
                         -e SECRET_KEY="${SECRET_KEY}" \
-                        -e ALGORITHM="${ALGO}" \
+                        -e SMTP_PASSWORD="${SMTP_PASSWORD}" \
+                        -e SMTP_USERNAME="${SMTP_USERNAME}" \
+                        -e SMTP_HOST="smtp.gmail.com" \
+                        -e SMTP_PORT="587" \
+                        -e SMTP_USE_TLS="true" \
+                        -e SMTP_USE_SSL="false" \
+                        -e FRONTEND_URL="https://localhost:3000" \
+                        -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
                         ${IMAGE}:${TAG}
                         """
                     }
