@@ -16,12 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# ---- Prisma paths ----
-ENV HOME=/app \
-    PRISMA_PY_BINARIES_PATH=/app/prisma_binaries \
-    PRISMA_HOME=/app/.prisma \
-    XDG_CACHE_HOME=/app/.cache
-
 # Install Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -49,18 +43,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ---- Prisma + Runtime paths ----
 ENV HOME=/app \
-    PRISMA_PY_BINARIES_PATH=/app/prisma_binaries \
-    PRISMA_HOME=/app/.prisma \
-    XDG_CACHE_HOME=/app/.cache \
     PYTHONPATH=/app \
     VIRTUAL_ENV=/app/venv \
     PATH="/app/venv/bin:$PATH"
 
 # Copy built assets
 COPY --from=builder /app/venv /app/venv
-COPY --from=builder /app/prisma_binaries /app/prisma_binaries
-COPY --from=builder /app/prisma /app/prisma
-COPY --from=builder /app/.prisma /app/.prisma
+COPY --from=builder /app /app
 COPY --from=builder /app/.cache /app/.cache
 
 # Generate Prisma client + engine in runtime
