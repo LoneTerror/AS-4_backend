@@ -10,7 +10,7 @@ from src.organization.router import departments_router, designations_router, dep
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Organization Service: Connecting to Database...")
-    await db.connect()
+    await db.connect(timeout=30)
     print("Organization Service: 🟢 Database Connected")
     yield
     print("Organization Service: Disconnecting Database...")

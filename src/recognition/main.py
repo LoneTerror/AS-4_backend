@@ -20,7 +20,7 @@ from src.common.middleware import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect()
+    await db.connect(timeout=30)
     print("Recognition Service: 🟢 Database Connected")
     yield
     await db.disconnect()

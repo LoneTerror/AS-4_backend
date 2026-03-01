@@ -61,7 +61,7 @@ async def startup():
     logger.info("Initializing Reward Microservice...")
     try:
         if not db.is_connected():
-            await db.connect()
+            await db.connect(timeout=30)
             logger.info("Rewards Service: 🟢 Database Connected Successfully")
     except Exception as e:
         # If DB fails to connect on boot, log it as critical so we know immediately
