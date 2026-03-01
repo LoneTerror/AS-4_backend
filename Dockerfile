@@ -45,4 +45,4 @@ USER appuser
 
 EXPOSE 8000 8001 8003 8004 8005 8006 8007
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/app/supervisord.conf"]
