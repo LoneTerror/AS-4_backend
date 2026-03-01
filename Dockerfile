@@ -5,24 +5,20 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Build deps + Node (only for prisma generate)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev curl ca-certificates && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
+RUN apt-get update && apt-get install -y \
+    gcc libpq-dev curl ca-certificates libatomic1 \
+    nodejs npm && \
     rm -rf /var/lib/apt/lists/*
 
-# Virtualenv
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# Install Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Generate Prisma client + engine
-RUN mkdir -p /app/prisma_binaries /app/.prisma /app/.cache
-COPY prisma/schema.prisma ./prisma/
+COPY . .
+
+# Generate Prisma client + engine HERE ONLY
 RUN prisma generate
 
 
@@ -31,57 +27,20 @@ RUN prisma generate
 # =========================
 FROM python:3.11-slim
 
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    libpq5 supervisor nginx ca-certificates libatomic1 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy entire built app
+COPY --from=builder /app /app
+
 # Create non-root user
 RUN addgroup --system appgroup && adduser --system --group appuser
 
-WORKDIR /app
+RUN chown -R appuser:appgroup /app
 
-# Runtime deps only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 curl supervisor nginx ca-certificates libatomic1 && \
-    rm -rf /var/lib/apt/lists/*
-
-# ---- Prisma + Runtime paths ----
-ENV HOME=/app \
-    PYTHONPATH=/app \
-    VIRTUAL_ENV=/app/venv \
-    PATH="/app/venv/bin:$PATH"
-
-# Copy built assets
-COPY --from=builder /app/venv /app/venv
-COPY --from=builder /app /app
-COPY --from=builder /app/.cache /app/.cache
-
-# Generate Prisma client + engine in runtime
-RUN mkdir -p /app/prisma_binaries /app/.prisma /app/.cache && \
-    prisma generate
-
-# Copy app source
-COPY . .
-
-# Supervisor + Nginx config
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-RUN rm -rf /etc/nginx/nginx.conf /etc/nginx/sites-enabled/*
-COPY nginx.conf /etc/nginx/nginx.conf
-
-# Create runtime dirs + FIX PERMISSIONS (important for prisma)
-RUN mkdir -p \
-    /var/log/nginx \
-    /var/lib/nginx \
-    /run/nginx \
-    /var/log/supervisor \
-    /tmp/client_temp \
-    /app/.cache \
-    /app/.prisma && \
-    chown -R appuser:appgroup \
-    /app \
-    /var/log \
-    /var/lib/nginx \
-    /run/nginx \
-    /etc/nginx \
-    /tmp
-
-# Switch to non-root
 USER appuser
 
 EXPOSE 8000 8001 8003 8004 8005 8006 8007
