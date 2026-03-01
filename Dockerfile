@@ -44,7 +44,7 @@ WORKDIR /app
 
 # Runtime deps only
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 curl supervisor nginx ca-certificates && \
+    libpq5 curl supervisor nginx ca-certificates libatomic1 && \
     rm -rf /var/lib/apt/lists/*
 
 # ---- Prisma + Runtime paths ----
