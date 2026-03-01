@@ -18,12 +18,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Must be set BEFORE prisma generate so the binary lands in /app, not /root/.cache
 ENV XDG_CACHE_HOME="/app/.cache"
 ENV PRISMA_HOME="/app/.prisma"
 ENV PRISMA_PY_BINARIES_PATH="/app/prisma_binaries"
+# This tells the Node Prisma CLI where to cache its binary too
+ENV PRISMA_BINARY_CACHE_DIR="/app/.cache"
 
 RUN prisma generate
+
+# Verify the binary landed in /app, not /root
+RUN find /app/.cache -name "query-engine*" 2>/dev/null || echo "WARNING: binary not in /app/.cache"
+RUN find /root/.cache -name "query-engine*" 2>/dev/null || echo "OK: nothing in /root/.cache"
 
 
 # =========================
@@ -40,11 +45,14 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /app /app
 
 RUN addgroup --system appgroup && adduser --system --group appuser
-
-# /app/.cache and /app/.prisma are subdirectories of /app, so this covers them
 RUN chown -R appuser:appgroup /app
 
 USER appuser
+
+ENV XDG_CACHE_HOME="/app/.cache"
+ENV PRISMA_HOME="/app/.prisma"
+ENV PRISMA_PY_BINARIES_PATH="/app/prisma_binaries"
+ENV PRISMA_BINARY_CACHE_DIR="/app/.cache"
 
 EXPOSE 8000 8001 8003 8004 8005 8006 8007
 
