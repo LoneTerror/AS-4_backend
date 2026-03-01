@@ -102,39 +102,39 @@ pipeline {
         } 
         */
 
-        // stage('Deploy to VM1 (Testing)') {
-        //     when { branch 'pipeline-branch' } 
-        //     steps {
-        //         script {
-        //             sh "docker stop rnr-backend-test || true"
-        //             sh "docker rm rnr-backend-test || true"
+        stage('Deploy to VM1 (Testing)') {
+            when { branch 'pipeline-branch' } 
+            steps {
+                script {
+                    sh "docker stop rnr-backend-test || true"
+                    sh "docker rm rnr-backend-test || true"
                     
-        //             withCredentials([
-        //                 string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
-        //                 string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
-        //                 string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
-        //             ]) {
-        //                 sh """
-        //                 docker run -d \
-        //                 --name rnr-backend-test \
-        //                 --restart always \
-        //                 -p 8000:8000 \
-        //                 -p 8001:8001 \
-        //                 -p 8003:8003 \
-        //                 -p 8004:8004 \
-        //                 -p 8005:8005 \
-        //                 -p 8006:8006 \
-        //                 -p 8007:8007 \
-        //                 -e DATABASE_URL="${DB_URL}" \
-        //                 -e SECRET_KEY="${SECRET_KEY}" \
-        //                 -e ALGORITHM="${ALGO}" \
-        //                 ${IMAGE}:${TAG}
-        //                 """
-        //             }
-        //             echo "🚀 Application deployed to http://192.168.116.137:8000" 
-        //         }
-        //     }
-        // }
+                    withCredentials([
+                        string(credentialsId: 'rr-backend-db-url', variable: 'DB_URL'),
+                        string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
+                        string(credentialsId: 'rr-backend-algorithm', variable: 'ALGO')
+                    ]) {
+                        sh """
+                        docker run -d \
+                        --name rnr-backend-test \
+                        --restart always \
+                        -p 8000:8000 \
+                        -p 8001:8001 \
+                        -p 8003:8003 \
+                        -p 8004:8004 \
+                        -p 8005:8005 \
+                        -p 8006:8006 \
+                        -p 8007:8007 \
+                        -e DATABASE_URL="${DB_URL}" \
+                        -e SECRET_KEY="${SECRET_KEY}" \
+                        -e ALGORITHM="${ALGO}" \
+                        ${IMAGE}:${TAG}
+                        """
+                    }
+                    echo "🚀 Application deployed to http://192.168.116.137:8000" 
+                }
+            }
+        }
     }
 
     post {
