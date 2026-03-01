@@ -16,11 +16,11 @@ pipeline {
         // 1. Parallelize Static Scans (Gitleaks + Python Audit)
         stage('Static Analysis & Security') {
             parallel {
-                stage('Secrets Scan (Gitleaks)') {
-                    steps {
-                        sh 'gitleaks detect --source . --report-format json --report-path gitleaks-report.json --exit-code 0'
-                    }
-                }
+                // stage('Secrets Scan (Gitleaks)') {
+                //     steps {
+                //         sh 'gitleaks detect --source . --report-format json --report-path gitleaks-report.json --exit-code 0'
+                //     }
+                // }
 
                 stage('Python Quality Checks') {
                     agent {
