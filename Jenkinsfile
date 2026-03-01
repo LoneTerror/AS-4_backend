@@ -74,7 +74,7 @@ pipeline {
                                 string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME')
                             ]) {
                                 try {
-                                    sh "docker run -d --name target-app --network zap-net -e DATABASE_URL='${DB_URL}' -e SECRET_KEY='${SECRET_KEY}' -e ALGORITHM='${ALGO}' ${IMAGE}:${TAG}"
+                                    sh "docker run -d --name target-app --network zap-net -e DATABASE_URL='${DATABASE_URL}' -e SECRET_KEY='${SECRET_KEY}' -e ALGORITHM='${ALGO}' ${IMAGE}:${TAG}"
                                     sh 'sleep 10' 
                                     sh "docker run --rm --user 0 --network zap-net -v \$(pwd):/zap/wrk/:rw ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://target-app:8000 -r zap-report.html || true"
                                 } finally {
