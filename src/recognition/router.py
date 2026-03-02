@@ -8,6 +8,8 @@ from src.recognition.schemas import (
     ReviewResponse,
     PaginatedReviewResponse,
     ReviewCategoryResponse,
+    ReviewCategoryCreateRequest,
+    ReviewCategoryUpdateRequest,
     PaginatedReviewCategoryResponse,
 )
 from src.recognition.service import RecognitionService
@@ -41,6 +43,137 @@ async def list_review_categories(
     ),
 ):
     return await RecognitionService.list_review_categories(page, page_size, active_only)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inline OpenAPI schemas for review categories
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CATEGORY_CREATE_REQUEST_BODY = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "required": ["category_code", "category_name", "multiplier"],
+                "properties": {
+                    "category_code": {
+                        "type": "string", "minLength": 1, "maxLength": 50,
+                        "description": "Unique short code (auto-uppercased), e.g. INNOVATION",
+                        "example": "INNOVATION",
+                    },
+                    "category_name": {
+                        "type": "string", "minLength": 1, "maxLength": 100,
+                        "description": "Unique human-readable name",
+                        "example": "Innovation",
+                    },
+                    "multiplier": {
+                        "type": "number", "exclusiveMinimum": 0,
+                        "description": "Points multiplier (must be > 0)",
+                        "example": 1.4,
+                    },
+                    "description": {
+                        "type": "string", "maxLength": 500,
+                        "description": "Optional description",
+                        "example": "Recognises creative problem-solving and novel ideas",
+                    },
+                },
+                "example": {
+                    "category_code": "INNOVATION",
+                    "category_name": "Innovation",
+                    "multiplier":    1.4,
+                    "description":   "Recognises creative problem-solving and novel ideas",
+                },
+            }
+        }
+    },
+}
+
+_CATEGORY_UPDATE_REQUEST_BODY = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "description": "At least one field required.",
+                "properties": {
+                    "category_code": {
+                        "type": "string", "minLength": 1, "maxLength": 50,
+                        "description": "Updated short code (auto-uppercased). Must remain unique.",
+                        "example": "INNOVATION",
+                    },
+                    "category_name": {
+                        "type": "string", "minLength": 1, "maxLength": 100,
+                        "description": "Updated human-readable name. Must remain unique.",
+                        "example": "Innovation & Creativity",
+                    },
+                    "multiplier": {
+                        "type": "number", "exclusiveMinimum": 0,
+                        "description": "Updated points multiplier (must be > 0).",
+                        "example": 1.5,
+                    },
+                    "description": {
+                        "type": "string", "maxLength": 500,
+                        "description": "Updated description.",
+                        "example": "Recognises creative problem-solving, novel ideas, and inventive thinking",
+                    },
+                    "is_active": {
+                        "type": "boolean",
+                        "description": "Activate or deactivate the category.",
+                        "example": False,
+                    },
+                },
+                "example": {
+                    "multiplier":  1.5,
+                    "description": "Recognises creative problem-solving, novel ideas, and inventive thinking",
+                },
+            }
+        }
+    },
+}
+
+
+@categories_router.post(
+    "",
+    response_model=ReviewCategoryResponse,
+    status_code=201,
+    response_model_exclude_none=True,
+    summary="Create Review Category",
+    description=(
+        "Create a new review category.\n\n"
+        "**Required:** `category_code` (auto-uppercased, unique), `category_name` (unique), "
+        "`multiplier` (> 0).\n\n"
+        "> ⚠️ Changing a category's multiplier **does not** retroactively affect existing "
+        "reviews — each review freezes multiplier snapshots at write time."
+    ),
+    openapi_extra={"requestBody": _CATEGORY_CREATE_REQUEST_BODY},
+)
+async def create_review_category(
+    payload: ReviewCategoryCreateRequest,
+    current_user: CurrentUser = Depends(require_roles("HR_ADMIN", "SUPER_ADMIN")),
+):
+    return await RecognitionService.create_review_category(payload, current_user)
+
+
+@categories_router.put(
+    "/{id}",
+    response_model=ReviewCategoryResponse,
+    response_model_exclude_none=True,
+    summary="Update Review Category",
+    description=(
+        "Update an existing review category. At least one field must be supplied.\n\n"
+        "`category_code` and `category_name` must remain unique across all categories.\n\n"
+        "> ⚠️ Updating `multiplier` only affects **future** reviews. "
+        "Historical reviews are unaffected because multipliers are frozen as snapshots at write time."
+    ),
+    openapi_extra={"requestBody": _CATEGORY_UPDATE_REQUEST_BODY},
+)
+async def update_review_category(
+    payload: ReviewCategoryUpdateRequest,
+    id: UUID = Path(..., description="Unique review category identifier"),
+    current_user: CurrentUser = Depends(require_roles("HR_ADMIN", "SUPER_ADMIN")),
+):
+    return await RecognitionService.update_review_category(str(id), payload, current_user)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
