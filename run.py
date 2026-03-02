@@ -1,4 +1,5 @@
 import subprocess
+import time
 
 services = [
     ("auth", "src.auth.main:app", 8001),
@@ -22,6 +23,8 @@ for name, app, port in services:
         "--reload"
     ])
     processes.append(p)
+    print(f"Waiting 5 seconds before starting next service...")
+    time.sleep(5)
 
 # Keep script alive
 for p in processes:
