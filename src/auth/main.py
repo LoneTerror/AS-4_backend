@@ -25,61 +25,37 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS configuration - allows recognition service to validate tokens
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8005", "http://localhost:3000"],  # Add your frontend
+    allow_origins=["http://localhost:8005", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-API_PREFIX = "/v1"
-
-# --- AUTH ROUTES ---
-app.include_router(auth_router, prefix=API_PREFIX + "/auth", tags=["Auth"])
 @app.get("/health", tags=["System"])
 async def health_check():
     return {"status": "healthy", "service": "Auth Service"}
 
-# Override OpenAPI schema to use Bearer Auth
+API_PREFIX = "/v1"
+app.include_router(auth_router, prefix=API_PREFIX + "/auth", tags=["Auth"])
+
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
-
-    schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        routes=app.routes,
-    )
-
-    # Replace ALL security schemes with a single BearerAuth
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
     schema["components"]["securitySchemes"] = {
-        "BearerAuth": {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "JWT",
-        }
+        "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
     }
-
-    # Apply it to every operation
     for path in schema.get("paths", {}).values():
         for operation in path.values():
             if isinstance(operation, dict):
                 operation["security"] = [{"BearerAuth": []}]
-
     app.openapi_schema = schema
     return schema
 
-
 app.openapi = custom_openapi
-
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "src.main:app",  
-        host="0.0.0.0",
-        port=8001,
-        reload=True
-    )
+    uvicorn.run("src.auth.main:app", host="0.0.0.0", port=8001, reload=True)

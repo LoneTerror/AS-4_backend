@@ -14,10 +14,6 @@ from src.common.middleware import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LIFESPAN
-# ─────────────────────────────────────────────────────────────────────────────
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_with_retry()
@@ -26,10 +22,6 @@ async def lifespan(app: FastAPI):
     await db.disconnect()
     print("Recognition Service: 🔴 Database Disconnected")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# APP
-# ─────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="Recognition Service",
@@ -40,66 +32,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MIDDLEWARE
-# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Recognition Service"}
 
 app.middleware("http")(request_rate_limit_middleware)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# EXCEPTION HANDLERS
-# ─────────────────────────────────────────────────────────────────────────────
-
 app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CORS
-# ─────────────────────────────────────────────────────────────────────────────
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "Accept",
-        "X-Request-ID",
-        "X-Correlation-ID",
-    ],
-    expose_headers=[
-        "X-Request-ID",
-        "X-RateLimit-Limit",
-        "X-RateLimit-Remaining",
-        "X-RateLimit-Reset",
-    ],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
+    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ROUTERS
-# ─────────────────────────────────────────────────────────────────────────────
-
-# /v1/reviews  — CRUD for reviews
-app.include_router(recognition_router,      prefix="/v1", tags=["Reviews"])
-
-# /v1/review-categories  — DB-driven category list (replaces hardcoded enum)
+app.include_router(recognition_router, prefix="/v1", tags=["Reviews"])
 app.include_router(review_categories_router, prefix="/v1", tags=["Review Categories"])
-
-@app.get("/health", tags=["System"])
-async def health_check():
-    return {"status": "healthy", "service": "Recognition Service"}
-# ─────────────────────────────────────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "src.main:app",
-        host="0.0.0.0",
-        port=8005,
-        reload=True,
-    )
+    uvicorn.run("src.recognition.main:app", host="0.0.0.0", port=8005, reload=True)
