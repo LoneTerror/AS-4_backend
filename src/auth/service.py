@@ -222,8 +222,12 @@ async def logout_user(client_refresh_token: str, user_id: str):
     )
 
     if stored_token and verify_refresh_token(token_secret, stored_token.token_hash):
+        # FIX: Previously only filtered by token_id, allowing User A to revoke
+        # User B's token (horizontal privilege escalation / BOLA).
+        # Now employee_id is included in the update where clause so ownership
+        # is enforced atomically at the DB level — not just at the find_first level.
         await db.refresh_tokens.update(
-            where={"token_id": token_id},
+            where={"token_id": token_id, "employee_id": user_id},
             data={
                 "revoked_at": _now(),
                 "updated_at": _now(),
