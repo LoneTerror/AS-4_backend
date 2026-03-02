@@ -1,5 +1,7 @@
 import os
 from prisma import Prisma
+import asyncio
+import logging
 
 # Each of the 7 services imports this module and calls db.connect() on startup.
 # Without a connection limit, each service spawns Prisma's default pool (10),

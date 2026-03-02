@@ -2,13 +2,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
-from src.prisma.client import db
+from src.prisma.client import db, connect_with_retry
 from src.auth.router import router as auth_router
+
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect()
+    await connect_with_retry()
     print("Auth Service: 🟢 Database Connected")
     yield
     await db.disconnect()
