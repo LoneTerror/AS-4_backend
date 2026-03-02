@@ -60,5 +60,9 @@ app.add_middleware(
     ],
 )
 
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Wallet Service"}
+
 # Router
 app.include_router(wallet_router, prefix="/v1")
