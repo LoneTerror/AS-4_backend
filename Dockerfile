@@ -16,14 +16,19 @@ ENV PATH="/app/venv/bin:$PATH"
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-install Prisma CLI via npm separately so it's cached as its own layer
+RUN npm install -g prisma@5.17.0
+
 COPY . .
 
 ENV XDG_CACHE_HOME="/app/.cache"
 ENV PRISMA_HOME="/app/.prisma"
 ENV PRISMA_PY_BINARIES_PATH="/app/prisma_binaries"
 ENV PRISMA_BINARY_CACHE_DIR="/app/.cache"
+# Tell prisma-py to use the already-installed CLI instead of downloading it
+ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
-RUN prisma generate
+RUN prisma generate --no-engine
 
 
 # =========================
