@@ -14,7 +14,7 @@ from src.notifications.worker import email_worker_loop
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Employee Service: Connecting to Database...")
-    await db.connect(timeout=30)
+    await db.connect(timeout=60)
     print("Employee Service: 🟢 Database Connected")
 
 

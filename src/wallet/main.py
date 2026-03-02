@@ -15,7 +15,7 @@ from src.common.middleware import (
 # Lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect(timeout=30)
+    await db.connect(timeout=60)
     print("Wallet Service: 🟢 Database Connected")
     yield
     await db.disconnect()

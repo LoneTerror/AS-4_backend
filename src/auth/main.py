@@ -8,7 +8,7 @@ from src.auth.router import router as auth_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect(timeout=30)
+    await db.connect(timeout=60)
     print("Auth Service: 🟢 Database Connected")
     yield
     await db.disconnect()
