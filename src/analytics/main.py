@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
-from src.prisma.client import db
+from src.prisma.client import db, connect_with_retry
 from src.analytics.router import router as analytics_router
 from src.common.middleware import (
     request_rate_limit_middleware,
@@ -13,11 +13,9 @@ from src.common.middleware import (
 )
 
 
-# Lifespan — connect / disconnect Prisma
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: D401
-    """Async context manager that connects to and disconnects from the database."""
-    await db.connect()
+async def lifespan(app: FastAPI):
+    await connect_with_retry()
     print("Analytics Service: 🟢 Database Connected")
     yield
     await db.disconnect()
@@ -34,42 +32,24 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Register middleware
-app.middleware("http")(request_rate_limit_middleware)
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Analytics Service"}
 
-# Register exception handlers
+app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "Accept",
-        "X-Request-ID",
-        "X-Correlation-ID",
-    ],
-    expose_headers=[
-        "X-Request-ID",
-        "X-RateLimit-Limit",
-        "X-RateLimit-Remaining",
-        "X-RateLimit-Reset",
-    ],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
+    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
-# Health check
-@app.get("/health", tags=["System"])
-async def health_check():
-    """Return a simple health check confirming the service is running."""
-    return {"status": "healthy", "service": "Analytics Service"}
-
-# Router — mounted at /v1/dashboard
 app.include_router(analytics_router, prefix="/v1/dashboard", tags=["Dashboard"])
 
 if __name__ == "__main__":

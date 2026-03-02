@@ -244,6 +244,13 @@ async def logout_user(client_refresh_token: str, user_id: str):
 # CREATE EMPLOYEE
 # -------------------------------
 async def create_employee(payload, current_user_id: str):
+    # ERR-440 FIX: Normalize username — strip leading/trailing whitespace as a
+    # defence-in-depth measure. The SignUpRequest schema already enforces this
+    # via StringConstraints(strip_whitespace=True), but normalizing here ensures
+    # the service is safe when called directly (e.g. bulk-import, tests) without
+    # going through Pydantic validation.
+    payload.username = payload.username.strip()
+
     # Validate manager exists if provided
     if payload.manager_id:
         manager = await db.employees.find_unique(

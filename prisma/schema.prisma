@@ -3,6 +3,7 @@ generator client {
   recursive_type_depth        = "5"
   enable_experimental_decimal = "true"
   interface                   = "asyncio"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
