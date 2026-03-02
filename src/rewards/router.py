@@ -12,9 +12,16 @@ from src.core.logger import logger
 async def get_db() -> Prisma:
     return db
 
+COMMON_ERRORS = {
+    401: {"model": schemas.ErrorResponse, "description": "Bearer token missing or expired"},
+    403: {"model": schemas.ErrorResponse, "description": "Insufficient permissions"},
+    500: {"model": schemas.ErrorResponse, "description": "Internal server configuration error"}
+}
+
 router = APIRouter(
     prefix="/v1/rewards",
-    tags=["Rewards"]
+    tags=["Rewards"],
+    responses=COMMON_ERRORS
 )
 
 # --- CATEGORY ENDPOINTS ---
