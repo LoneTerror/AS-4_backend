@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
-from src.prisma.client import db, connect_with_retry
+from src.prisma.client import db,connect_with_retry
 from src.recognition.router import router as recognition_router
 from src.recognition.router import categories_router as review_categories_router
 from src.common.middleware import (

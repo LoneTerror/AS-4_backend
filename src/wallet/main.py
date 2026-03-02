@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
-from src.prisma.client import db, connect_with_retry
+from src.prisma.client import db,connect_with_retry
 from src.wallet.routes import router as wallet_router
 from src.common.middleware import (
     request_rate_limit_middleware,

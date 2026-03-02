@@ -1,6 +1,8 @@
 import os
 import asyncio
 from prisma import Prisma
+import asyncio
+import logging
 
 _BASE_URL = os.environ.get("DATABASE_URL")
 if not _BASE_URL:

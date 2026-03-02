@@ -6,6 +6,7 @@ from src.prisma.client import db, connect_with_retry
 from src.auth.router import router as auth_router
 
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_with_retry()
