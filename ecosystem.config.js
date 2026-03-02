@@ -1,0 +1,127 @@
+module.exports = {
+  apps: [
+    {
+      name: "auth",
+      script: "/app/venv/bin/gunicorn",
+      args: "src.auth.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8001 --workers 1 --timeout 120 --graceful-timeout 60 --worker-tmp-dir /tmp",
+      cwd: "/app",
+      interpreter: "none",
+      autorestart: true,
+      watch: false,
+      wait_ready: true,
+      listen_timeout: 60000,
+      kill_timeout: 5000,
+      env: {
+        PYTHONPATH: "/app",
+        XDG_CACHE_HOME: "/app/.cache",
+        PRISMA_HOME: "/app/.prisma",
+        PRISMA_PY_BINARIES_PATH: "/app/prisma_binaries",
+        PRISMA_BINARY_CACHE_DIR: "/app/.cache",
+      }
+    },
+    {
+      name: "employees",
+      script: "/app/venv/bin/gunicorn",
+      args: "src.employees.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8003 --workers 1 --timeout 120 --graceful-timeout 60 --worker-tmp-dir /tmp",
+      cwd: "/app",
+      interpreter: "none",
+      autorestart: true,
+      watch: false,
+      wait_ready: true,
+      listen_timeout: 60000,
+      kill_timeout: 5000,
+      env: {
+        PYTHONPATH: "/app",
+        XDG_CACHE_HOME: "/app/.cache",
+        PRISMA_HOME: "/app/.prisma",
+        PRISMA_PY_BINARIES_PATH: "/app/prisma_binaries",
+        PRISMA_BINARY_CACHE_DIR: "/app/.cache",
+      }
+    },
+    {
+      name: "wallet",
+      script: "/app/venv/bin/gunicorn",
+      args: "src.wallet.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8004 --workers 1 --timeout 120 --graceful-timeout 60 --worker-tmp-dir /tmp",
+      cwd: "/app",
+      interpreter: "none",
+      autorestart: true,
+      watch: false,
+      wait_ready: true,
+      listen_timeout: 60000,
+      kill_timeout: 5000,
+      env: {
+        PYTHONPATH: "/app",
+        XDG_CACHE_HOME: "/app/.cache",
+        PRISMA_HOME: "/app/.prisma",
+        PRISMA_PY_BINARIES_PATH: "/app/prisma_binaries",
+        PRISMA_BINARY_CACHE_DIR: "/app/.cache",
+      }
+    },
+    {
+      name: "recognition",
+      script: "/app/venv/bin/gunicorn",
+      args: "src.recognition.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8005 --workers 1 --timeout 120 --graceful-timeout 60 --worker-tmp-dir /tmp",
+      cwd: "/app",
+      interpreter: "none",
+      autorestart: true,
+      watch: false,
+      wait_ready: true,
+      listen_timeout: 60000,
+      kill_timeout: 5000,
+      env: {
+        PYTHONPATH: "/app",
+        XDG_CACHE_HOME: "/app/.cache",
+        PRISMA_HOME: "/app/.prisma",
+        PRISMA_PY_BINARIES_PATH: "/app/prisma_binaries",
+        PRISMA_BINARY_CACHE_DIR: "/app/.cache",
+      }
+    },
+    {
+      name: "rewards",
+      script: "/app/venv/bin/gunicorn",
+      args: "src.rewards.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8006 --workers 1 --timeout 120 --graceful-timeout 60 --worker-tmp-dir /tmp",
+      cwd: "/app",
+      interpreter: "none",
+      autorestart: true,
+      watch: false,
+      wait_ready: true,
+      listen_timeout: 60000,
+      kill_timeout: 5000,
+      env: {
+        PYTHONPATH: "/app",
+        XDG_CACHE_HOME: "/app/.cache",
+        PRISMA_HOME: "/app/.prisma",
+        PRISMA_PY_BINARIES_PATH: "/app/prisma_binaries",
+        PRISMA_BINARY_CACHE_DIR: "/app/.cache",
+      }
+    },
+    {
+      name: "organization",
+      script: "/app/venv/bin/gunicorn",
+      args: "src.organization.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8007 --workers 1 --timeout 120 --graceful-timeout 60 --worker-tmp-dir /tmp",
+      cwd: "/app",
+      interpreter: "none",
+      autorestart: true,
+      watch: false,
+      wait_ready: true,
+      listen_timeout: 60000,
+      kill_timeout: 5000,
+      env: {
+        PYTHONPATH: "/app",
+        XDG_CACHE_HOME: "/app/.cache",
+        PRISMA_HOME: "/app/.prisma",
+        PRISMA_PY_BINARIES_PATH: "/app/prisma_binaries",
+        PRISMA_BINARY_CACHE_DIR: "/app/.cache",
+      }
+    },
+    {
+      name: "nginx",
+      script: "/usr/sbin/nginx",
+      args: "-c /app/nginx.conf -g 'daemon off;'",
+      interpreter: "none",
+      autorestart: true,
+      watch: false,
+      kill_timeout: 5000,
+    }
+  ]
+}
