@@ -72,12 +72,19 @@ async def validate_token(token: str):
 async def authenticate_user(username: str, password: str):
     print(f"DEBUG: Attempting login for {username}")
 
-    # 1. Fetch User with roles included
+    # ERR-437 FIX: Normalize input to lowercase here as a defence-in-depth
+    # measure. The LoginRequest schema already lowercases at the boundary,
+    # but normalizing here too means the service is safe if called directly
+    # (e.g. from tests or other services) without going through the schema.
+    username = username.strip().lower()
+
+    # 1. Fetch User with roles included — mode "insensitive" makes the DB
+    #    comparison case-insensitive at the storage level (Prisma / Postgres).
     user = await db.employees.find_first(
         where={
             "OR": [
-                {"username": username},
-                {"email": username}
+                {"username": {"equals": username, "mode": "insensitive"}},
+                {"email":    {"equals": username, "mode": "insensitive"}}
             ]
         },
         include={
@@ -237,6 +244,13 @@ async def logout_user(client_refresh_token: str, user_id: str):
 # CREATE EMPLOYEE
 # -------------------------------
 async def create_employee(payload, current_user_id: str):
+    # ERR-440 FIX: Normalize username — strip leading/trailing whitespace as a
+    # defence-in-depth measure. The SignUpRequest schema already enforces this
+    # via StringConstraints(strip_whitespace=True), but normalizing here ensures
+    # the service is safe when called directly (e.g. bulk-import, tests) without
+    # going through Pydantic validation.
+    payload.username = payload.username.strip()
+
     # Validate manager exists if provided
     if payload.manager_id:
         manager = await db.employees.find_unique(

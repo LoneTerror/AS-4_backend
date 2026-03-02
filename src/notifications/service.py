@@ -32,12 +32,6 @@ class NotificationService:
         message: str,
         type: NotificationType,
     ) -> dict:
-        """
-        Persist a new notification row.
-
-        Returns the created record as a plain dict so callers never have to
-        import Prisma model types.
-        """
         record = await self._db.notifications.create(
             data={
                 "employee_id": str(employee_id),
@@ -120,28 +114,12 @@ class NotificationService:
     async def get_employees_with_celebrations_today(self) -> list[dict]:
         """
         Return employees whose birthday OR work anniversary falls today.
-
-        Schema facts used:
-          - employees.date_of_birth      DateTime? @db.Date  (new — via migration.sql)
-          - employees.date_of_joining    DateTime  @db.Date  (existing)
-          - employees.username           the display name field (no separate first/last)
-          - employees.email              recipient address
-          - Active employees only: filtered via the status_master relation
-            (status_master_employees_status_idTostatus_master.status_code = "ACTIVE")
-            because employees has no boolean is_active column.
-
-        Each dict contains:
-            employee_id, username, email,
-            celebration_type  ("BIRTHDAY" | "WORK_ANNIVERSARY"),
-            years             (int for anniversaries, None for birthdays)
         """
         from datetime import date
 
         today = date.today()
         month, day = today.month, today.day
 
-        # Relation name comes directly from the @relation() annotation in schema.prisma:
-        #   status_master_employees_status_idTostatus_master
         employees = await self._db.employees.find_many(
             where={
                 "status_master_employees_status_idTostatus_master": {
@@ -153,13 +131,8 @@ class NotificationService:
         celebrants: list[dict] = []
 
         for emp in employees:
-            # ── Birthday check ───────────────────────────────────────────────
-            dob = emp.date_of_birth          # datetime.date | None
-            if (
-                dob is not None
-                and dob.month == month
-                and dob.day == day
-            ):
+            dob = emp.date_of_birth
+            if dob is not None and dob.month == month and dob.day == day:
                 celebrants.append({
                     "employee_id": emp.employee_id,
                     "username": emp.username,
@@ -168,12 +141,11 @@ class NotificationService:
                     "years": None,
                 })
 
-            # ── Work anniversary check ───────────────────────────────────────
-            doj = emp.date_of_joining        # datetime.date (non-nullable in schema)
+            doj = emp.date_of_joining
             if (
                 doj.month == month
                 and doj.day == day
-                and doj.year != today.year   # skip the actual hire-day
+                and doj.year != today.year
             ):
                 years = today.year - doj.year
                 celebrants.append({
@@ -194,10 +166,17 @@ class NotificationService:
         celebration_type: str,  # "BIRTHDAY" | "WORK_ANNIVERSARY"
     ) -> bool:
         """
-        Idempotency guard — returns True if a CELEBRATION notification of this
-        type was already created for this employee today.
+        Idempotency guard — returns True if a broadcast for this celebrant's
+        event was already created today.
 
-        Prevents duplicate emails if the server restarts mid-day.
+        We anchor on the celebrant's own employee_id: the worker creates one
+        notification row per recipient, so we just check whether the celebrant
+        themselves has received a CELEBRATION notification with this type today.
+        If that row exists, the whole broadcast already happened.
+
+        The message field contains the raw celebration_type in brackets e.g.
+        "[BIRTHDAY] ..." or "[WORK_ANNIVERSARY] ..." — this makes the
+        `contains` filter reliable regardless of the email subject wording.
         """
         from datetime import date, datetime, timezone
 
@@ -208,9 +187,8 @@ class NotificationService:
             where={
                 "employee_id": str(employee_id),
                 "type": "CELEBRATION",
-                # The worker sets the title to the email subject, which always
-                # contains "BIRTHDAY" or "WORK_ANNIVERSARY" as a substring.
-                "title": {"contains": celebration_type},
+                # Matches "[BIRTHDAY]" or "[WORK_ANNIVERSARY]" in the message
+                "message": {"contains": celebration_type},
                 "created_at": {"gte": start_of_day},
             }
         )

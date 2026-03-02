@@ -5,7 +5,12 @@ from fastapi import HTTPException, status
 
 from src.prisma.client import db
 from src.recognition.dependencies import CurrentUser
-from src.recognition.schemas import ReviewCreateRequest, ReviewUpdateRequest
+from src.recognition.schemas import (
+    ReviewCreateRequest,
+    ReviewUpdateRequest,
+    ReviewCategoryCreateRequest,
+    ReviewCategoryUpdateRequest,
+)
 from src.recognition.points_engine import calculate_points
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
@@ -243,6 +248,123 @@ class RecognitionService:
                 "has_previous": page > 1 and total_pages > 0,
             },
         }
+
+    # =========================================================
+    # CREATE REVIEW CATEGORY
+    # =========================================================
+    @staticmethod
+    async def create_review_category(
+        payload: ReviewCategoryCreateRequest,
+        current_user: CurrentUser,
+    ):
+        # ── Uniqueness guards ──────────────────────────────────────────────
+        existing_code = await db.review_categories.find_unique(
+            where={"category_code": payload.category_code}
+        )
+        if existing_code:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A category with code '{payload.category_code}' already exists",
+            )
+
+        existing_name = await db.review_categories.find_unique(
+            where={"category_name": payload.category_name}
+        )
+        if existing_name:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A category with name '{payload.category_name}' already exists",
+            )
+
+        now = datetime.now(timezone.utc)
+
+        category = await db.review_categories.create(
+            data={
+                "category_code": payload.category_code,
+                "category_name": payload.category_name,
+                "multiplier":    payload.multiplier,
+                "description":   payload.description,
+                "is_active":     True,
+                "created_at":    now,
+                "created_by":    current_user.id,
+                "updated_at":    now,
+                "updated_by":    current_user.id,
+            }
+        )
+
+        logger.info(
+            "Review category created | code=%s multiplier=%.4f by=%s",
+            category.category_code, float(category.multiplier), current_user.id,
+        )
+
+        return {k: v for k, v in vars(category).items() if not k.startswith("_")}
+
+    # =========================================================
+    # UPDATE REVIEW CATEGORY
+    # =========================================================
+    @staticmethod
+    async def update_review_category(
+        category_id: str,
+        payload: ReviewCategoryUpdateRequest,
+        current_user: CurrentUser,
+    ):
+        category = await db.review_categories.find_unique(
+            where={"category_id": category_id}
+        )
+        if not category:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Review category not found",
+            )
+
+        update_data: dict = {}
+
+        if payload.category_code is not None:
+            conflict = await db.review_categories.find_first(
+                where={
+                    "category_code": payload.category_code,
+                    "NOT": {"category_id": category_id},
+                }
+            )
+            if conflict:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"A category with code '{payload.category_code}' already exists",
+                )
+            update_data["category_code"] = payload.category_code
+
+        if payload.category_name is not None:
+            conflict = await db.review_categories.find_first(
+                where={
+                    "category_name": payload.category_name,
+                    "NOT": {"category_id": category_id},
+                }
+            )
+            if conflict:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"A category with name '{payload.category_name}' already exists",
+                )
+            update_data["category_name"] = payload.category_name
+
+        if payload.multiplier  is not None: update_data["multiplier"]  = payload.multiplier
+        if payload.description is not None: update_data["description"] = payload.description
+        if payload.is_active   is not None: update_data["is_active"]   = payload.is_active
+
+        update_data["updated_at"] = datetime.now(timezone.utc)
+        update_data["updated_by"] = current_user.id
+
+        updated = await db.review_categories.update(
+            where={"category_id": category_id},
+            data=update_data,
+        )
+
+        logger.info(
+            "Review category updated | id=%s fields=%s by=%s",
+            category_id, list(update_data.keys()), current_user.id,
+        )
+
+        return {k: v for k, v in vars(updated).items() if not k.startswith("_")}
 
     # =========================================================
     # CREATE REVIEW

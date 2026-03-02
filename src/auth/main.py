@@ -38,7 +38,9 @@ API_PREFIX = "/v1"
 
 # --- AUTH ROUTES ---
 app.include_router(auth_router, prefix=API_PREFIX + "/auth", tags=["Auth"])
-
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Auth Service"}
 
 # Override OpenAPI schema to use Bearer Auth
 def custom_openapi():

@@ -88,7 +88,9 @@ app.include_router(recognition_router,      prefix="/v1", tags=["Reviews"])
 # /v1/review-categories  — DB-driven category list (replaces hardcoded enum)
 app.include_router(review_categories_router, prefix="/v1", tags=["Review Categories"])
 
-
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Recognition Service"}
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────

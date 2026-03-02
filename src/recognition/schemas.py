@@ -97,6 +97,68 @@ class ReviewUpdateRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# REVIEW CATEGORY CREATE / UPDATE REQUESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ReviewCategoryCreateRequest(BaseModel):
+    """
+    Request schema for creating a new review category.
+
+    - category_code : Unique short code, e.g. INNOVATION (auto-uppercased)
+    - category_name : Unique human-readable label
+    - multiplier    : Points multiplier (must be > 0)
+    - description   : Optional description
+    - is_active     : Defaults to True
+    """
+    category_code: str   = Field(..., min_length=1, max_length=50,  description="Unique short code, e.g. INNOVATION")
+    category_name: str   = Field(..., min_length=1, max_length=100, description="Unique human-readable name")
+    multiplier:    float = Field(..., gt=0,                          description="Points multiplier (must be > 0)")
+    description:   Optional[str] = Field(None, max_length=500,      description="Optional description")
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("category_code")
+    @classmethod
+    def uppercase_code(cls, v: str) -> str:
+        return v.strip().upper()
+
+    @field_validator("category_name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        return v.strip()
+
+
+class ReviewCategoryUpdateRequest(BaseModel):
+    """
+    At least one field must be supplied.
+    category_code and category_name must remain unique across all categories.
+    """
+    category_code: Optional[str]   = Field(None, min_length=1, max_length=50,  description="Updated short code (auto-uppercased)")
+    category_name: Optional[str]   = Field(None, min_length=1, max_length=100, description="Updated human-readable name")
+    multiplier:    Optional[float] = Field(None, gt=0,                          description="Updated points multiplier (must be > 0)")
+    description:   Optional[str]   = Field(None, max_length=500,                description="Updated description")
+    is_active:     Optional[bool]  = Field(None,                                description="Activate or deactivate the category")
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("category_code")
+    @classmethod
+    def uppercase_code(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip().upper() if v else v
+
+    @field_validator("category_name")
+    @classmethod
+    def strip_name(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if v else v
+
+    @model_validator(mode="after")
+    def validate_not_empty(self):
+        if not self.model_dump(exclude_none=True):
+            raise ValueError("At least one field must be provided for update")
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # REVIEW CATEGORY RESPONSE  (for GET /v1/review-categories)
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -1,16 +1,3 @@
-"""Standalone FastAPI application for the Analytics / Dashboard service.
-
-This module bootstraps the analytics microservice that exposes the
-``GET /v1/dashboard/summary`` endpoint.  It runs on **port 8007** and
-follows the same structure as the other microservices (auth, employees,
-wallet, recognition, rewards).
-
-Key responsibilities:
-    - Manage the Prisma database connection via an async lifespan.
-    - Register shared middleware (rate‑limiting) and exception handlers.
-    - Configure CORS for the frontend at ``http://localhost:3000``.
-    - Mount the analytics router at ``/v1/dashboard``.
-"""
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -26,10 +13,8 @@ from src.common.middleware import (
 )
 
 
-# Lifespan — connect / disconnect Prisma
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: D401
-    """Async context manager that connects to and disconnects from the database."""
+async def lifespan(app: FastAPI):
     await db.connect()
     print("Analytics Service: 🟢 Database Connected")
     yield
@@ -47,7 +32,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Register middleware
+# Health check MUST be registered before middleware so it is never
+# intercepted by rate limiting or request_rate_limit_middleware crashes
+# caused by request.client being None in certain proxy/test environments.
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Analytics Service"}
+
+# Register middleware AFTER health route
 app.middleware("http")(request_rate_limit_middleware)
 
 # Register exception handlers
@@ -76,15 +68,9 @@ app.add_middleware(
     ],
 )
 
-# Health check
-@app.get("/health", tags=["System"])
-async def health_check():
-    """Return a simple health check confirming the service is running."""
-    return {"status": "healthy", "service": "Analytics Service"}
-
-# Router — mounted at /v1/dashboard
+# Router
 app.include_router(analytics_router, prefix="/v1/dashboard", tags=["Dashboard"])
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("src.analytics.main:app", host="0.0.0.0", port=8007, reload=True)
+    uvicorn.run("src.analytics.main:app", host="0.0.0.0", port=8008, reload=True)

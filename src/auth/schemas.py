@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, StringConstraints
+from pydantic import BaseModel, EmailStr, StringConstraints, field_validator
 from typing import Optional, List, Annotated
 from uuid import UUID
 
@@ -36,6 +36,14 @@ class EmployeeResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str   # accepts username or email (handled in service)
     password: str
+
+    # ERR-437 FIX: Normalize username to lowercase so that login is
+    # case-insensitive. "ADMIN@COMPANY.COM" and "admin@company.com"
+    # must resolve to the same account.
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class RefreshRequest(BaseModel):
