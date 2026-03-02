@@ -1,39 +1,55 @@
-"""Router for the dashboard summary endpoint."""
+"""Router for the dashboard analytics endpoints."""
+from typing import List
+
 from fastapi import APIRouter, Depends
 
 from src.analytics.dependencies import CurrentUser, require_roles
-from src.analytics.schemas import DashboardSummaryResponse
-from src.analytics.service import get_dashboard_summary
+from src.analytics.schemas import (
+    RecentReview,
+    LeaderboardEntry,
+    PlatformStats,
+)
+from src.analytics.service import (
+    get_recent_reviews_list,
+    get_leaderboard_list,
+    get_platform_stats,
+)
 
 router = APIRouter()
 
+_auth = Depends(require_roles("EMPLOYEE", "MANAGER", "HR_ADMIN", "SUPER_ADMIN"))
+
+
+
 
 @router.get(
-    "/summary",
-    response_model=DashboardSummaryResponse,
-    summary="Dashboard Summary",
-    description="Get personalized dashboard summary for the authenticated employee"
+    "/recent-reviews",
+    response_model=List[RecentReview],
+    summary="Recent Reviews",
+    description="Get the last 5 reviews received by the authenticated employee",
 )
-async def dashboard_summary(
-    current_user: CurrentUser = Depends(
-        require_roles("EMPLOYEE", "MANAGER", "HR_ADMIN", "SUPER_ADMIN")
-    )
-):
-    """Return the personalised dashboard summary for the authenticated user.
+async def recent_reviews(current_user: CurrentUser = _auth):
+    """Return up to 5 most recent reviews received, newest first."""
+    return await get_recent_reviews_list(current_user.id)
 
-    The response contains:
 
-    - **employee** — profile snapshot (name, designation, department).
-    - **recent_reviews** — last 5 reviews received, newest first.
-    - **leaderboard** — top 10 employees ranked by total earned points.
-    - **platform_stats** — four KPIs, each with a lifetime ``value``
-      and a ``growth_percent`` comparing this month to last month:
-      ``total_points``, ``rewards_redeemed``, ``reviews_received``,
-      ``active_users``.
+@router.get(
+    "/leaderboard",
+    response_model=List[LeaderboardEntry],
+    summary="Leaderboard",
+    description="Get the top 10 employees ranked by total earned points",
+)
+async def leaderboard(current_user: CurrentUser = _auth):
+    """Return the top 10 employees ranked by total earned points."""
+    return await get_leaderboard_list()
 
-    Raises:
-        HTTPException 401: Missing or invalid bearer token.
-        HTTPException 403: Authenticated user lacks the required role.
-        HTTPException 404: Employee record not found in the database.
-    """
-    return await get_dashboard_summary(current_user.id)
+
+@router.get(
+    "/platform-stats",
+    response_model=PlatformStats,
+    summary="Platform Stats",
+    description="Get platform KPIs with month-over-month growth for the authenticated users",
+)
+async def platform_stats(current_user: CurrentUser = _auth):
+    """Return four KPIs (total_points, rewards_redeemed, reviews_received, active_users)."""
+    return await get_platform_stats(current_user.id)
