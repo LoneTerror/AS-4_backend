@@ -1,16 +1,3 @@
-"""Standalone FastAPI application for the Analytics / Dashboard service.
-
-This module bootstraps the analytics microservice that exposes the
-``GET /v1/dashboard/summary`` endpoint.  It runs on **port 8007** and
-follows the same structure as the other microservices (auth, employees,
-wallet, recognition, rewards).
-
-Key responsibilities:
-    - Manage the Prisma database connection via an async lifespan.
-    - Register shared middleware (rate‑limiting) and exception handlers.
-    - Configure CORS for the frontend at ``http://localhost:3000``.
-    - Mount the analytics router at ``/v1/dashboard``.
-"""
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -87,4 +74,4 @@ app.include_router(analytics_router, prefix="/v1/dashboard", tags=["Dashboard"])
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("src.analytics.main:app", host="0.0.0.0", port=8007, reload=True)
+    uvicorn.run("src.analytics.main:app", host="0.0.0.0", port=8008, reload=True)

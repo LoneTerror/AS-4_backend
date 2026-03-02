@@ -72,12 +72,19 @@ async def validate_token(token: str):
 async def authenticate_user(username: str, password: str):
     print(f"DEBUG: Attempting login for {username}")
 
-    # 1. Fetch User with roles included
+    # ERR-437 FIX: Normalize input to lowercase here as a defence-in-depth
+    # measure. The LoginRequest schema already lowercases at the boundary,
+    # but normalizing here too means the service is safe if called directly
+    # (e.g. from tests or other services) without going through the schema.
+    username = username.strip().lower()
+
+    # 1. Fetch User with roles included — mode "insensitive" makes the DB
+    #    comparison case-insensitive at the storage level (Prisma / Postgres).
     user = await db.employees.find_first(
         where={
             "OR": [
-                {"username": username},
-                {"email": username}
+                {"username": {"equals": username, "mode": "insensitive"}},
+                {"email":    {"equals": username, "mode": "insensitive"}}
             ]
         },
         include={
