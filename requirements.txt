@@ -34,5 +34,6 @@ python-dateutil==2.9.0.post0
 pytest
 pytest-asyncio
 pytest-mock  
+pytest-cov
 
 aiosmtplib

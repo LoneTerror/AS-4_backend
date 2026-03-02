@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from contextlib import asynccontextmanager
 
 from src.prisma.client import db
 from src.common.middleware import (
@@ -14,6 +15,25 @@ from . import router as rewards_router
 # --- IMPORT LOGGER ---
 from src.core.logger import logger
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- Startup Logic ---
+    logger.info("Starting up Reward Microservice...")
+    await db.connect()
+    logger.info("Rewards Service: 🟢 Database Connected Successfully") 
+    
+    
+    yield  # The app runs while this generator is "paused" here
+    
+    # --- Shutdown Logic (Your code goes here) ---
+    logger.info("Shutting down Reward Microservice...")
+    try:
+        if db.is_connected():
+            await db.disconnect()
+            logger.info("Rewards Service: 🔴 Database Disconnected Successfully")
+    except Exception as e:
+        logger.error(f"Rewards Service: Error during database disconnection: {str(e)}", exc_info=True)
+
 app = FastAPI(
     title="Reward Microservice",
     description="API for managing the reward catalog and point redemptions.",
@@ -22,6 +42,7 @@ app = FastAPI(
     openapi_url="/v1/openapi.json",
     docs_url="/v1/docs",
     redoc_url="/v1/redoc",
+    lifespan=lifespan
 )
 
 # ── CORS must be registered FIRST so OPTIONS preflights are handled
@@ -56,27 +77,6 @@ app.add_exception_handler(Exception, generic_exception_handler)
 app.include_router(rewards_router.router)
 
 
-@app.on_event("startup")
-async def startup():
-    logger.info("Initializing Reward Microservice...")
-    try:
-        if not db.is_connected():
-            await db.connect()
-            logger.info("Rewards Service: 🟢 Database Connected Successfully")
-    except Exception as e:
-        # If DB fails to connect on boot, log it as critical so we know immediately
-        logger.critical(f"Rewards Service: 🔴 Database Connection Failed: {str(e)}", exc_info=True)
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    logger.info("Shutting down Reward Microservice...")
-    try:
-        if db.is_connected():
-            await db.disconnect()
-            logger.info("Rewards Service: 🔴 Database Disconnected Successfully")
-    except Exception as e:
-        logger.error(f"Rewards Service: Error during database disconnection: {str(e)}", exc_info=True)
 
 
 @app.get("/")
