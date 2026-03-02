@@ -5,7 +5,7 @@ from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 import asyncio
 
-from src.prisma.client import db
+from src.prisma.client import db, connect_with_retry
 from src.employees.router import router as emp_router
 from src.notifications.router import router as notifications_router
 from src.notifications.email_sender import EmailSender, SMTPConfig
@@ -14,7 +14,7 @@ from src.notifications.worker import email_worker_loop
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Employee Service: Connecting to Database...")
-    await db.connect(timeout=60)
+    await connect_with_retry()
     print("Employee Service: 🟢 Database Connected")
 
 
