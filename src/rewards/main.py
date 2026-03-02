@@ -62,3 +62,15 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
 
 app.include_router(rewards_router.router)
+
+@app.get("/")
+@app.get("/health")
+def health_check():
+    # Using debug so health checks don't spam the info/production logs
+    logger.debug("Health check endpoint pinged.")
+    return {
+        "service": "Reward Microservice",
+        "status": "System Operational",
+        "version": "0.1.0",
+        "database": "Connected" if db.is_connected() else "Disconnected",
+    }

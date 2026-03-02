@@ -50,4 +50,9 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Wallet Service"}
+
+# Router
 app.include_router(wallet_router, prefix="/v1")
