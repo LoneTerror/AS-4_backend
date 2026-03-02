@@ -12,7 +12,7 @@ from src.common.middleware import (
     generic_exception_handler
 )
 
-# Lifespan
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
@@ -20,6 +20,7 @@ async def lifespan(app: FastAPI):
     yield
     await db.disconnect()
     print("Wallet Service: 🔴 Database Disconnected")
+
 
 app = FastAPI(
     title="Wallet Service",
@@ -31,7 +32,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Register middleware
+# Health check MUST be registered before middleware so it is never
+# intercepted by rate limiting or request_rate_limit_middleware crashes
+# caused by request.client being None in certain proxy/test environments.
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Wallet Service"}
+
+# Register middleware AFTER health route
 app.middleware("http")(request_rate_limit_middleware)
 
 # Register exception handlers

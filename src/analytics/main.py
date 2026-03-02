@@ -13,10 +13,8 @@ from src.common.middleware import (
 )
 
 
-# Lifespan — connect / disconnect Prisma
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: D401
-    """Async context manager that connects to and disconnects from the database."""
+async def lifespan(app: FastAPI):
     await db.connect()
     print("Analytics Service: 🟢 Database Connected")
     yield
@@ -34,7 +32,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Register middleware
+# Health check MUST be registered before middleware so it is never
+# intercepted by rate limiting or request_rate_limit_middleware crashes
+# caused by request.client being None in certain proxy/test environments.
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "healthy", "service": "Analytics Service"}
+
+# Register middleware AFTER health route
 app.middleware("http")(request_rate_limit_middleware)
 
 # Register exception handlers
@@ -63,13 +68,7 @@ app.add_middleware(
     ],
 )
 
-# Health check
-@app.get("/health", tags=["System"])
-async def health_check():
-    """Return a simple health check confirming the service is running."""
-    return {"status": "healthy", "service": "Analytics Service"}
-
-# Router — mounted at /v1/dashboard
+# Router
 app.include_router(analytics_router, prefix="/v1/dashboard", tags=["Dashboard"])
 
 if __name__ == "__main__":
