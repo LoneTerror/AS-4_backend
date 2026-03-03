@@ -5,7 +5,7 @@ from uuid import UUID
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from . import schemas
-from src.core.logger import logger
+from core.logger import logger
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
 

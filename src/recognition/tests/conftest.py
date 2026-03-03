@@ -22,7 +22,8 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
+from uuid import UUID
 
 # ---------------------------------------------------------------------------
 # 1. Stub the entire src.* namespace so real modules can be imported
@@ -78,15 +79,16 @@ _pe_spec.loader.exec_module(_real_pe)
 
 _pe = sys.modules["src.recognition.points_engine"]
 _pe.calculate_points = _real_pe.calculate_points
-_pe.quarters_elapsed = _real_pe.quarters_elapsed
-_pe.apply_decay      = _real_pe.apply_decay
 _pe.PointsResult     = _real_pe.PointsResult
 
 # ---------------------------------------------------------------------------
 # 2. Fake database object — every test patches individual methods on this
 # ---------------------------------------------------------------------------
 fake_db = MagicMock()
+async def fake_connect(): pass # Stub for the retry function
+
 sys.modules["src.prisma.client"].db = fake_db
+sys.modules["src.prisma.client"].connect_with_retry = fake_connect
 
 # ---------------------------------------------------------------------------
 # 3. CurrentUser model (mirrors the real one in dependencies.py)
@@ -108,22 +110,67 @@ sys.modules["src.recognition.dependencies"].CurrentUser = CurrentUser
 # payload.category_id before any DB call happens.
 # ---------------------------------------------------------------------------
 class ReviewCreateRequest(BaseModel):
-    receiver_id: object
+    receiver_id: UUID
     rating: int
     comment: str
-    category_id: object = None      # FIX: added — FK to review_categories table
-    image_url: object = None
-    video_url: object = None
+    category_ids: List[UUID]  # Updated: list of UUIDs
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
 
 class ReviewUpdateRequest(BaseModel):
-    rating: int | None = None
-    comment: str | None = None
-    category_id: object = None      # FIX: added — optional FK; None means "no change"
-    image_url: object = None
-    video_url: object = None
+    rating: Optional[int] = None
+    comment: Optional[str] = None
+    category_ids: Optional[List[UUID]] = None # Updated: list of UUIDs
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
 
-sys.modules["src.recognition.schemas"].ReviewCreateRequest = ReviewCreateRequest
-sys.modules["src.recognition.schemas"].ReviewUpdateRequest = ReviewUpdateRequest
+class ReviewCategoryCreateRequest(BaseModel):
+    category_code: str
+    category_name: str
+    multiplier: float
+    description: Optional[str] = None
+
+class ReviewCategoryUpdateRequest(BaseModel):
+    category_code: Optional[str] = None
+    category_name: Optional[str] = None
+    multiplier: Optional[float] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class ReviewCategoryTagResponse(BaseModel):
+    category_id: UUID
+    category_code: str
+    multiplier_snapshot: float
+
+class ReviewResponse(BaseModel):
+    review_id: UUID
+    reviewer_id: UUID
+    receiver_id: UUID
+    rating: int
+    comment: str
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    status_id: UUID
+    review_at: datetime
+    created_at: datetime
+    created_by: UUID
+    updated_at: datetime
+    updated_by: UUID
+    # Multi-category fields
+    category_tags: Optional[List[ReviewCategoryTagResponse]] = None
+    category_ids: Optional[List[UUID]] = None
+    category_codes: Optional[List[str]] = None
+    raw_points: Optional[float] = None
+
+
+
+_schemas = sys.modules["src.recognition.schemas"]
+_schemas.ReviewCreateRequest = ReviewCreateRequest
+_schemas.ReviewUpdateRequest = ReviewUpdateRequest
+_schemas.ReviewCategoryCreateRequest = ReviewCategoryCreateRequest
+_schemas.ReviewCategoryUpdateRequest = ReviewCategoryUpdateRequest
+_schemas.ReviewResponse = ReviewResponse
+_schemas.ReviewCategoryTagResponse = ReviewCategoryTagResponse
 
 # ---------------------------------------------------------------------------
 # 5. Reusable factory helpers (imported by every test file)
@@ -141,39 +188,46 @@ def make_user(user_id="user-1", roles=None, email="user@test.com", dept=None):
 def make_review(**kwargs):
     """
     Build a MagicMock that looks like a Prisma reviews row.
-
-    FIX: Added category_id, category_code and points snapshot fields.
-    _enrich_with_effective_points() calls vars(review) and then reads
-    raw_points + review_at. Without these, every enrichment call returns
-    effective_points=None and the returned dict is missing category fields.
+    Updated to support the multi-category tag relation.
     """
+    uid = "990e8400-e29b-41d4-a716-446655440004"
     defaults = dict(
-        review_id="rev-1",
-        reviewer_id="user-1",
-        receiver_id="user-2",
+        review_id=uid,
+        reviewer_id="880e8400-e29b-41d4-a716-446655440000",
+        receiver_id="550e8400-e29b-41d4-a716-446655440000",
         rating=4,
         comment="Good job",
         image_url=None,
         video_url=None,
-        status_id="status-1",
+        status_id="aa0e8400-e29b-41d4-a716-446655440005",
         review_at=datetime.now(timezone.utc),
         created_at=datetime.now(timezone.utc),
-        created_by="user-1",
+        created_by="880e8400-e29b-41d4-a716-446655440000",
         updated_at=datetime.now(timezone.utc),
-        updated_by="user-1",
-        # FIX: points snapshot + category fields expected by _enrich_with_effective_points
-        category_id="cat-1",
-        category_code="TEAMWORK",
-        raw_points=8.0,
-        category_multiplier=1.0,
-        reviewer_weight=2.0,
-        seasonal_multiplier=1.0,
+        updated_by="880e8400-e29b-41d4-a716-446655440000",
+        raw_points=15.68,
+        # Mock the relation for category tags
+        category_tags=[
+            make_category_tag_row(category_code="INNOVATION", multiplier=1.4),
+            make_category_tag_row(category_code="TEAMWORK", multiplier=1.2)
+        ]
     )
     defaults.update(kwargs)
     obj = MagicMock()
     for k, v in defaults.items():
         setattr(obj, k, v)
+    
+    # Enable dict conversion for the service layer
+    obj.__dict__.update(defaults)
     return obj
+
+def make_category_tag_row(category_id=None, category_code="TAG", multiplier=1.0):
+    """Mimics a row from the review_category_tags table."""
+    row = MagicMock()
+    row.category_id = category_id or "770e8400-e29b-41d4-a716-446655440001"
+    row.category_code = category_code
+    row.multiplier_snapshot = multiplier
+    return row
 
 
 def make_active_employee():
@@ -274,3 +328,10 @@ def sample_review():
 def db_patch():
     """Returns the fake_db object for direct attribute inspection."""
     return fake_db
+
+@pytest.fixture(autouse=True)
+def reset_mocks():
+    """Reset the global fake_db mock before and after every test."""
+    fake_db.reset_mock()
+    yield
+    fake_db.reset_mock()

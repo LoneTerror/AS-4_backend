@@ -49,8 +49,6 @@ _real_pe_mod = _ilu_pe.module_from_spec(_pe_mod_spec)
 _pe_mod_spec.loader.exec_module(_real_pe_mod)
 _pe_mod = sys.modules["src.recognition.points_engine"]
 _pe_mod.calculate_points = _real_pe_mod.calculate_points
-_pe_mod.quarters_elapsed = _real_pe_mod.quarters_elapsed
-_pe_mod.apply_decay      = _real_pe_mod.apply_decay
 _pe_mod.PointsResult     = _real_pe_mod.PointsResult
 
 from pydantic import BaseModel

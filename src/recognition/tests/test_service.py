@@ -71,7 +71,7 @@ from conftest import (  # noqa: E402
     make_category_row, make_role_row, make_seasonal_row, make_points_config_row,
 )
 
-from service import RecognitionService  # noqa: E402
+from src.recognition.service import RecognitionService
 
 DB = "service.db"
 
