@@ -65,7 +65,6 @@ setup_venv.ps1
 generated/
 
 .pytest_cache/
-pytest.ini
 __pycache__/
 *.pyc
 
@@ -75,3 +74,7 @@ __pycache__/
 
 #secrets report of gitleaks
 report.json
+
+.coverage
+coverage-organization.xml
+coverage.xml
