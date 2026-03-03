@@ -1,5 +1,5 @@
 """
-Lightweight async SMTP mailer.
+Lightweight async SMTP mailer — Abhaar brand edition.
 
 Reads config from environment variables — never hard-code credentials.
 Uses aiosmtplib so the event loop is never blocked.
@@ -18,6 +18,36 @@ import aiosmtplib
 logger = logging.getLogger(__name__)
 
 
+# ── Brand palette (extracted from Abhaar logo) ────────────────────────────────
+_BRAND = {
+    "gradient_start": "#2D1B69",
+    "gradient_mid":   "#7B2FBE",
+    "gradient_end":   "#C0348A",
+    "violet":         "#7B2FBE",
+    "pink":           "#C0348A",
+    "body_bg":        "#F7F8FC",
+    "card_bg":        "#FFFFFF",
+    "text_primary":   "#1F2937",
+    "text_secondary": "#4B5563",
+    "text_muted":     "#9CA3AF",
+    "border":         "#E5E7EB",
+    "footer_bg":      "#F3F4F6",
+}
+
+_TYPE_ACCENT = {
+    "REVIEW":      "#4F46E5",
+    "REWARD":      "#B45309",
+    "SYSTEM":      "#374151",
+    "CELEBRATION": "#C0348A",
+}
+_TYPE_LABEL = {
+    "REVIEW":      "Performance Review",
+    "REWARD":      "Reward & Recognition",
+    "SYSTEM":      "System Notice",
+    "CELEBRATION": "Celebration",
+}
+
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -27,8 +57,8 @@ class SMTPConfig:
     username: str
     password: str
     from_email: str
-    use_tls: bool = True      # STARTTLS  (port 587)
-    use_ssl: bool = False     # Implicit TLS (port 465)
+    use_tls: bool = True
+    use_ssl: bool = False
 
     @classmethod
     def from_env(cls) -> "SMTPConfig":
@@ -46,18 +76,8 @@ class SMTPConfig:
 # ── Mailer ─────────────────────────────────────────────────────────────────────
 
 class EmailSender:
-    """
-    Single-responsibility async email sender.
-
-    One instance is created at startup and shared by the worker.
-    The config is loaded once from the environment, failing fast if
-    required variables are missing.
-    """
-
     def __init__(self, config: SMTPConfig) -> None:
         self._cfg = config
-
-    # -- Public API ------------------------------------------------------------
 
     async def send_notification_email(
         self,
@@ -67,12 +87,14 @@ class EmailSender:
         body_html: str,
         body_text: str | None = None,
     ) -> None:
-        """
-        Send a single notification email.
+        # Never deliver to the SMTP sender's own address.
+        if to_email.lower() == self._cfg.from_email.lower():
+            logger.info(
+                "Email suppressed — recipient %s matches SMTP sender, skipping.",
+                to_email,
+            )
+            return
 
-        Raises on SMTP errors so the caller (worker) can decide whether to
-        retry or log and skip.
-        """
         message = self._build_message(
             to_email=to_email,
             subject=subject,
@@ -82,22 +104,13 @@ class EmailSender:
         await self._send(message)
         logger.info("Email sent to %s | subject=%r", to_email, subject)
 
-    # -- Helpers ---------------------------------------------------------------
-
-    def _build_message(
-        self,
-        *,
-        to_email: str,
-        subject: str,
-        body_html: str,
-        body_text: str,
-    ) -> MIMEMultipart:
+    def _build_message(self, *, to_email, subject, body_html, body_text) -> MIMEMultipart:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = self._cfg.from_email
-        msg["To"] = to_email
+        msg["From"]    = f"Abhaar <{self._cfg.from_email}>"
+        msg["To"]      = to_email
         msg.attach(MIMEText(body_text, "plain", "utf-8"))
-        msg.attach(MIMEText(body_html, "html", "utf-8"))
+        msg.attach(MIMEText(body_html, "html",  "utf-8"))
         return msg
 
     async def _send(self, message: MIMEMultipart) -> None:
@@ -108,170 +121,274 @@ class EmailSender:
             password=self._cfg.password,
         )
         if self._cfg.use_ssl:
-            smtp_kwargs["use_tls"] = True          # implicit TLS (port 465)
+            smtp_kwargs["use_tls"] = True
         else:
-            smtp_kwargs["start_tls"] = self._cfg.use_tls  # STARTTLS (port 587)
-
+            smtp_kwargs["start_tls"] = self._cfg.use_tls
         async with aiosmtplib.SMTP(**smtp_kwargs) as smtp:
             await smtp.send_message(message)
 
     @staticmethod
     def _html_to_plain(html: str) -> str:
-        """Very basic HTML → plain text fallback."""
         import re
         return re.sub(r"<[^>]+>", "", html).strip()
 
 
-# ── Template helpers ───────────────────────────────────────────────────────────
+# ── Shared layout shell ────────────────────────────────────────────────────────
 
-def build_notification_html(*, title: str, message: str, type_: str) -> str:
-    """
-    Minimal, inline-styled HTML email template.
-    Replace with your branded template as needed.
-    """
-    type_color = {
-        "REVIEW": "#4f46e5",
-        "REWARD": "#f59e0b",
-        "SYSTEM": "#6b7280",
-        "CELEBRATION": "#ec4899",
-    }.get(type_, "#6b7280")
+def _email_shell(*, preheader: str, header_html: str, body_html: str) -> str:
+    b = _BRAND
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <style>
+    body,table,td,p,a{{margin:0;padding:0;border:0;}}
+    body{{background:{b['body_bg']};font-family:'Segoe UI',Arial,sans-serif;}}
+    @media only screen and (max-width:620px){{
+      .card{{width:100%!important;border-radius:0!important;}}
+      .pad{{padding:24px 20px!important;}}
+    }}
+  </style>
+</head>
+<body style="margin:0;padding:0;background:{b['body_bg']};">
+  <div style="display:none;max-height:0;overflow:hidden;font-size:1px;color:{b['body_bg']};">
+    {preheader}&nbsp;&#847;&nbsp;&#847;&nbsp;&#847;
+  </div>
+  <table width="100%" cellpadding="0" cellspacing="0"
+         style="background:{b['body_bg']};padding:40px 16px;">
+    <tr><td align="center">
+      <table class="card" width="600" cellpadding="0" cellspacing="0"
+             style="background:{b['card_bg']};border-radius:12px;overflow:hidden;
+                    box-shadow:0 4px 24px rgba(44,27,105,.10),0 1px 4px rgba(44,27,105,.06);">
 
-    return f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width"></head>
-    <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
+        <!-- Logo bar -->
         <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0"
-                   style="background:#ffffff;border-radius:8px;overflow:hidden;
-                          box-shadow:0 1px 3px rgba(0,0,0,.1);">
-              <!-- Header -->
-              <tr>
-                <td style="background:{type_color};padding:24px 32px;">
-                  <span style="color:#fff;font-size:12px;font-weight:600;
-                               text-transform:uppercase;letter-spacing:.08em;">{type_}</span>
-                </td>
-              </tr>
-              <!-- Body -->
-              <tr>
-                <td style="padding:32px;">
-                  <h1 style="margin:0 0 16px;font-size:20px;color:#111827;">{title}</h1>
-                  <p  style="margin:0;font-size:15px;line-height:1.6;color:#374151;">{message}</p>
-                </td>
-              </tr>
-              <!-- Footer -->
-              <tr>
-                <td style="padding:16px 32px;background:#f9fafb;
-                           border-top:1px solid #e5e7eb;
-                           font-size:12px;color:#9ca3af;">
-                  This is an automated message. Please do not reply.
-                </td>
-              </tr>
-            </table>
+          <td align="center"
+              style="background:linear-gradient(135deg,{b['gradient_start']} 0%,{b['gradient_mid']} 55%,{b['gradient_end']} 100%);
+                     padding:22px 40px;">
+            <span style="font-size:24px;font-weight:700;letter-spacing:.5px;
+                         color:#fff;font-family:'Segoe UI',Arial,sans-serif;">
+              Abh<span style="color:#F9A8D4;">aa</span>r
+            </span>
           </td>
         </tr>
+
+        {header_html}
+        {body_html}
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:{b['footer_bg']};border-top:1px solid {b['border']};
+                     padding:18px 40px;text-align:center;">
+            <p style="margin:0 0 4px;font-size:12px;color:{b['text_muted']};
+                      font-family:'Segoe UI',Arial,sans-serif;">
+              This is an automated message from
+              <strong style="color:{b['violet']};">Abhaar</strong>.
+              Please do not reply.
+            </p>
+            <p style="margin:0;font-size:11px;color:{b['text_muted']};
+                      font-family:'Segoe UI',Arial,sans-serif;">
+              &copy; Abhaar &mdash; Employee Recognition Platform
+            </p>
+          </td>
+        </tr>
+
       </table>
-    </body>
-    </html>
-    """
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+# ── Notification email (REVIEW / REWARD / SYSTEM) ─────────────────────────────
+
+def build_notification_html(*, title: str, message: str, type_: str) -> str:
+    b      = _BRAND
+    accent = _TYPE_ACCENT.get(type_, b["violet"])
+    label  = _TYPE_LABEL.get(type_, type_.title())
+
+    header_html = f"""
+      <tr>
+        <td style="padding:30px 40px 20px;border-bottom:1px solid {b['border']};">
+          <span style="display:inline-block;padding:4px 14px;background:{accent};
+                       border-radius:99px;font-size:11px;font-weight:700;
+                       text-transform:uppercase;letter-spacing:.08em;color:#fff;
+                       font-family:'Segoe UI',Arial,sans-serif;">
+            {label}
+          </span>
+          <h1 style="margin:14px 0 0;font-size:21px;font-weight:700;line-height:1.35;
+                     color:{b['text_primary']};font-family:'Segoe UI',Arial,sans-serif;">
+            {title}
+          </h1>
+        </td>
+      </tr>"""
+
+    body_html = f"""
+      <tr>
+        <td class="pad" style="padding:26px 40px 36px;">
+          <p style="margin:0;font-size:15px;line-height:1.75;
+                    color:{b['text_secondary']};font-family:'Segoe UI',Arial,sans-serif;">
+            {message}
+          </p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
+            <tr>
+              <td width="56" height="3" style="border-radius:2px;
+                   background:linear-gradient(90deg,{b['gradient_start']},{b['gradient_end']});">
+                &nbsp;
+              </td>
+              <td height="3" style="background:{b['border']};"></td>
+            </tr>
+          </table>
+        </td>
+      </tr>"""
+
+    return _email_shell(
+        preheader=f"{label}: {title}",
+        header_html=header_html,
+        body_html=body_html,
+    )
+
+
+# ── Celebration email (BIRTHDAY / WORK_ANNIVERSARY) ───────────────────────────
 
 def build_celebration_html(
     *,
     employee_name: str,
-    celebration_type: str,   # "BIRTHDAY" | "WORK_ANNIVERSARY"
+    celebration_type: str,
     years: int | None = None,
+    is_personal: bool = False,
 ) -> tuple[str, str]:
-    """
-    Build a festive (subject, html) pair for birthday / work-anniversary emails.
+    b = _BRAND
 
-    ``years`` is used for anniversaries (e.g. "5-year work anniversary").
-    Returns a (subject, html_body) tuple so the caller has a ready-to-use subject.
-    """
     if celebration_type == "BIRTHDAY":
-        emoji = "🎂"
-        subject = f"Happy Birthday, {employee_name}! 🎉"
-        headline = f"Happy Birthday, {employee_name}!"
-        body_copy = (
-            "Wishing you a wonderful day filled with joy. "
-            "The whole team is thinking of you — enjoy your special day!"
-        )
-        badge_label = "Birthday"
-        badge_color = "#ec4899"   # pink
-    else:
-        ordinal = _ordinal(years) if years else ""
-        emoji = "🏆"
-        subject = f"Happy {ordinal} Work Anniversary, {employee_name}! 🎊"
-        headline = f"Happy {ordinal} Work Anniversary, {employee_name}!"
-        body_copy = (
-            f"Today marks {years} incredible year{'s' if years != 1 else ''} "
-            "with us. Thank you for everything you bring to the team — "
-            "here's to many more milestones together!"
-        )
-        badge_label = "Work Anniversary"
-        badge_color = "#7c3aed"   # purple
+        badge_label  = "Birthday"
+        badge_color  = b["pink"]
+        if is_personal:
+            subject    = f"Happy Birthday, {employee_name}"
+            headline   = "Wishing You a Wonderful Birthday"
+            salutation = f"Dear {employee_name},"
+            body_copy  = (
+                "On behalf of everyone at Abhaar, we want to take a moment to celebrate you today. "
+                "Your presence, dedication, and the energy you bring to this team are truly valued. "
+                "We hope this year brings you joy, meaningful growth, and everything you deserve. "
+                "Happy Birthday."
+            )
+            cta_label  = None
+        else:
+            subject    = f"It's {employee_name}'s Birthday Today"
+            headline   = f"{employee_name}'s Birthday"
+            salutation = "A note for the team,"
+            body_copy  = (
+                f"Today is a special day for <strong>{employee_name}</strong>. "
+                "Take a moment to reach out and acknowledge them — "
+                "a kind word goes further than you think. "
+                "Let's celebrate the people who make this team what it is."
+            )
+            cta_label  = f"Wish {employee_name.split()[0]} a Happy Birthday"
 
-    html = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width"></head>
-    <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
-        <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0"
-                   style="background:#ffffff;border-radius:8px;overflow:hidden;
-                          box-shadow:0 1px 3px rgba(0,0,0,.1);">
-              <!-- Festive header -->
-              <tr>
-                <td style="background:linear-gradient(135deg,{badge_color} 0%,#f9a8d4 100%);
-                           padding:32px;text-align:center;">
-                  <div style="font-size:48px;line-height:1;">{emoji}</div>
-                  <span style="display:inline-block;margin-top:12px;padding:4px 14px;
-                               background:rgba(255,255,255,.25);border-radius:99px;
-                               color:#fff;font-size:11px;font-weight:700;
-                               text-transform:uppercase;letter-spacing:.1em;">
-                    {badge_label}
-                  </span>
-                </td>
-              </tr>
-              <!-- Body -->
-              <tr>
-                <td style="padding:36px 32px;text-align:center;">
-                  <h1 style="margin:0 0 16px;font-size:22px;color:#111827;">{headline}</h1>
-                  <p  style="margin:0;font-size:15px;line-height:1.7;color:#374151;
-                              max-width:440px;margin:0 auto;">{body_copy}</p>
-                </td>
-              </tr>
-              <!-- Confetti divider (pure CSS) -->
-              <tr>
-                <td style="padding:0 32px 24px;text-align:center;
-                           font-size:20px;letter-spacing:4px;">
-                  🎉 🎊 🥳 🎈 🎁
-                </td>
-              </tr>
-              <!-- Footer -->
-              <tr>
-                <td style="padding:16px 32px;background:#f9fafb;
-                           border-top:1px solid #e5e7eb;
-                           font-size:12px;color:#9ca3af;text-align:center;">
-                  Sent with ❤️ by your HR team · This is an automated message.
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-    """
-    return subject, html
+    else:  # WORK_ANNIVERSARY
+        ordinal      = _ordinal(years)
+        badge_label  = "Work Anniversary"
+        badge_color  = b["violet"]
+        yr_word      = f"{years} year{'s' if (years or 0) != 1 else ''}"
 
+        if is_personal:
+            subject    = f"Happy {ordinal} Work Anniversary, {employee_name}"
+            headline   = f"Congratulations on {ordinal} Year{'s' if (years or 0) != 1 else ''}"
+            salutation = f"Dear {employee_name},"
+            body_copy  = (
+                f"Today marks {yr_word} since you joined Abhaar — and what a journey it has been. "
+                "Your commitment, consistency, and the standard you set for yourself "
+                "do not go unnoticed. "
+                "Thank you for the work you bring every day. Here's to the milestones still ahead."
+            )
+            cta_label  = None
+        else:
+            subject    = f"{employee_name} is Celebrating a Work Anniversary Today"
+            headline   = f"{employee_name}'s {ordinal} Work Anniversary"
+            salutation = "A note for the team,"
+            body_copy  = (
+                f"<strong>{employee_name}</strong> is marking their "
+                f"<strong>{ordinal} anniversary</strong> with Abhaar today. "
+                "Their contribution is a cornerstone of what we build together. "
+                "Take a moment to acknowledge this milestone — "
+                "recognition from peers is one of the most meaningful forms there is."
+            )
+            cta_label  = f"Congratulate {employee_name.split()[0]}"
+
+    cta_html = ""
+    if cta_label:
+        cta_html = f"""
+        <table cellpadding="0" cellspacing="0" style="margin-top:28px;">
+          <tr>
+            <td style="border-radius:6px;
+                       background:linear-gradient(135deg,{b['gradient_start']},{b['gradient_mid']},{b['gradient_end']});">
+              <span style="display:inline-block;padding:11px 26px;font-size:14px;
+                           font-weight:600;color:#fff;
+                           font-family:'Segoe UI',Arial,sans-serif;letter-spacing:.02em;">
+                {cta_label}
+              </span>
+            </td>
+          </tr>
+        </table>"""
+
+    header_html = f"""
+      <tr>
+        <td style="padding:28px 40px 20px;border-bottom:1px solid {b['border']};
+                   background:linear-gradient(160deg,
+                     rgba(44,27,105,.03) 0%,rgba(192,52,138,.04) 100%);">
+          <span style="display:inline-block;padding:4px 14px;background:{badge_color};
+                       border-radius:99px;font-size:11px;font-weight:700;
+                       text-transform:uppercase;letter-spacing:.08em;color:#fff;
+                       font-family:'Segoe UI',Arial,sans-serif;">
+            {badge_label}
+          </span>
+          <h1 style="margin:14px 0 0;font-size:21px;font-weight:700;line-height:1.35;
+                     color:{b['text_primary']};font-family:'Segoe UI',Arial,sans-serif;">
+            {headline}
+          </h1>
+        </td>
+      </tr>"""
+
+    body_html = f"""
+      <tr>
+        <td class="pad" style="padding:26px 40px 36px;">
+          <p style="margin:0 0 14px;font-size:12px;font-weight:700;
+                    text-transform:uppercase;letter-spacing:.08em;
+                    color:{badge_color};font-family:'Segoe UI',Arial,sans-serif;">
+            {salutation}
+          </p>
+          <p style="margin:0;font-size:15px;line-height:1.75;
+                    color:{b['text_secondary']};font-family:'Segoe UI',Arial,sans-serif;">
+            {body_copy}
+          </p>
+          {cta_html}
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
+            <tr>
+              <td width="56" height="3" style="border-radius:2px;
+                   background:linear-gradient(90deg,{b['gradient_start']},{b['gradient_end']});">
+                &nbsp;
+              </td>
+              <td height="3" style="background:{b['border']};"></td>
+            </tr>
+          </table>
+        </td>
+      </tr>"""
+
+    return subject, _email_shell(
+        preheader=subject,
+        header_html=header_html,
+        body_html=body_html,
+    )
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _ordinal(n: int | None) -> str:
-    """Return '1st', '2nd', '3rd', '4th', … for a given integer."""
     if n is None:
         return ""
-    suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10 if n % 100 not in (11, 12, 13) else 0, "th")
+    suffix = {1: "st", 2: "nd", 3: "rd"}.get(
+        n % 10 if n % 100 not in (11, 12, 13) else 0, "th"
+    )
     return f"{n}{suffix}"
