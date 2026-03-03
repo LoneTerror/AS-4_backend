@@ -11,18 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 class NotificationService:
-    """
-    Thin, async-first service for creating and managing notifications.
-
-    All timestamps are timezone-aware (UTC).  The service owns no state
-    beyond the injected Prisma client, making it safe to instantiate once
-    at startup and share across request handlers.
-    """
-
     def __init__(self, db: Prisma) -> None:
         self._db = db
-
-    # ── Write ──────────────────────────────────────────────────────────────────
 
     async def create_notification(
         self,
@@ -51,8 +41,6 @@ class NotificationService:
         )
         return record.model_dump()
 
-    # ── Read ───────────────────────────────────────────────────────────────────
-
     async def get_notifications(
         self,
         *,
@@ -75,8 +63,6 @@ class NotificationService:
         return await self._db.notifications.count(
             where={"employee_id": str(employee_id), "is_read": False}
         )
-
-    # ── Mutations ──────────────────────────────────────────────────────────────
 
     async def mark_as_read(
         self,
@@ -109,49 +95,47 @@ class NotificationService:
         )
         return result
 
-    # ── Celebrations ───────────────────────────────────────────────────────────
-
     async def get_employees_with_celebrations_today(self) -> list[dict]:
-        """
-        Return employees whose birthday OR work anniversary falls today.
-        """
         from datetime import date
 
         today = date.today()
         month, day = today.month, today.day
 
-        employees = await self._db.employees.find_many(
-            where={
-                "status_master_employees_status_idTostatus_master": {
-                    "is": {"status_code": "ACTIVE"}
-                }
-            },
+        # Fetch all employees with status included, filter in Python
+        # Avoids Prisma nested-relation WHERE silently dropping rows
+        all_employees = await self._db.employees.find_many(
+            include={"status_master_employees_status_idTostatus_master": True}
         )
 
         celebrants: list[dict] = []
 
-        for emp in employees:
+        for emp in all_employees:
+            status = emp.status_master_employees_status_idTostatus_master
+            if status is None or status.status_code != "ACTIVE":
+                continue
+
             dob = emp.date_of_birth
             if dob is not None and dob.month == month and dob.day == day:
                 celebrants.append({
                     "employee_id": emp.employee_id,
-                    "username": emp.username,
-                    "email": emp.email,
+                    "username":    emp.username,
+                    "email":       emp.email,
                     "celebration_type": "BIRTHDAY",
                     "years": None,
                 })
 
             doj = emp.date_of_joining
             if (
-                doj.month == month
+                doj is not None
+                and doj.month == month
                 and doj.day == day
                 and doj.year != today.year
             ):
                 years = today.year - doj.year
                 celebrants.append({
                     "employee_id": emp.employee_id,
-                    "username": emp.username,
-                    "email": emp.email,
+                    "username":    emp.username,
+                    "email":       emp.email,
                     "celebration_type": "WORK_ANNIVERSARY",
                     "years": years,
                 })
@@ -163,22 +147,17 @@ class NotificationService:
         self,
         *,
         employee_id: UUID | str,
-        celebration_type: str,  # "BIRTHDAY" | "WORK_ANNIVERSARY"
+        celebration_type: str,
     ) -> bool:
         """
-        Idempotency guard — returns True if a broadcast for this celebrant's
-        event was already created today.
+        Idempotency guard.
 
-        We anchor on the celebrant's own employee_id: the worker creates one
-        notification row per recipient, so we just check whether the celebrant
-        themselves has received a CELEBRATION notification with this type today.
-        If that row exists, the whole broadcast already happened.
-
-        The message field contains the raw celebration_type in brackets e.g.
-        "[BIRTHDAY] ..." or "[WORK_ANNIVERSARY] ..." — this makes the
-        `contains` filter reliable regardless of the email subject wording.
+        The sentinel row is written to the CELEBRANT's employee_id with a
+        title prefixed '[SENTINEL]' BEFORE the broadcast begins.
+        We check only for that sentinel — NOT for regular broadcast rows —
+        so that other celebrants' broadcast rows never trigger a false positive.
         """
-        from datetime import date, datetime, timezone
+        from datetime import date
 
         start_of_day = datetime.combine(date.today(), datetime.min.time()).replace(
             tzinfo=timezone.utc
@@ -187,9 +166,35 @@ class NotificationService:
             where={
                 "employee_id": str(employee_id),
                 "type": "CELEBRATION",
-                # Matches "[BIRTHDAY]" or "[WORK_ANNIVERSARY]" in the message
-                "message": {"contains": celebration_type},
+                "title": {"startswith": "[SENTINEL]"},
+                "message": {"contains": f"[{celebration_type}]"},
                 "created_at": {"gte": start_of_day},
             }
         )
         return existing is not None
+
+    async def create_sentinel(
+        self,
+        *,
+        employee_id: UUID | str,
+        celebration_type: str,   # "BIRTHDAY" | "WORK_ANNIVERSARY"
+        celebrant_name: str,
+    ) -> dict:
+        """
+        Write a sentinel row to the celebrant's account BEFORE broadcasting.
+        Title format:  [SENTINEL] <name>
+        Message format: [BIRTHDAY] or [WORK_ANNIVERSARY]
+        This row is NEVER shown in the notification feed (filtered by router/service).
+        """
+        record = await self._db.notifications.create(
+            data={
+                "employee_id": str(employee_id),
+                "title":       f"[SENTINEL] {celebrant_name}",
+                "message":     f"[{celebration_type}] broadcast initiated",
+                "type":        NotificationType.CELEBRATION.value,
+                "is_read":     True,   # hidden from unread count
+                "email_sent":  True,   # excluded from email worker
+                "created_at":  datetime.now(tz=timezone.utc),
+            }
+        )
+        return record.model_dump()

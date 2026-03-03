@@ -9,7 +9,7 @@ pydantic-settings==2.6.0
 pydantic[email]
 email-validator>=2.0.0
 openpyxl>=3.1.0
-
+slack-sdk
 # Prisma ORM
 prisma==0.15.0
 
@@ -18,7 +18,7 @@ asyncpg==0.29.0
 
 # HTTP client
 httpx==0.28.0
-
+aiohttp
 # Security
 python-jose[cryptography]==3.4.0
 passlib[bcrypt]==1.7.4

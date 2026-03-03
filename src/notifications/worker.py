@@ -1,29 +1,10 @@
 """
-Background Email Worker
-═══════════════════════
-Runs as a plain asyncio Task inside the FastAPI process.
-
-Design decisions
-────────────────
-• No broker (Kafka / Redis / RabbitMQ) — not needed at this scale.
-• Batch size 20 per tick — avoids memory spikes and long DB locks.
-• All failures are caught and logged; the worker NEVER crashes the server.
-• The task is cancelled cleanly during lifespan shutdown.
-
-Fix notes
-─────────
-• Regular email worker excludes type="CELEBRATION" rows — those are fully
-  handled (send + mark email_sent) by the celebration worker.
-• On startup, any notification that was already sitting unsent in the DB is
-  skipped by recording the startup timestamp and only processing rows created
-  AFTER that moment (STARTUP_CUTOFF). Change SKIP_EMAILS_BEFORE_STARTUP to
-  False if you ever want the old behaviour back.
-• Celebration emails are broadcast to ALL active employees. Each recipient
-  gets their own notification row so read/unread state is tracked per-person.
-• Idempotency uses a SENTINEL row written to the celebrant BEFORE the
-  broadcast loop. This means a mid-loop server restart won't re-start the
-  broadcast from scratch — the sentinel is found and the whole event is
-  skipped cleanly.
+Background Email + Slack Worker
+════════════════════════════════
+Runs as plain asyncio Tasks inside the FastAPI process.
+Both email and Slack are sent per notification.
+Slack failures never block email delivery.
+All sending is concurrent via asyncio.gather — never sequential.
 """
 
 import asyncio
@@ -34,42 +15,30 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from prisma import Prisma
     from .email_sender import EmailSender
+    from .slack_sender import SlackSender
 
 logger = logging.getLogger(__name__)
 
-# ── Tuneable constants (easy to change) ────────────────────────────────────────
-
-POLL_INTERVAL_SECONDS: int = 10                 # how often the email worker wakes up
-BATCH_SIZE: int = 20                            # max notifications processed per tick
-CELEBRATION_CHECK_INTERVAL_SECONDS: int = 3600  # celebration worker cadence (1 hr)
-
-# Set to True  → skip any email_sent=False rows that already existed when the
-#                server started (safe default — avoids re-sending stale emails).
-# Set to False → send everything in the DB regardless of age (original behaviour).
+POLL_INTERVAL_SECONDS: int = 10
+BATCH_SIZE: int = 20
+CELEBRATION_CHECK_INTERVAL_SECONDS: int = 3600
 SKIP_EMAILS_BEFORE_STARTUP: bool = True
-
-# Populated once at import time; used as the cutoff for the email worker.
 STARTUP_CUTOFF: datetime = datetime.now(tz=timezone.utc)
 
 
-# ── Core loop ──────────────────────────────────────────────────────────────────
+# ── Regular notification worker (REVIEW / REWARD / SYSTEM) ────────────────────
 
-async def _process_batch(db: "Prisma", sender: "EmailSender") -> int:
-    """
-    Single processing tick.
-
-    Selects up to BATCH_SIZE unsent, non-celebration notifications that were
-    created after STARTUP_CUTOFF (when SKIP_EMAILS_BEFORE_STARTUP is True),
-    sends each one, then marks it email_sent=True.
-    """
+async def _process_batch(
+    db: "Prisma",
+    sender: "EmailSender",
+    slack: "SlackSender | None" = None,
+) -> int:
     from .email_sender import build_notification_html
 
     where: dict = {
         "email_sent": False,
-        # Celebrations are fully handled by celebration_worker_loop
         "type": {"not": "CELEBRATION"},
     }
-
     if SKIP_EMAILS_BEFORE_STARTUP:
         where["created_at"] = {"gte": STARTUP_CUTOFF}
 
@@ -82,42 +51,79 @@ async def _process_batch(db: "Prisma", sender: "EmailSender") -> int:
     if not pending:
         return 0
 
-    sent_count = 0
-    for notification in pending:
-        try:
-            employee = await db.employees.find_unique(
-                where={"employee_id": notification.employee_id},
-                include={"status_master_employees_status_idTostatus_master": False},
-            )
-            if employee is None:
-                logger.warning(
-                    "Worker: employee %s not found — skipping notification %s",
-                    notification.employee_id,
-                    notification.notification_id,
-                )
-                await _mark_email_sent(db, str(notification.notification_id))
-                continue
+    # One bulk DB query for all employees in this batch instead of N individual lookups
+    employee_ids = list({str(n.employee_id) for n in pending})
+    employees_list = await db.employees.find_many(
+        where={"employee_id": {"in": employee_ids}}
+    )
+    employees = {str(e.employee_id): e for e in employees_list}
 
+    async def _handle_one(notification) -> bool:
+        employee = employees.get(str(notification.employee_id))
+        if employee is None:
+            logger.warning(
+                "Worker: employee %s not found — skipping notification %s",
+                notification.employee_id,
+                notification.notification_id,
+            )
+            await _mark_email_sent(db, str(notification.notification_id))
+            return False
+
+        try:
             html = build_notification_html(
                 title=notification.title,
                 message=notification.message,
                 type_=notification.type,
             )
-            await sender.send_notification_email(
-                to_email=employee.email,
-                subject=notification.title,
-                body_html=html,
-            )
+
+            async def _email_coro() -> None:
+                await sender.send_notification_email(
+                    to_email=employee.email,
+                    subject=notification.title,
+                    body_html=html,
+                )
+
+            async def _slack_coro() -> None:
+                if not slack:
+                    return
+                try:
+                    slack_uid = await slack.get_user_id_by_email(employee.email)
+                    if slack_uid:
+                        await slack.send_dm(
+                            slack_user_id=slack_uid,
+                            title=notification.title,
+                            message=notification.message,
+                            type_=notification.type,
+                        )
+                    else:
+                        logger.debug(
+                            "Slack: no user found for %s — skipping DM for notification %s",
+                            employee.email,
+                            notification.notification_id,
+                        )
+                except Exception:
+                    logger.warning(
+                        "Worker: Slack DM failed for notification %s — email still sent",
+                        notification.notification_id,
+                    )
+
+            # Email and Slack fire at the same time for this notification
+            await asyncio.gather(_email_coro(), _slack_coro())
             await _mark_email_sent(db, str(notification.notification_id))
-            sent_count += 1
+            return True
 
         except Exception:
             logger.exception(
-                "Worker: failed to send email for notification %s",
+                "Worker: failed to send notification %s",
                 notification.notification_id,
             )
+            return False
 
-    return sent_count
+    # Entire batch fires concurrently — all 20 at the same time
+    results = await asyncio.gather(*[_handle_one(n) for n in pending])
+    sent = sum(results)
+    logger.debug("Worker: batch complete — %d/%d sent", sent, len(pending))
+    return sent
 
 
 async def _mark_email_sent(db: "Prisma", notification_id: str) -> None:
@@ -127,9 +133,11 @@ async def _mark_email_sent(db: "Prisma", notification_id: str) -> None:
     )
 
 
-# ── Worker task ────────────────────────────────────────────────────────────────
-
-async def email_worker_loop(db: "Prisma", sender: "EmailSender") -> None:
+async def email_worker_loop(
+    db: "Prisma",
+    sender: "EmailSender",
+    slack: "SlackSender | None" = None,
+) -> None:
     logger.info(
         "Email worker started (cutoff=%s) — polling every %ds, batch=%d, skip_old=%s",
         STARTUP_CUTOFF.isoformat(),
@@ -139,7 +147,7 @@ async def email_worker_loop(db: "Prisma", sender: "EmailSender") -> None:
     )
     while True:
         try:
-            sent = await _process_batch(db, sender)
+            sent = await _process_batch(db, sender, slack)
             if sent:
                 logger.info("Email worker: sent %d notification(s) this tick", sent)
         except asyncio.CancelledError:
@@ -151,24 +159,20 @@ async def email_worker_loop(db: "Prisma", sender: "EmailSender") -> None:
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
-# ── Celebration worker ─────────────────────────────────────────────────────────
+# ── Celebration worker (BIRTHDAY / WORK_ANNIVERSARY) ──────────────────────────
 
-async def celebration_worker_loop(db: "Prisma", sender: "EmailSender") -> None:
-    """
-    Runs once per hour.
-
-    For each employee whose birthday or work anniversary is today:
-      1. Writes a SENTINEL notification row for the celebrant first.
-      2. Broadcasts a notification + email to ALL active employees.
-      3. Idempotency guard on the sentinel prevents re-sending on restart.
-    """
+async def celebration_worker_loop(
+    db: "Prisma",
+    sender: "EmailSender",
+    slack: "SlackSender | None" = None,
+) -> None:
     logger.info(
         "Celebration worker started — checking every %ds",
         CELEBRATION_CHECK_INTERVAL_SECONDS,
     )
     while True:
         try:
-            await _process_celebrations(db, sender)
+            await _process_celebrations(db, sender, slack)
         except asyncio.CancelledError:
             logger.info("Celebration worker shutting down.")
             raise
@@ -178,7 +182,11 @@ async def celebration_worker_loop(db: "Prisma", sender: "EmailSender") -> None:
         await asyncio.sleep(CELEBRATION_CHECK_INTERVAL_SECONDS)
 
 
-async def _process_celebrations(db: "Prisma", sender: "EmailSender") -> None:
+async def _process_celebrations(
+    db: "Prisma",
+    sender: "EmailSender",
+    slack: "SlackSender | None" = None,
+) -> None:
     from .email_sender import build_celebration_html
     from .service import NotificationService
     from .schemas import NotificationType
@@ -190,105 +198,128 @@ async def _process_celebrations(db: "Prisma", sender: "EmailSender") -> None:
         logger.debug("Celebration worker: no celebrations today.")
         return
 
-    # Fetch all active employees once — they are the broadcast recipients
-    all_active_employees = await db.employees.find_many(
-        where={
-            "status_master_employees_status_idTostatus_master": {
-                "is": {"status_code": "ACTIVE"}
-            }
-        },
+    all_employees_raw = await db.employees.find_many(
+        include={"status_master_employees_status_idTostatus_master": True}
     )
+    all_active_employees = [
+        emp for emp in all_employees_raw
+        if (
+            emp.status_master_employees_status_idTostatus_master is not None
+            and emp.status_master_employees_status_idTostatus_master.status_code == "ACTIVE"
+        )
+    ]
 
     if not all_active_employees:
-        logger.warning("Celebration worker: no active employees found to notify.")
+        logger.warning("Celebration worker: no active employees found.")
         return
 
+    # Process each celebrant sequentially (correct — sentinel must be written
+    # and checked before any broadcast starts), but broadcast to ALL recipients
+    # concurrently within each celebrant's run.
     for person in celebrants:
         try:
-            # ── Idempotency guard ───────────────────────────────────────────
-            # Check for the sentinel row that is written BEFORE the broadcast
-            # loop. Using the celebrant's own employee_id as anchor is reliable
-            # because the sentinel is always the very first thing we write —
-            # so if it exists, the entire broadcast either completed or is
-            # in-flight from another instance.
             already_sent = await svc.celebration_already_sent_today(
                 employee_id=person["employee_id"],
                 celebration_type=person["celebration_type"],
             )
             if already_sent:
                 logger.debug(
-                    "Celebration worker: sentinel found for %s employee %s — skipping.",
+                    "Celebration worker: sentinel found for %s %s — skipping.",
                     person["celebration_type"],
-                    person["employee_id"],
+                    person["username"],
                 )
                 continue
 
-            # ── Build email content ─────────────────────────────────────────
-            subject, html = build_celebration_html(
+            # Write sentinel before any work so a crash mid-broadcast
+            # doesn't cause a double-send on the next hourly tick
+            await svc.create_sentinel(
+                employee_id=person["employee_id"],
+                celebration_type=person["celebration_type"],
+                celebrant_name=person["username"],
+            )
+
+            personal_subject, personal_html = build_celebration_html(
                 employee_name=person["username"],
                 celebration_type=person["celebration_type"],
                 years=person.get("years"),
+                is_personal=True,
             )
-            plain_message = _celebration_plain_message(person)
-
-            # ── Write sentinel FIRST ────────────────────────────────────────
-            # This is the celebrant's own notification row. It doubles as the
-            # idempotency key: if the server restarts mid-broadcast, the next
-            # run finds this sentinel and skips the whole event cleanly.
-            sentinel = await svc.create_notification(
-                employee_id=person["employee_id"],
-                title=subject,
-                message=plain_message,
-                type=NotificationType.CELEBRATION,
+            broadcast_subject, broadcast_html = build_celebration_html(
+                employee_name=person["username"],
+                celebration_type=person["celebration_type"],
+                years=person.get("years"),
+                is_personal=False,
             )
-            # Send + mark the sentinel row email_sent immediately
-            try:
-                await sender.send_notification_email(
-                    to_email=person["email"],
-                    subject=subject,
-                    body_html=html,
-                )
-                await _mark_email_sent(db, str(sentinel["notification_id"]))
-            except Exception:
-                logger.exception(
-                    "Celebration worker: failed to email celebrant %s",
-                    person["employee_id"],
-                )
-                # Don't mark email_sent=True — the sentinel row still acts as
-                # the idempotency key even if the celebrant's own email failed.
+            broadcast_plain = _celebration_plain_message(person)
 
-            # ── Broadcast to everyone else ──────────────────────────────────
-            broadcast_count = 1  # celebrant already counted above
-            for recipient in all_active_employees:
-                # Skip the celebrant — they already got their row above
-                if str(recipient.employee_id) == str(person["employee_id"]):
-                    continue
+            # Slack: single channel post — fire and don't block the email broadcast
+            async def _slack_broadcast() -> None:
+                if not slack:
+                    return
+                try:
+                    await slack.send_celebration(
+                        channel_id=None,
+                        employee_name=person["username"],
+                        celebration_type=person["celebration_type"],
+                        years=person.get("years"),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Celebration worker: Slack broadcast failed for %s",
+                        person["username"],
+                    )
+
+            # Per-recipient coroutine — create DB row then send email,
+            # both steps in one async unit so we can gather across all recipients
+            async def _notify_recipient(recipient) -> bool:
+                is_celebrant = str(recipient.employee_id) == str(person["employee_id"])
+
+                if is_celebrant:
+                    subject_to_send = personal_subject
+                    html_to_send    = personal_html
+                    plain_to_send   = (
+                        f"[{person['celebration_type']}] Happy "
+                        f"{person['celebration_type'].replace('_', ' ').title()}, "
+                        f"{person['username']}!"
+                    )
+                else:
+                    subject_to_send = broadcast_subject
+                    html_to_send    = broadcast_html
+                    plain_to_send   = broadcast_plain
+
                 try:
                     notification = await svc.create_notification(
                         employee_id=recipient.employee_id,
-                        title=subject,
-                        message=plain_message,
+                        title=subject_to_send,
+                        message=plain_to_send,
                         type=NotificationType.CELEBRATION,
                     )
                     await sender.send_notification_email(
                         to_email=recipient.email,
-                        subject=subject,
-                        body_html=html,
+                        subject=subject_to_send,
+                        body_html=html_to_send,
                     )
                     await _mark_email_sent(db, str(notification["notification_id"]))
-                    broadcast_count += 1
-
+                    return True
                 except Exception:
                     logger.exception(
-                        "Celebration worker: failed to notify recipient %s "
-                        "about %s's %s",
+                        "Celebration worker: failed to notify %s about %s's %s",
                         recipient.employee_id,
                         person["username"],
                         person["celebration_type"],
                     )
+                    return False
 
+            # Slack post + all recipient emails fire concurrently
+            results = await asyncio.gather(
+                _slack_broadcast(),
+                *[_notify_recipient(r) for r in all_active_employees],
+            )
+
+            # results[0] is the Slack coro (returns None), rest are bools
+            broadcast_count = sum(r for r in results[1:] if r)
             logger.info(
-                "Celebration worker: broadcast %s for %s to %d/%d employees",
+                "Celebration worker: %s for %s → %d/%d employees notified",
                 person["celebration_type"],
                 person["username"],
                 broadcast_count,
@@ -297,25 +328,17 @@ async def _process_celebrations(db: "Prisma", sender: "EmailSender") -> None:
 
         except Exception:
             logger.exception(
-                "Celebration worker: failed to process celebration for employee %s",
+                "Celebration worker: failed to process celebration for %s",
                 person.get("employee_id"),
             )
 
 
 def _celebration_plain_message(person: dict) -> str:
-    """
-    Plain-text notification message.
-
-    The raw celebration_type value ("BIRTHDAY" / "WORK_ANNIVERSARY") is
-    embedded verbatim inside brackets so that `celebration_already_sent_today`
-    can use {"message": {"contains": celebration_type}} as a reliable
-    idempotency key.
-    """
     name = person["username"]
     if person["celebration_type"] == "BIRTHDAY":
-        return f"[BIRTHDAY] Today is {name}'s birthday! Wish them a great day 🎂"
+        return f"[BIRTHDAY] Today is {name}'s birthday! Wish them a great day."
     years = person.get("years")
     return (
         f"[WORK_ANNIVERSARY] {name} is celebrating their {years}-year "
-        f"work anniversary today! 🏆"
+        f"work anniversary today."
     )
