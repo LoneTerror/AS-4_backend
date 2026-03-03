@@ -13,6 +13,7 @@ from src.notifications.router import router as notifications_router
 from src.notifications.email_sender import EmailSender, SMTPConfig
 from src.notifications.slack_sender import SlackSender, SlackConfig
 from src.notifications.worker import email_worker_loop, celebration_worker_loop
+from src.webhooks.router import router as webhooks_router  # ← new
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ app.add_middleware(
 API_PREFIX = "/v1"
 app.include_router(emp_router, prefix=API_PREFIX + "/employees", tags=["Employees"])
 app.include_router(notifications_router, tags=["Notifications"])
+app.include_router(webhooks_router, tags=["Webhooks"])  # ← new
 
 
 @app.get("/health", tags=["System"])

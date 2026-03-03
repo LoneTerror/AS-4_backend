@@ -14,6 +14,8 @@ class NotificationService:
     def __init__(self, db: Prisma) -> None:
         self._db = db
 
+    # ── Core create ───────────────────────────────────────────────────────────
+
     async def create_notification(
         self,
         *,
@@ -40,6 +42,74 @@ class NotificationService:
             type,
         )
         return record.model_dump()
+
+    # ── Bulk helpers ──────────────────────────────────────────────────────────
+
+    async def create_bulk_notifications(
+        self,
+        *,
+        employee_ids: list[UUID | str],
+        title: str,
+        message: str,
+        type: NotificationType,
+    ) -> list[dict]:
+        """
+        Create one notification row per employee_id.
+        Runs sequentially — Prisma does not expose createMany with return values.
+        The email worker will pick these up automatically.
+        """
+        records: list[dict] = []
+        for eid in employee_ids:
+            record = await self.create_notification(
+                employee_id=eid,
+                title=title,
+                message=message,
+                type=type,
+            )
+            records.append(record)
+        logger.info(
+            "Bulk notifications created: count=%d type=%s title=%r",
+            len(records),
+            type,
+            title,
+        )
+        return records
+
+    async def get_all_active_employee_ids(self) -> list[str]:
+        """Return employee_id strings for every ACTIVE employee."""
+        employees = await self._db.employees.find_many(
+            include={"status_master_employees_status_idTostatus_master": True}
+        )
+        return [
+            str(e.employee_id)
+            for e in employees
+            if (
+                e.status_master_employees_status_idTostatus_master is not None
+                and e.status_master_employees_status_idTostatus_master.status_code
+                == "ACTIVE"
+            )
+        ]
+
+    async def get_active_employee_ids_by_department(
+        self, department_ids: list[UUID | str]
+    ) -> list[str]:
+        """Return employee_id strings for ACTIVE employees in the given departments."""
+        dept_id_strs = [str(d) for d in department_ids]
+        employees = await self._db.employees.find_many(
+            where={"department_id": {"in": dept_id_strs}},
+            include={"status_master_employees_status_idTostatus_master": True},
+        )
+        return [
+            str(e.employee_id)
+            for e in employees
+            if (
+                e.status_master_employees_status_idTostatus_master is not None
+                and e.status_master_employees_status_idTostatus_master.status_code
+                == "ACTIVE"
+            )
+        ]
+
+    # ── Read / mark-read ─────────────────────────────────────────────────────
 
     async def get_notifications(
         self,
@@ -95,14 +165,14 @@ class NotificationService:
         )
         return result
 
+    # ── Celebration helpers ───────────────────────────────────────────────────
+
     async def get_employees_with_celebrations_today(self) -> list[dict]:
         from datetime import date
 
         today = date.today()
         month, day = today.month, today.day
 
-        # Fetch all employees with status included, filter in Python
-        # Avoids Prisma nested-relation WHERE silently dropping rows
         all_employees = await self._db.employees.find_many(
             include={"status_master_employees_status_idTostatus_master": True}
         )
@@ -118,8 +188,8 @@ class NotificationService:
             if dob is not None and dob.month == month and dob.day == day:
                 celebrants.append({
                     "employee_id": emp.employee_id,
-                    "username":    emp.username,
-                    "email":       emp.email,
+                    "username": emp.username,
+                    "email": emp.email,
                     "celebration_type": "BIRTHDAY",
                     "years": None,
                 })
@@ -134,8 +204,8 @@ class NotificationService:
                 years = today.year - doj.year
                 celebrants.append({
                     "employee_id": emp.employee_id,
-                    "username":    emp.username,
-                    "email":       emp.email,
+                    "username": emp.username,
+                    "email": emp.email,
                     "celebration_type": "WORK_ANNIVERSARY",
                     "years": years,
                 })
@@ -177,7 +247,7 @@ class NotificationService:
         self,
         *,
         employee_id: UUID | str,
-        celebration_type: str,   # "BIRTHDAY" | "WORK_ANNIVERSARY"
+        celebration_type: str,
         celebrant_name: str,
     ) -> dict:
         """
@@ -189,12 +259,12 @@ class NotificationService:
         record = await self._db.notifications.create(
             data={
                 "employee_id": str(employee_id),
-                "title":       f"[SENTINEL] {celebrant_name}",
-                "message":     f"[{celebration_type}] broadcast initiated",
-                "type":        NotificationType.CELEBRATION.value,
-                "is_read":     True,   # hidden from unread count
-                "email_sent":  True,   # excluded from email worker
-                "created_at":  datetime.now(tz=timezone.utc),
+                "title": f"[SENTINEL] {celebrant_name}",
+                "message": f"[{celebration_type}] broadcast initiated",
+                "type": NotificationType.CELEBRATION.value,
+                "is_read": True,
+                "email_sent": True,
+                "created_at": datetime.now(tz=timezone.utc),
             }
         )
         return record.model_dump()
