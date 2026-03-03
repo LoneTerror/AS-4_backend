@@ -66,7 +66,9 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     from src.notifications.router import router as notifications_router
+    from src.webhooks.router import router as webhooks_router
 
     application = FastAPI(title="HR Recognition API", lifespan=lifespan)
     application.include_router(notifications_router)
+    application.include_router(webhooks_router)
     return application

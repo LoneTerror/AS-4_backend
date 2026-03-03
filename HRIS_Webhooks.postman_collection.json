@@ -1,0 +1,182 @@
+{
+  "info": {
+    "name": "HRIS Webhooks",
+    "_postman_id": "hris-webhooks-collection",
+    "description": "Test collection for the HRIS inbound webhook endpoint.\n\nBefore running:\n1. Set the `base_url` variable to your server (default: http://localhost:8000)\n2. Update department_code, designation_code to values that exist in YOUR database\n3. The signature header is disabled by default for local testing.\n   To enable it, uncomment `_verified=Depends(verify_signature)` in router.py\n   and add the pre-request script to generate the HMAC signature.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8003",
+      "type": "string"
+    },
+    {
+      "key": "webhook_secret",
+      "value": "your_WEBHOOK_SECRET_value",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. employee.created",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Webhook-Signature",
+            "value": "sha256=placeholder",
+            "description": "Only needed when signature verification is enabled. Use the pre-request script below to auto-generate.",
+            "disabled": true
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"employee.created\",\n  \"data\": {\n    \"external_id\": \"ext-001\",\n    \"username\": \"arijitb017\",\n    \"email\": \"arijitb017@gmail.com\",\n    \"department_code\": \"ENG\",\n    \"designation_code\": \"SR_DEV\",\n    \"date_of_joining\": \"2024-03-01\",\n    \"date_of_birth\": \"1995-06-15\",\n    \"manager_email\": \"jane.smith@company.com\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/webhooks/hris",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "webhooks", "hris"]
+        },
+        "description": "Creates a new employee row.\n\nIdempotent — sending the same email twice will skip the second create.\n\nMake sure to update:\n- department_code → must exist in your departments table\n- designation_code → must exist in your designations table\n- manager_email → must be an existing employee email (or omit it)"
+      },
+      "response": []
+    },
+    {
+      "name": "2. employee.created (replay — idempotency check)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"employee.created\",\n  \"data\": {\n    \"external_id\": \"ext-001\",\n    \"username\": \"arijitb017\",\n    \"email\": \"arijitb017@gmail.com\",\n    \"department_code\": \"ENG\",\n    \"designation_code\": \"SR_DEV\",\n    \"date_of_joining\": \"2024-03-01\",\n    \"date_of_birth\": \"1995-06-15\",\n    \"manager_email\": \"jane.smith@company.com\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/webhooks/hris",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "webhooks", "hris"]
+        },
+        "description": "Send the exact same payload again.\nShould return 200 with `received: true` but NOT create a duplicate row.\nCheck your DB — still only one row for john.doe@yourcompany.com."
+      },
+      "response": []
+    },
+    {
+      "name": "3. employee.updated — department transfer",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"employee.updated\",\n  \"data\": {\n    \"email\": \"arijitb017@gmail.com\",\n    \"department_code\": \"HR\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/webhooks/hris",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "webhooks", "hris"]
+        },
+        "description": "Transfers john to the PRODUCT department.\nOnly department_id changes — designation and manager are untouched."
+      },
+      "response": []
+    },
+    {
+      "name": "4. employee.updated — promotion",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"employee.updated\",\n  \"data\": {\n    \"email\": \"arijitb017@gmail.com\",\n    \"designation_code\": \"ENG_MGR\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/webhooks/hris",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "webhooks", "hris"]
+        },
+        "description": "Promotes john to SWE3.\nOnly designation_id changes."
+      },
+      "response": []
+    },
+    {
+      "name": "5. employee.status_changed — deactivate",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"employee.status_changed\",\n  \"data\": {\n    \"email\": \"arijitb017@gmail.com\",\n    \"status_code\": \"INACTIVE\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/webhooks/hris",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "webhooks", "hris"]
+        },
+        "description": "Deactivates john — sets status to INACTIVE.\nstatus_code must exist in your status_master table with entity_type = 'EMPLOYEE'."
+      },
+      "response": []
+    },
+    {
+      "name": "6. employee.status_changed — reactivate",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"employee.status_changed\",\n  \"data\": {\n    \"email\": \"arijitb017@gmail.com\",\n    \"status_code\": \"ACTIVE\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/webhooks/hris",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "webhooks", "hris"]
+        },
+        "description": "Reactivates john."
+      },
+      "response": []
+    },
+    {
+      "name": "7. unknown event — graceful ignore",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"employee.transferred_office\",\n  \"data\": {\n    \"email\": \"arijitb017@gmail.com\",\n    \"office\": \"Mumbai\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/webhooks/hris",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "webhooks", "hris"]
+        },
+        "description": "Sends an event type your server doesn't handle.\nShould return 200 with received: true and log a warning — no crash."
+      },
+      "response": []
+    }
+  ]
+}

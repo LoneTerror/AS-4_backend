@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, UUID4
 
@@ -10,11 +10,35 @@ class NotificationType(str, Enum):
     REWARD = "REWARD"
     SYSTEM = "SYSTEM"
     CELEBRATION = "CELEBRATION"
+    ANNOUNCEMENT = "ANNOUNCEMENT"
 
 
 class CelebrationType(str, Enum):
     BIRTHDAY = "BIRTHDAY"
     WORK_ANNIVERSARY = "WORK_ANNIVERSARY"
+
+
+# ── Requests ───────────────────────────────────────────────────────────────────
+
+class NotificationCreateRequest(BaseModel):
+    """Send a notification to one or more specific employees."""
+    employee_ids: List[UUID4]
+    title: str
+    message: str
+    type: NotificationType = NotificationType.SYSTEM
+
+
+class AnnouncementCreateRequest(BaseModel):
+    """
+    Blast a notification to ALL active employees at once.
+    Optionally restrict to specific department(s) or employee IDs.
+    If both are omitted, every active employee receives it.
+    """
+    title: str
+    message: str
+    # Optional targeting — if both are None, broadcast to everyone
+    department_ids: Optional[List[UUID4]] = None
+    employee_ids: Optional[List[UUID4]] = None
 
 
 # ── Responses ──────────────────────────────────────────────────────────────────
@@ -36,3 +60,11 @@ class NotificationResponse(BaseModel):
 class NotificationListResponse(BaseModel):
     notifications: list[NotificationResponse]
     total: int
+
+
+class AnnouncementResponse(BaseModel):
+    """Returned after a successful announcement blast."""
+    created: int
+    recipient_count: int
+    title: str
+    message: str
