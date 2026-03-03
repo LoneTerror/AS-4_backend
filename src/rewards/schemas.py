@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, UUID4, validator
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime
 
 # CATEGORY SCHEMAS (reward_categories)
@@ -141,3 +141,9 @@ class PaginationMeta(BaseModel):
 class PaginatedCatalogResponse(BaseModel):
     data: List[RewardItemResponse]
     pagination: PaginationMeta
+
+class ErrorResponse(BaseModel):
+    success: bool = False
+    error_code: str  # e.g., "INSUFFICIENT_FUNDS", "OUT_OF_STOCK"
+    message: str     # Human readable message
+    details: Optional[Any] = None

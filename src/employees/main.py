@@ -1,4 +1,5 @@
 import uvicorn
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -6,7 +7,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 
-from src.prisma.client import db
+from src.prisma.client import db, connect_with_retry
 from src.employees.router import router as emp_router
 from src.notifications.router import router as notifications_router
 from src.notifications.email_sender import EmailSender, SMTPConfig
@@ -16,10 +17,11 @@ from src.notifications.worker import email_worker_loop, celebration_worker_loop
 logger = logging.getLogger(__name__)
 
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Employee Service: Connecting to Database...")
-    await db.connect()
+    await connect_with_retry()
     print("Employee Service: 🟢 Database Connected")
 
     # ── Email ──────────────────────────────────────────────────────────────
@@ -94,24 +96,15 @@ async def health_check():
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
-
-    schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        routes=app.routes,
-    )
-
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
     schema.setdefault("components", {})
     schema["components"]["securitySchemes"] = {
         "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
     }
-
     for path in schema.get("paths", {}).values():
         for operation in path.values():
             if isinstance(operation, dict):
                 operation["security"] = [{"BearerAuth": []}]
-
     app.openapi_schema = schema
     return schema
 
@@ -119,4 +112,4 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 if __name__ == "__main__":
-    uvicorn.run("src.employees.main:app", host="0.0.0.0", port=8002, reload=True)
+    uvicorn.run("src.employees.main:app", host="0.0.0.0", port=8003, reload=True)

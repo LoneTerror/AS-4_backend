@@ -1,8 +1,9 @@
 generator client {
   provider                    = "prisma-client-py"
+  recursive_type_depth        = "5"
   enable_experimental_decimal = "true"
   interface                   = "asyncio"
-  recursive_type_depth        = "5"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
@@ -108,70 +109,70 @@ model employee_roles {
 }
 
 model employees {
-  employee_id                                                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  username                                                        String                   @unique @db.VarChar(100)
-  email                                                           String                   @unique @db.VarChar(255)
-  designation_id                                                  String                   @db.Uuid
-  password_hash                                                   String                   @db.VarChar(255)
-  department_id                                                   String                   @db.Uuid
-  manager_id                                                      String?                  @db.Uuid
-  date_of_joining                                                 DateTime                 @db.Date
-  status_id                                                       String                   @db.Uuid
-  created_at                                                      DateTime                 @default(now()) @db.Timestamptz(6)
-  created_by                                                      String?                  @db.Uuid
-  updated_at                                                      DateTime                 @db.Timestamptz(6)
-  updated_by                                                      String?                  @db.Uuid
-  date_of_birth                                                   DateTime?                @db.Date
+  employee_id                                                     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username                                                        String                 @unique @db.VarChar(100)
+  email                                                           String                 @unique @db.VarChar(255)
+  designation_id                                                  String                 @db.Uuid
+  password_hash                                                   String                 @db.VarChar(255)
+  department_id                                                   String                 @db.Uuid
+  manager_id                                                      String?                @db.Uuid
+  date_of_joining                                                 DateTime               @db.Date
+  status_id                                                       String                 @db.Uuid
+  created_at                                                      DateTime               @default(now()) @db.Timestamptz(6)
+  created_by                                                      String?                @db.Uuid
+  updated_at                                                      DateTime               @db.Timestamptz(6)
+  updated_by                                                      String?                @db.Uuid
+  date_of_birth                                                   DateTime?              @db.Date
   audit_log                                                       audit_log[]
-  department_types_department_types_created_byToemployees         department_types[]       @relation("department_types_created_byToemployees")
-  department_types_department_types_updated_byToemployees         department_types[]       @relation("department_types_updated_byToemployees")
-  departments_departments_created_byToemployees                   departments[]            @relation("departments_created_byToemployees")
-  departments_departments_updated_byToemployees                   departments[]            @relation("departments_updated_byToemployees")
-  designations_designations_created_byToemployees                 designations[]           @relation("designations_created_byToemployees")
-  designations_designations_updated_byToemployees                 designations[]           @relation("designations_updated_byToemployees")
-  employee_roles_employee_roles_assigned_byToemployees            employee_roles[]         @relation("employee_roles_assigned_byToemployees")
-  employee_roles_employee_roles_created_byToemployees             employee_roles[]         @relation("employee_roles_created_byToemployees")
-  employee_roles_employee_roles_employee_idToemployees            employee_roles[]         @relation("employee_roles_employee_idToemployees")
-  employee_roles_employee_roles_revoked_byToemployees             employee_roles[]         @relation("employee_roles_revoked_byToemployees")
-  employee_roles_employee_roles_updated_byToemployees             employee_roles[]         @relation("employee_roles_updated_byToemployees")
-  employees_employees_created_byToemployees                       employees?               @relation("employees_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
-  other_employees_employees_created_byToemployees                 employees[]              @relation("employees_created_byToemployees")
-  departments_employees_department_idTodepartments                departments              @relation("employees_department_idTodepartments", fields: [department_id], references: [department_id])
-  designations_employees_designation_idTodesignations             designations             @relation("employees_designation_idTodesignations", fields: [designation_id], references: [designation_id])
-  employees_employees_manager_idToemployees                       employees?               @relation("employees_manager_idToemployees", fields: [manager_id], references: [employee_id])
-  other_employees_employees_manager_idToemployees                 employees[]              @relation("employees_manager_idToemployees")
-  status_master_employees_status_idTostatus_master                status_master            @relation("employees_status_idTostatus_master", fields: [status_id], references: [status_id])
-  employees_employees_updated_byToemployees                       employees?               @relation("employees_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
-  other_employees_employees_updated_byToemployees                 employees[]              @relation("employees_updated_byToemployees")
-  points_config_points_config_created_byToemployees               points_config[]          @relation("points_config_created_byToemployees")
-  points_config_points_config_updated_byToemployees               points_config[]          @relation("points_config_updated_byToemployees")
+  department_types_department_types_created_byToemployees         department_types[]     @relation("department_types_created_byToemployees")
+  department_types_department_types_updated_byToemployees         department_types[]     @relation("department_types_updated_byToemployees")
+  departments_departments_created_byToemployees                   departments[]          @relation("departments_created_byToemployees")
+  departments_departments_updated_byToemployees                   departments[]          @relation("departments_updated_byToemployees")
+  designations_designations_created_byToemployees                 designations[]         @relation("designations_created_byToemployees")
+  designations_designations_updated_byToemployees                 designations[]         @relation("designations_updated_byToemployees")
+  employee_roles_employee_roles_assigned_byToemployees            employee_roles[]       @relation("employee_roles_assigned_byToemployees")
+  employee_roles_employee_roles_created_byToemployees             employee_roles[]       @relation("employee_roles_created_byToemployees")
+  employee_roles_employee_roles_employee_idToemployees            employee_roles[]       @relation("employee_roles_employee_idToemployees")
+  employee_roles_employee_roles_revoked_byToemployees             employee_roles[]       @relation("employee_roles_revoked_byToemployees")
+  employee_roles_employee_roles_updated_byToemployees             employee_roles[]       @relation("employee_roles_updated_byToemployees")
+  employees_employees_created_byToemployees                       employees?             @relation("employees_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
+  other_employees_employees_created_byToemployees                 employees[]            @relation("employees_created_byToemployees")
+  departments_employees_department_idTodepartments                departments            @relation("employees_department_idTodepartments", fields: [department_id], references: [department_id])
+  designations_employees_designation_idTodesignations             designations           @relation("employees_designation_idTodesignations", fields: [designation_id], references: [designation_id])
+  employees_employees_manager_idToemployees                       employees?             @relation("employees_manager_idToemployees", fields: [manager_id], references: [employee_id])
+  other_employees_employees_manager_idToemployees                 employees[]            @relation("employees_manager_idToemployees")
+  status_master_employees_status_idTostatus_master                status_master          @relation("employees_status_idTostatus_master", fields: [status_id], references: [status_id])
+  employees_employees_updated_byToemployees                       employees?             @relation("employees_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
+  other_employees_employees_updated_byToemployees                 employees[]            @relation("employees_updated_byToemployees")
+  points_config_points_config_created_byToemployees               points_config[]        @relation("points_config_created_byToemployees")
+  points_config_points_config_updated_byToemployees               points_config[]        @relation("points_config_updated_byToemployees")
   refresh_tokens                                                  refresh_tokens[]
-  review_categories_review_categories_created_byToemployees       review_categories[]      @relation("review_categories_created_byToemployees")
-  review_categories_review_categories_updated_byToemployees       review_categories[]      @relation("review_categories_updated_byToemployees")
-  reviews_reviews_created_byToemployees                           reviews[]                @relation("reviews_created_byToemployees")
-  reviews_reviews_receiver_idToemployees                          reviews[]                @relation("reviews_receiver_idToemployees")
-  reviews_reviews_reviewer_idToemployees                          reviews[]                @relation("reviews_reviewer_idToemployees")
-  reviews_reviews_updated_byToemployees                           reviews[]                @relation("reviews_updated_byToemployees")
-  reward_catalog_reward_catalog_created_byToemployees             reward_catalog[]         @relation("reward_catalog_created_byToemployees")
-  reward_catalog_reward_catalog_updated_byToemployees             reward_catalog[]         @relation("reward_catalog_updated_byToemployees")
-  reward_categories_reward_categories_created_byToemployees       reward_categories[]      @relation("reward_categories_created_byToemployees")
-  reward_categories_reward_categories_updated_byToemployees       reward_categories[]      @relation("reward_categories_updated_byToemployees")
-  reward_history_reward_history_created_byToemployees             reward_history[]         @relation("reward_history_created_byToemployees")
-  reward_history_reward_history_granted_byToemployees             reward_history[]         @relation("reward_history_granted_byToemployees")
-  reward_history_reward_history_updated_byToemployees             reward_history[]         @relation("reward_history_updated_byToemployees")
-  roles_roles_created_byToemployees                               roles[]                  @relation("roles_created_byToemployees")
-  roles_roles_updated_byToemployees                               roles[]                  @relation("roles_updated_byToemployees")
-  seasonal_multipliers_seasonal_multipliers_created_byToemployees seasonal_multipliers[]   @relation("seasonal_multipliers_created_byToemployees")
-  seasonal_multipliers_seasonal_multipliers_updated_byToemployees seasonal_multipliers[]   @relation("seasonal_multipliers_updated_byToemployees")
-  status_master_status_master_created_byToemployees               status_master[]          @relation("status_master_created_byToemployees")
-  status_master_status_master_updated_byToemployees               status_master[]          @relation("status_master_updated_byToemployees")
-  transaction_types_transaction_types_created_byToemployees       transaction_types[]      @relation("transaction_types_created_byToemployees")
-  transaction_types_transaction_types_updated_byToemployees       transaction_types[]      @relation("transaction_types_updated_byToemployees")
-  transactions_transactions_created_byToemployees                 transactions[]           @relation("transactions_created_byToemployees")
-  transactions_transactions_updated_byToemployees                 transactions[]           @relation("transactions_updated_byToemployees")
-  wallets_wallets_created_byToemployees                           wallets[]                @relation("wallets_created_byToemployees")
-  wallets_wallets_employee_idToemployees                          wallets?                 @relation("wallets_employee_idToemployees")
-  wallets_wallets_updated_byToemployees                           wallets[]                @relation("wallets_updated_byToemployees")
+  review_categories_review_categories_created_byToemployees       review_categories[]    @relation("review_categories_created_byToemployees")
+  review_categories_review_categories_updated_byToemployees       review_categories[]    @relation("review_categories_updated_byToemployees")
+  reviews_reviews_created_byToemployees                           reviews[]              @relation("reviews_created_byToemployees")
+  reviews_reviews_receiver_idToemployees                          reviews[]              @relation("reviews_receiver_idToemployees")
+  reviews_reviews_reviewer_idToemployees                          reviews[]              @relation("reviews_reviewer_idToemployees")
+  reviews_reviews_updated_byToemployees                           reviews[]              @relation("reviews_updated_byToemployees")
+  reward_catalog_reward_catalog_created_byToemployees             reward_catalog[]       @relation("reward_catalog_created_byToemployees")
+  reward_catalog_reward_catalog_updated_byToemployees             reward_catalog[]       @relation("reward_catalog_updated_byToemployees")
+  reward_categories_reward_categories_created_byToemployees       reward_categories[]    @relation("reward_categories_created_byToemployees")
+  reward_categories_reward_categories_updated_byToemployees       reward_categories[]    @relation("reward_categories_updated_byToemployees")
+  reward_history_reward_history_created_byToemployees             reward_history[]       @relation("reward_history_created_byToemployees")
+  reward_history_reward_history_granted_byToemployees             reward_history[]       @relation("reward_history_granted_byToemployees")
+  reward_history_reward_history_updated_byToemployees             reward_history[]       @relation("reward_history_updated_byToemployees")
+  roles_roles_created_byToemployees                               roles[]                @relation("roles_created_byToemployees")
+  roles_roles_updated_byToemployees                               roles[]                @relation("roles_updated_byToemployees")
+  seasonal_multipliers_seasonal_multipliers_created_byToemployees seasonal_multipliers[] @relation("seasonal_multipliers_created_byToemployees")
+  seasonal_multipliers_seasonal_multipliers_updated_byToemployees seasonal_multipliers[] @relation("seasonal_multipliers_updated_byToemployees")
+  status_master_status_master_created_byToemployees               status_master[]        @relation("status_master_created_byToemployees")
+  status_master_status_master_updated_byToemployees               status_master[]        @relation("status_master_updated_byToemployees")
+  transaction_types_transaction_types_created_byToemployees       transaction_types[]    @relation("transaction_types_created_byToemployees")
+  transaction_types_transaction_types_updated_byToemployees       transaction_types[]    @relation("transaction_types_updated_byToemployees")
+  transactions_transactions_created_byToemployees                 transactions[]         @relation("transactions_created_byToemployees")
+  transactions_transactions_updated_byToemployees                 transactions[]         @relation("transactions_updated_byToemployees")
+  wallets_wallets_created_byToemployees                           wallets[]              @relation("wallets_created_byToemployees")
+  wallets_wallets_employee_idToemployees                          wallets?               @relation("wallets_employee_idToemployees")
+  wallets_wallets_updated_byToemployees                           wallets[]              @relation("wallets_updated_byToemployees")
 
   @@index([created_at])
   @@index([date_of_birth])
@@ -251,11 +252,6 @@ model review_categories {
   @@index([is_active])
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Junction table: one review ↔ many categories (multi-tag support)
-// multiplier_snapshot and category_code_snapshot are frozen at write time so
-// later edits to review_categories never mutate historical point calculations.
-// ─────────────────────────────────────────────────────────────────────────────
 model review_category_tags {
   tag_id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   review_id              String            @db.Uuid
@@ -263,25 +259,14 @@ model review_category_tags {
   multiplier_snapshot    Decimal           @db.Decimal(5, 4)
   category_code_snapshot String            @db.VarChar(50)
   created_at             DateTime          @default(now()) @db.Timestamptz(6)
-
-  reviews                reviews           @relation(fields: [review_id], references: [review_id], onDelete: Cascade)
   review_categories      review_categories @relation(fields: [category_id], references: [category_id])
+  reviews                reviews           @relation(fields: [review_id], references: [review_id], onDelete: Cascade)
 
   @@unique([review_id, category_id])
   @@index([review_id])
   @@index([category_id])
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// raw_points is the only points-related scalar stored here.
-// It is frozen at write time so wallet deltas can be computed on update
-// without re-joining historical data.
-//
-// All multiplier inputs are derivable — never store them here:
-//   category multipliers → review_category_tags.multiplier_snapshot (per tag)
-//   reviewer_weight      → roles.reviewer_weight
-//   seasonal_multiplier  → seasonal_multipliers.multiplier
-// ─────────────────────────────────────────────────────────────────────────────
 model reviews {
   review_id                                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   reviewer_id                              String                 @db.Uuid
