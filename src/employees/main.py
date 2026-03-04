@@ -4,12 +4,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
+import asyncio
+import logging
 
 from src.prisma.client import db, connect_with_retry
 from src.employees.router import router as emp_router
 from src.notifications.router import router as notifications_router
 from src.notifications.email_sender import EmailSender, SMTPConfig
-from src.notifications.worker import email_worker_loop
+from src.notifications.slack_sender import SlackSender, SlackConfig
+from src.notifications.worker import email_worker_loop, celebration_worker_loop
+from src.webhooks.router import router as webhooks_router  # ← new
+
+logger = logging.getLogger(__name__)
+
 
 
 @asynccontextmanager
@@ -18,23 +25,42 @@ async def lifespan(app: FastAPI):
     await connect_with_retry()
     print("Employee Service: 🟢 Database Connected")
 
+    # ── Email ──────────────────────────────────────────────────────────────
     smtp_config = SMTPConfig.from_env()
     email_sender = EmailSender(smtp_config)
+
+    # ── Slack (optional) ───────────────────────────────────────────────────
+    slack_sender: SlackSender | None = None
+    try:
+        slack_config = SlackConfig.from_env()
+        slack_sender = SlackSender(slack_config)
+        print("Employee Service: 💬 Slack sender initialised")
+    except KeyError as e:
+        logger.warning("Slack disabled — missing env var: %s. Continuing without Slack.", e)
+
+    # ── Workers ────────────────────────────────────────────────────────────
     worker_task = asyncio.create_task(
-        email_worker_loop(db, email_sender),
+        email_worker_loop(db, email_sender, slack_sender),
         name="email_notification_worker",
     )
+    celebration_task = asyncio.create_task(
+        celebration_worker_loop(db, email_sender, slack_sender),
+        name="celebration_notification_worker",
+    )
     print("Employee Service: 📧 Email worker started")
+    print("Employee Service: 🎉 Celebration worker started")
 
     yield
 
-    worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
-    print("Employee Service: 📧 Email worker stopped")
+    # ── Shutdown ───────────────────────────────────────────────────────────
+    for task in (worker_task, celebration_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
+    print("Employee Service: 📧 Workers stopped")
     print("Employee Service: Disconnecting Database...")
     await db.disconnect()
     print("Employee Service: 🔴 Database Disconnected")
@@ -47,7 +73,7 @@ app = FastAPI(
     root_path="/employees",
     docs_url="/v1/docs",
     openapi_url="/v1/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -58,13 +84,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+API_PREFIX = "/v1"
+app.include_router(emp_router, prefix=API_PREFIX + "/employees", tags=["Employees"])
+app.include_router(notifications_router, tags=["Notifications"])
+app.include_router(webhooks_router, tags=["Webhooks"])  # ← new
+
+
 @app.get("/health", tags=["System"])
 async def health_check():
     return {"status": "healthy", "service": "Employee Service"}
 
-API_PREFIX = "/v1"
-app.include_router(emp_router, prefix=API_PREFIX + "/employees", tags=["Employees"])
-app.include_router(notifications_router, tags=["Notifications"])
 
 def custom_openapi():
     if app.openapi_schema:
@@ -80,6 +109,7 @@ def custom_openapi():
                 operation["security"] = [{"BearerAuth": []}]
     app.openapi_schema = schema
     return schema
+
 
 app.openapi = custom_openapi
 
