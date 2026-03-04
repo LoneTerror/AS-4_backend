@@ -1,11 +1,16 @@
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
-from src.prisma.client import db,connect_with_retry
+from src.prisma.client import db, connect_with_retry
 from src.recognition.router import router as recognition_router
 from src.recognition.router import categories_router as review_categories_router
+from src.digest.router import router as digest_router
+from src.notifications.email_sender import EmailSender, SMTPConfig
+from src.digest.worker import digest_worker_loop
 from src.common.middleware import (
     request_rate_limit_middleware,
     http_exception_handler,
@@ -18,7 +23,13 @@ from src.common.middleware import (
 async def lifespan(app: FastAPI):
     await connect_with_retry()
     print("Recognition Service: 🟢 Database Connected")
+
+    sender = EmailSender(SMTPConfig.from_env())
+    digest_task = asyncio.create_task(digest_worker_loop(db, sender))
+
     yield
+
+    digest_task.cancel()
     await db.disconnect()
     print("Recognition Service: 🔴 Database Disconnected")
 
@@ -52,6 +63,7 @@ app.add_middleware(
 
 app.include_router(recognition_router, prefix="/v1", tags=["Reviews"])
 app.include_router(review_categories_router, prefix="/v1", tags=["Review Categories"])
+app.include_router(digest_router)
 
 if __name__ == "__main__":
     import uvicorn

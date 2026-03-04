@@ -25,6 +25,20 @@ What's seeded (matches schema.prisma exactly):
     reviews                — sample review jane→john with category tags
     audit_log              — sample audit entries
 """
+import os
+from pathlib import Path
+
+# ── Load .env before anything else ────────────────────────────────────────────
+env_file = Path(__file__).parent / ".env"
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        os.environ.setdefault(key, val)
 import asyncio
 import uuid
 from datetime import date, datetime, timezone, timedelta
