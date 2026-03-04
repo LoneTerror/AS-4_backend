@@ -179,18 +179,19 @@ def make_review(**kwargs):
     raw_points is a plain float so float() calls in the service don't fail.
     __dict__ is populated so vars(review) works in _build_review_dict().
     """
+    uid = "990e8400-e29b-41d4-a716-446655440004"
     defaults = dict(
-        review_id="rev-1",
-        reviewer_id="user-1",
-        receiver_id="user-2",
+        review_id=uid,
+        reviewer_id="880e8400-e29b-41d4-a716-446655440000",
+        receiver_id="550e8400-e29b-41d4-a716-446655440000",
         rating=4,
         comment="Good job",
         image_url=None,
         video_url=None,
-        status_id="status-1",
+        status_id="aa0e8400-e29b-41d4-a716-446655440005",
         review_at=datetime.now(timezone.utc),
         created_at=datetime.now(timezone.utc),
-        created_by="user-1",
+        created_by="880e8400-e29b-41d4-a716-446655440000",
         updated_at=datetime.now(timezone.utc),
         updated_by="user-1",
         raw_points=8.0,
@@ -204,6 +205,14 @@ def make_review(**kwargs):
     obj.__dict__.update({k: v for k, v in defaults.items()
                          if not k.startswith("_")})
     return obj
+
+def make_category_tag_row(category_id=None, category_code="TAG", multiplier=1.0):
+    """Mimics a row from the review_category_tags table."""
+    row = MagicMock()
+    row.category_id = category_id or "770e8400-e29b-41d4-a716-446655440001"
+    row.category_code = category_code
+    row.multiplier_snapshot = multiplier
+    return row
 
 
 def make_active_employee():
