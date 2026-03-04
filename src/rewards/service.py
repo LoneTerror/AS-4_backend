@@ -106,8 +106,11 @@ class RewardService:
         logger.info(f"Successfully created category {new_category.category_id}")
         return new_category
 
-    async def get_categories(self, active_only: bool = True):
-        where_clause = {"is_active": True} if active_only else {}
+    async def get_categories(self, is_active: Optional[bool] = None):
+        where_clause = {}
+        if is_active is not None:
+            where_clause["is_active"] = is_active
+        
         return await self.db.reward_categories.find_many(where=where_clause)
 
     async def update_category(self, category_id: str, request: schemas.UpdateCategoryRequest, user_id: str, req_info: Request):
