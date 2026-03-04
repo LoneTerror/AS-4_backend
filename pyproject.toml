@@ -61,39 +61,6 @@ exclude = ["tests*", "scripts*"]
 
 # ✅ SINGLE merged block — no duplicates
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "--cov=app --cov-report=term-missing --cov-report=html"
-
-[tool.coverage.run]
-source = ["app"]
-omit = [
-    "*/tests/*",
-    "*/migrations/*",
-    "*/__init__.py",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-    "pass",
-]
-
-[tool.ruff]
-target-version = "py310"
-line-length = 88
-select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
-exclude = ["migrations", ".venv", "__pycache__"]
-
-[tool.mypy]
-python_version = "3.10"
-strict = false
-ignore_missing_imports = true
-exclude = ["tests/", "migrations/"]
+asyncio_mode   = "auto"
+testpaths      = ["."]
+filterwarnings = ["ignore::PendingDeprecationWarning"]

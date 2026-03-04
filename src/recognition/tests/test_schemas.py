@@ -2,21 +2,17 @@
 test_schemas.py
 Unit tests for src/recognition/schemas.py
 
-Covers:
-- ReviewCreateRequest: field validation, URL length, extra field rejection
-- ReviewUpdateRequest: optional fields, at-least-one guard, URL length
-- ReviewResponse: from_attributes, field presence
-- PaginationMeta: field types
-- PaginatedReviewResponse: nested structure
-
 FIXED:
-- valid_create_payload() now includes category_id — it became a required field
-  when review categories moved from a hardcoded Python enum to the DB table.
-  Every test that builds a create payload without category_id was silently
-  missing the field and would fail with a Pydantic ValidationError on
-  "category_id: Field required".
-- Added dedicated tests for category_id validation (required, must be UUID).
-- ReviewUpdateRequest tests now include category_id where appropriate.
+- All create/update payload helpers now use category_ids (plural List[UUID])
+  matching the real ReviewCreateRequest field. The old tests used category_id
+  (singular UUID) which no longer exists in the schema.
+- Added tests for category_ids list validation: min 1, max 5, unique, valid UUIDs.
+- ReviewUpdateRequest tests now use category_ids (plural list).
+- ReviewResponse tests updated to match the new multi-category response shape:
+  category_tags, category_ids, category_codes instead of category_id/code fields.
+- Removed tests for effective_points/category_multiplier/reviewer_weight/
+  seasonal_multiplier — these fields were removed from ReviewResponse in the
+  multi-category refactor; raw_points is the only points field that remains.
 """
 
 import os
@@ -29,8 +25,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from pydantic import ValidationError
-
-# Import the REAL schemas module
 import importlib.util, pathlib
 
 _schema_path = pathlib.Path(__file__).parent.parent / "schemas.py"
@@ -48,21 +42,23 @@ PaginatedReviewResponse = _schemas.PaginatedReviewResponse
 # Shared sample data
 # ---------------------------------------------------------------------------
 
-VALID_UUID      = str(uuid4())
-VALID_CAT_UUID  = str(uuid4())   # FIX: separate UUID for category_id
-NOW             = datetime.now(timezone.utc)
-SHORT_URL       = "https://cdn.example.com/file.jpg"
-LONG_URL        = "https://cdn.example.com/" + "x" * 490  # > 500 chars total
+VALID_UUID     = str(uuid4())
+VALID_CAT_UUID = str(uuid4())
+NOW            = datetime.now(timezone.utc)
+SHORT_URL      = "https://cdn.example.com/file.jpg"
+LONG_URL       = "https://cdn.example.com/" + "x" * 490  # > 500 chars total
 
 
 def valid_create_payload(**overrides):
-    # FIX: category_id is now required — was missing from all original tests.
-    # The real ReviewCreateRequest declares it as a required UUID field that
-    # must reference an active row in the review_categories table.
+    """
+    FIXED: category_ids is a List of UUIDs (1–5), not a single UUID.
+    The real ReviewCreateRequest declares:
+        category_ids: List[UUID] = Field(..., min_length=1, max_length=5)
+    """
     base = dict(
         receiver_id=VALID_UUID,
         rating=4,
-        category_id=VALID_CAT_UUID,     # FIX: added required field
+        category_ids=[VALID_CAT_UUID],   # FIXED: plural list
         comment="Great performance across all metrics.",
         image_url=None,
         video_url=None,
@@ -181,26 +177,57 @@ class TestReviewCreateRequest:
         with pytest.raises(ValidationError):
             ReviewCreateRequest(**valid_create_payload(comment=None))
 
-    # FIX: New tests for category_id — required field added in DB refactor
-    def test_category_id_required(self):
-        """Omitting category_id must raise a validation error."""
+    # ── category_ids tests (plural list field) ────────────────────────────
+
+    def test_category_ids_required(self):
+        """Omitting category_ids entirely must raise a validation error."""
         payload = valid_create_payload()
-        del payload["category_id"]
+        del payload["category_ids"]
         with pytest.raises(ValidationError) as exc_info:
             ReviewCreateRequest(**payload)
-        assert "category_id" in str(exc_info.value)
+        assert "category_ids" in str(exc_info.value)
 
-    def test_category_id_must_be_valid_uuid(self):
+    def test_category_ids_must_be_list_of_valid_uuids(self):
         with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(category_id="not-a-uuid"))
+            ReviewCreateRequest(**valid_create_payload(category_ids=["not-a-uuid"]))
 
-    def test_category_id_stored_as_uuid(self):
-        req = ReviewCreateRequest(**valid_create_payload(category_id=VALID_CAT_UUID))
-        assert isinstance(req.category_id, UUID)
+    def test_category_ids_stored_as_list_of_uuid_objects(self):
+        req = ReviewCreateRequest(**valid_create_payload(category_ids=[VALID_CAT_UUID]))
+        assert isinstance(req.category_ids, list)
+        assert isinstance(req.category_ids[0], UUID)
 
-    def test_category_id_cannot_be_none(self):
+    def test_category_ids_cannot_be_empty_list(self):
         with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(category_id=None))
+            ReviewCreateRequest(**valid_create_payload(category_ids=[]))
+
+    def test_category_ids_cannot_be_none(self):
+        with pytest.raises(ValidationError):
+            ReviewCreateRequest(**valid_create_payload(category_ids=None))
+
+    def test_category_ids_max_5_items(self):
+        with pytest.raises(ValidationError):
+            ReviewCreateRequest(**valid_create_payload(
+                category_ids=[str(uuid4()) for _ in range(6)]
+            ))
+
+    def test_category_ids_exactly_5_is_valid(self):
+        req = ReviewCreateRequest(**valid_create_payload(
+            category_ids=[str(uuid4()) for _ in range(5)]
+        ))
+        assert len(req.category_ids) == 5
+
+    def test_category_ids_single_item_is_valid(self):
+        req = ReviewCreateRequest(**valid_create_payload(
+            category_ids=[VALID_CAT_UUID]
+        ))
+        assert len(req.category_ids) == 1
+
+    def test_duplicate_category_ids_rejected(self):
+        same_id = str(uuid4())
+        with pytest.raises(ValidationError):
+            ReviewCreateRequest(**valid_create_payload(
+                category_ids=[same_id, same_id]
+            ))
 
 
 # ===========================================================================
@@ -218,8 +245,12 @@ class TestReviewUpdateRequest:
         assert req.comment == "An updated comment for the review."
 
     def test_all_fields_at_once_is_valid(self):
-        req = ReviewUpdateRequest(rating=5, comment="Updated rating and comment.",
-                                  image_url=SHORT_URL, video_url=SHORT_URL)
+        req = ReviewUpdateRequest(
+            rating=5,
+            comment="Updated rating and comment.",
+            image_url=SHORT_URL,
+            video_url=SHORT_URL,
+        )
         assert req.rating == 5
 
     def test_empty_request_raises_at_least_one_field(self):
@@ -256,7 +287,6 @@ class TestReviewUpdateRequest:
             ReviewUpdateRequest(rating=3, unknown_field="x")
 
     def test_all_fields_none_explicit_raises(self):
-        """Passing all fields as None should still fail the model_validator"""
         with pytest.raises(ValidationError):
             ReviewUpdateRequest(rating=None, comment=None,
                                 image_url=None, video_url=None)
@@ -269,20 +299,31 @@ class TestReviewUpdateRequest:
         req = ReviewUpdateRequest(video_url=SHORT_URL)
         assert req.video_url is not None
 
-    # FIX: category_id tests for update
-    def test_only_category_id_is_valid(self):
-        """Updating only the category is a valid partial update."""
-        req = ReviewUpdateRequest(category_id=VALID_CAT_UUID)
-        assert isinstance(req.category_id, UUID)
+    # ── category_ids tests for update (plural list) ───────────────────────
 
-    def test_category_id_with_rating_is_valid(self):
-        req = ReviewUpdateRequest(rating=5, category_id=VALID_CAT_UUID)
+    def test_only_category_ids_is_valid(self):
+        """Updating only the category list is a valid partial update."""
+        req = ReviewUpdateRequest(category_ids=[VALID_CAT_UUID])
+        assert isinstance(req.category_ids, list)
+        assert isinstance(req.category_ids[0], UUID)
+
+    def test_category_ids_with_rating_is_valid(self):
+        req = ReviewUpdateRequest(rating=5, category_ids=[VALID_CAT_UUID])
         assert req.rating == 5
-        assert isinstance(req.category_id, UUID)
+        assert len(req.category_ids) == 1
 
-    def test_category_id_must_be_valid_uuid(self):
+    def test_category_ids_must_be_valid_uuids(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(category_id="not-a-uuid")
+            ReviewUpdateRequest(category_ids=["not-a-uuid"])
+
+    def test_duplicate_category_ids_rejected(self):
+        same_id = str(uuid4())
+        with pytest.raises(ValidationError):
+            ReviewUpdateRequest(category_ids=[same_id, same_id])
+
+    def test_category_ids_max_5(self):
+        with pytest.raises(ValidationError):
+            ReviewUpdateRequest(category_ids=[str(uuid4()) for _ in range(6)])
 
 
 # ===========================================================================
@@ -316,7 +357,7 @@ class TestReviewResponse:
     def test_timestamps_are_datetime(self):
         resp = ReviewResponse(**valid_response_payload())
         for field in ("review_at", "created_at", "updated_at"):
-            assert isinstance(getattr(resp, field), datetime), f"{field} should be datetime"
+            assert isinstance(getattr(resp, field), datetime)
 
     def test_rating_preserved(self):
         resp = ReviewResponse(**valid_response_payload(rating=2))
@@ -329,33 +370,27 @@ class TestReviewResponse:
     def test_from_attributes_enabled(self):
         assert ReviewResponse.model_config.get("from_attributes") is True
 
-    def test_category_id_optional_none(self):
-        resp = ReviewResponse(**valid_response_payload(category_id=None))
-        assert resp.category_id is None
+    # ── Multi-category fields ─────────────────────────────────────────────
 
-    def test_category_id_populated(self):
-        cat_id = uuid4()
-        resp = ReviewResponse(**valid_response_payload(category_id=cat_id))
-        assert resp.category_id == cat_id
+    def test_category_tags_optional_defaults_none(self):
+        resp = ReviewResponse(**valid_response_payload())
+        assert resp.category_tags is None
 
-    def test_points_fields_optional_none(self):
+    def test_category_ids_convenience_field_optional(self):
+        resp = ReviewResponse(**valid_response_payload())
+        assert resp.category_ids is None
+
+    def test_category_codes_convenience_field_optional(self):
+        resp = ReviewResponse(**valid_response_payload())
+        assert resp.category_codes is None
+
+    def test_raw_points_optional_defaults_none(self):
         resp = ReviewResponse(**valid_response_payload())
         assert resp.raw_points is None
-        assert resp.effective_points is None
-        assert resp.category_multiplier is None
-        assert resp.reviewer_weight is None
-        assert resp.seasonal_multiplier is None
 
-    def test_points_fields_populated(self):
-        resp = ReviewResponse(**valid_response_payload(
-            raw_points=8.0,
-            effective_points=7.2,
-            category_multiplier=1.4,
-            reviewer_weight=2.0,
-            seasonal_multiplier=1.0,
-        ))
-        assert resp.raw_points == 8.0
-        assert resp.effective_points == 7.2
+    def test_raw_points_populated(self):
+        resp = ReviewResponse(**valid_response_payload(raw_points=15.68))
+        assert resp.raw_points == 15.68
 
 
 # ===========================================================================
@@ -375,16 +410,14 @@ class TestPaginationMeta:
         assert meta.total == 100
 
     def test_has_next_is_bool(self):
-        meta = self._make(has_next=False)
-        assert meta.has_next is False
+        assert self._make(has_next=False).has_next is False
 
     def test_has_previous_is_bool(self):
-        meta = self._make(has_previous=True)
-        assert meta.has_previous is True
+        assert self._make(has_previous=True).has_previous is True
 
     def test_missing_field_raises(self):
         with pytest.raises(ValidationError):
-            PaginationMeta(current_page=1, per_page=20)  # missing total etc.
+            PaginationMeta(current_page=1, per_page=20)
 
 
 # ===========================================================================
