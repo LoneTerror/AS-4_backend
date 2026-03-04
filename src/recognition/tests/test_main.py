@@ -1,28 +1,32 @@
 """
 test_main.py
-Unit tests for src/main.py (FastAPI application factory)
+Unit tests for main.py (FastAPI application factory)
 
-Covers:
-- App metadata (title, version, doc URLs)
-- CORS middleware configuration
-- Router inclusion and prefix
-- Lifespan: db.connect / db.disconnect called
-- Exception handlers registered
-- Middleware registered
-- Rate-limit headers exposed
+FIXED:
+- Added stubs for src.digest.router, src.digest.worker,
+  src.notifications.email_sender so main.py can be imported. The real
+  main.py imports digest_router, digest_worker_loop, EmailSender, SMTPConfig
+  at the top level — without stubs the import fails immediately.
+- Added connect_with_retry stub on src.prisma.client — main.py calls
+  `await connect_with_retry()` in the lifespan, not `await db.connect()`.
+  Tests that asserted db.connect.called were wrong; updated to check
+  connect_with_retry.called.
+- digest_task.cancel() is called in lifespan teardown; the fake worker is
+  an infinite coroutine so asyncio.create_task works without side effects.
 """
 
 import os
 import sys
 import types
+import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # ---------------------------------------------------------------------------
-# Stub heavy dependencies so main.py can be imported without Prisma / real DB
+# Stub ALL heavy dependencies before importing main.py
 # ---------------------------------------------------------------------------
 for _p in [
     "src", "src.prisma", "src.prisma.client",
@@ -30,22 +34,52 @@ for _p in [
     "src.recognition.dependencies", "src.recognition.schemas",
     "src.recognition.service",
     "src.common", "src.common.middleware",
+    "src.notifications", "src.notifications.email_sender",
+    "src.digest", "src.digest.router", "src.digest.worker",
 ]:
     if _p not in sys.modules:
         sys.modules[_p] = types.ModuleType(_p)
 
-# Fake database
+# Fake database — main.py calls connect_with_retry() then db.disconnect()
 _fake_db = MagicMock()
-_fake_db.connect    = AsyncMock()
 _fake_db.disconnect = AsyncMock()
-sys.modules["src.prisma.client"].db = _fake_db
 
-# Fake router
+_fake_connect = AsyncMock()   # connect_with_retry is a standalone coroutine
+
+sys.modules["src.prisma.client"].db                 = _fake_db
+sys.modules["src.prisma.client"].connect_with_retry = _fake_connect
+
+# Fake routers
 from fastapi import APIRouter
-_fake_router = APIRouter()
-_fake_categories_router = APIRouter()
-sys.modules["src.recognition.router"].router = _fake_router
+_fake_recognition_router  = APIRouter()
+_fake_categories_router   = APIRouter()
+_fake_digest_router       = APIRouter()
+sys.modules["src.recognition.router"].router           = _fake_recognition_router
 sys.modules["src.recognition.router"].categories_router = _fake_categories_router
+sys.modules["src.digest.router"].router                = _fake_digest_router
+
+# Fake digest worker — must be an async generator / long-running coroutine;
+# asyncio.create_task needs a coroutine, so wrap in an infinite loop.
+async def _fake_digest_worker_loop(*args, **kwargs):
+    try:
+        await asyncio.sleep(9999)
+    except asyncio.CancelledError:
+        pass
+
+sys.modules["src.digest.worker"].digest_worker_loop = _fake_digest_worker_loop
+
+# Fake EmailSender / SMTPConfig
+class _FakeSMTPConfig:
+    @classmethod
+    def from_env(cls):
+        return cls()
+
+class _FakeEmailSender:
+    def __init__(self, *args, **kwargs):
+        pass
+
+sys.modules["src.notifications.email_sender"].SMTPConfig  = _FakeSMTPConfig
+sys.modules["src.notifications.email_sender"].EmailSender = _FakeEmailSender
 
 # Fake middleware functions
 async def _fake_rate_limit(request, call_next):
@@ -114,13 +148,10 @@ class TestRouterInclusion:
         prefixes = [r.path for r in app.routes]
         assert any("/v1" in p for p in prefixes)
 
-    def test_router_has_recognition_tag(self):
-        # The router is included with tags=["Recognition"]
-        # FastAPI stores this in route.tags
+    def test_router_tags_no_error(self):
         tags_found = set()
         for route in app.routes:
             tags_found.update(getattr(route, "tags", []))
-        # Tag is only present if routes exist on the fake router; just verify no error
         assert isinstance(tags_found, set)
 
 
@@ -131,7 +162,6 @@ class TestRouterInclusion:
 class TestCORSMiddleware:
 
     def _cors_config(self):
-        """Extract the CORSMiddleware kwargs from the app's middleware stack."""
         from starlette.middleware.cors import CORSMiddleware
         for mw in app.user_middleware:
             if mw.cls is CORSMiddleware:
@@ -204,44 +234,42 @@ class TestExceptionHandlers:
 
 
 # ===========================================================================
-# Lifespan: database connect / disconnect
+# Lifespan: connect_with_retry / db.disconnect
 # ===========================================================================
 
 class TestLifespan:
 
     @pytest.mark.asyncio
-    async def test_db_connect_called_on_startup(self):
-        _fake_db.connect.reset_mock()
+    async def test_connect_with_retry_called_on_startup(self):
+        """
+        FIXED: main.py calls connect_with_retry() (not db.connect()) in the
+        lifespan. The old test asserted db.connect.called which was always
+        False because that function is never called.
+        """
+        _fake_connect.reset_mock()
         _fake_db.disconnect.reset_mock()
 
-        lifespan = _main_mod.lifespan
-
-        async with lifespan(app):
-            assert _fake_db.connect.called
+        async with _main_mod.lifespan(app):
+            assert _fake_connect.called
 
     @pytest.mark.asyncio
     async def test_db_disconnect_called_on_shutdown(self):
-        _fake_db.connect.reset_mock()
+        _fake_connect.reset_mock()
         _fake_db.disconnect.reset_mock()
 
-        lifespan = _main_mod.lifespan
-
-        async with lifespan(app):
+        async with _main_mod.lifespan(app):
             pass
 
         assert _fake_db.disconnect.called
 
     @pytest.mark.asyncio
-    async def test_db_disconnect_called_even_if_startup_raises(self):
-        """Lifespan should run the full context manager; disconnect is in finally."""
-        _fake_db.connect.reset_mock()
+    async def test_db_disconnect_called_on_normal_exit(self):
+        _fake_connect.reset_mock()
         _fake_db.disconnect.reset_mock()
 
-        # The lifespan itself uses yield — if the app body raises, disconnect still runs
-        lifespan = _main_mod.lifespan
         try:
-            async with lifespan(app):
-                pass  # normal exit
+            async with _main_mod.lifespan(app):
+                pass
         except Exception:
             pass
 
@@ -249,20 +277,14 @@ class TestLifespan:
 
 
 # ===========================================================================
-# Rate-limit middleware
+# Rate-limit middleware smoke test
 # ===========================================================================
 
 class TestRateLimitMiddleware:
 
-    def test_rate_limit_middleware_registered(self):
-        """Verify the middleware is in the middleware stack."""
-        # app.middleware_stack is a wrapped chain; we check user_middleware or routes
-        # The middleware is added via app.middleware("http")(fn)
-        # FastAPI stores these in app.middleware_stack after build
-        # A simpler check: make an actual request and verify it doesn't 500
+    def test_rate_limit_middleware_does_not_crash(self):
         from fastapi.testclient import TestClient
         test_client = TestClient(app)
-        # No real routes on the fake router, but the middleware should not crash
         resp = test_client.get("/v1/nonexistent")
-        # 404 means middleware passed through (not 500 from middleware crash)
+        # 404 means middleware passed through without crashing
         assert resp.status_code in (404, 200, 422)
