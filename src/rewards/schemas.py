@@ -5,31 +5,44 @@ from datetime import datetime
 # CATEGORY SCHEMAS (reward_categories)
 
 class CreateCategoryRequest(BaseModel):
-    category_name: str = Field(..., min_length=1, max_length=100)
-    # Added regex pattern to only allow letters, numbers, dashes, and underscores
+    category_name: str = Field(
+        ..., 
+        min_length=1, 
+        max_length=100,
+        pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
+        description="Name of the category. Alphanumeric and basic punctuation only."
+    )
+    
+    # Strictly limits to UPPERCASE letters, numbers, dashes, and underscores
     category_code: str = Field(
         ..., 
         min_length=1, 
         max_length=50, 
-        pattern=r'^[a-zA-Z0-9_-]+$',
-        description="Unique code (alphanumeric, dashes, underscores only) e.g. 'CAT-GIFT'"
+        pattern=r'^[A-Z0-9_-]+$',
+        description="Unique code (Uppercase alphanumeric, dashes, underscores only) e.g. 'CAT-GIFT'"
     )
-    description: Optional[str] = None
+    
+    # Allows most text but blocks angle brackets < > to prevent basic HTML/XSS injection
+    description: Optional[str] = Field(
+        None,
+        pattern=r'^[^<>]*$',
+        description="Optional description. HTML tags are not allowed."
+    )
 
-    @field_validator('category_name')
+    @field_validator('category_name', 'category_code')
     @classmethod
     def check_not_empty(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError('Field cannot be empty or just whitespace')
-        return v.strip()
+        return v.strip().upper() if v == 'category_code' else v.strip()
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "category_name": "Gift Cards",
-                    "category_code": "GIFT_CARD",
-                    "description": "Digital and physical gift cards for top retail stores."
+                    "category_name": "Top Performer",
+                    "category_code": "TOP_PERFORMER_01",
+                    "description": "Awarded for exceptional quarterly performance."
                 }
             ]
         }
