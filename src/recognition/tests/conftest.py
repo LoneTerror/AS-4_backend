@@ -1,19 +1,19 @@
 """
 conftest.py — shared fixtures, stubs, and helpers for all test files.
 
-Stubs out src.prisma.client, src.recognition.dependencies, and
-src.recognition.schemas so every test file can import the real modules
-without a running Prisma / FastAPI stack.
-
 FIXED:
-- ReviewCreateRequest stub now includes category_id (required field added
-  when categories moved from hardcoded enum to DB table)
-- ReviewUpdateRequest stub now includes category_id (optional FK)
-- make_review() now includes category_id, category_code, and points snapshot
-  fields so _enrich_with_effective_points() can build a complete dict
-- Added make_category_row(), make_role_row(), make_seasonal_row(),
-  make_points_config_row() helpers for the new DB tables the points engine
-  reads from during create/update
+- ReviewCreateRequest/UpdateRequest stubs now use category_ids (plural List)
+  matching the real schema. The old stubs used category_id (singular UUID)
+  which caused `for cid in payload.category_ids` in service.py to fail.
+- Removed stubs for quarters_elapsed / apply_decay — these functions do not
+  exist in points_engine.py and caused AttributeError on module load.
+- Added src.wallet, src.wallet.service stubs so service.py inline imports
+  (credit_wallet_from_review, adjust_wallet_for_review_update) don't crash.
+- Fixed _FakeNotificationService to expose create_notification() — the method
+  service.py actually calls on _notif.
+- make_review() now sets review_category_tags=[] (plain list, not MagicMock)
+  so _build_review_dict() can iterate over it without errors.
+- Added src.digest / src.notifications.email_sender stubs for main.py tests.
 """
 
 import sys
@@ -22,10 +22,10 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 # ---------------------------------------------------------------------------
-# 1. Stub the entire src.* namespace so real modules can be imported
+# 1. Stub the entire src.* namespace
 # ---------------------------------------------------------------------------
 _src = types.ModuleType("src")
 sys.modules.setdefault("src", _src)
@@ -42,35 +42,73 @@ for _path in [
     "src.notifications",
     "src.notifications.service",
     "src.notifications.schemas",
+    "src.notifications.email_sender",
+    "src.wallet",
+    "src.wallet.service",
+    "src.digest",
+    "src.digest.router",
+    "src.digest.worker",
 ]:
     sys.modules.setdefault(_path, types.ModuleType(_path))
 
-# Stub NotificationService so service.py import does not fail
+# Stub NotificationService — service.py calls _notif.create_notification()
 class _FakeNotificationService:
     def __init__(self, *args, **kwargs):
         pass
-    async def send_review_notification(self, *args, **kwargs):
-        pass
-    async def send_notification(self, *args, **kwargs):
+    async def create_notification(self, *args, **kwargs):
         pass
 
 sys.modules["src.notifications.service"].NotificationService = _FakeNotificationService
 
-# Stub NotificationType enum used by service.py
+# Stub wallet functions (imported inline inside service.py)
+async def _fake_credit_wallet(*args, **kwargs):
+    return {"credited_points": 0, "new_balance": 0}
+
+async def _fake_adjust_wallet(*args, **kwargs):
+    return {"new_balance": 0}
+
+sys.modules["src.wallet.service"].credit_wallet_from_review = _fake_credit_wallet
+sys.modules["src.wallet.service"].adjust_wallet_for_review_update = _fake_adjust_wallet
+
+# Stub EmailSender / SMTPConfig for main.py import
+class _FakeSMTPConfig:
+    @classmethod
+    def from_env(cls):
+        return cls()
+
+class _FakeEmailSender:
+    def __init__(self, *args, **kwargs):
+        pass
+
+sys.modules["src.notifications.email_sender"].SMTPConfig  = _FakeSMTPConfig
+sys.modules["src.notifications.email_sender"].EmailSender = _FakeEmailSender
+
+# Stub digest router + worker
+from fastapi import APIRouter as _APIRouter
+sys.modules["src.digest.router"].router = _APIRouter()
+
+async def _fake_digest_worker(*args, **kwargs):
+    pass
+
+sys.modules["src.digest.worker"].digest_worker_loop = _fake_digest_worker
+
+# Stub NotificationType enum
 import enum as _enum
+
 class _NotificationType(_enum.Enum):
-    REVIEW_CREATED = "REVIEW_CREATED"
-    REVIEW_UPDATED = "REVIEW_UPDATED"
-    REVIEW_RECEIVED = "REVIEW_RECEIVED"
-    GENERAL = "GENERAL"
+    REVIEW = "REVIEW"
+    REWARD = "REWARD"
+    SYSTEM = "SYSTEM"
 
 sys.modules["src.notifications.schemas"].NotificationType = _NotificationType
 
-# Load the REAL points_engine and wire its functions into the stub namespace.
-# service.py does `from src.recognition.points_engine import calculate_points`
-# so the stub module must hold the real callables — a MagicMock returning a
-# float would cause `pts.raw_points` AttributeError in the service.
+# ---------------------------------------------------------------------------
+# 2. Load REAL points_engine
+#    points_engine.py only exports calculate_points + PointsResult.
+#    quarters_elapsed and apply_decay do NOT exist — do not stub them.
+# ---------------------------------------------------------------------------
 import importlib.util as _ilu, pathlib as _pl
+
 _pe_path = _pl.Path(__file__).parent.parent / "points_engine.py"
 _pe_spec = _ilu.spec_from_file_location("_real_points_engine", _pe_path)
 _real_pe = _ilu.module_from_spec(_pe_spec)
@@ -78,55 +116,49 @@ _pe_spec.loader.exec_module(_real_pe)
 
 _pe = sys.modules["src.recognition.points_engine"]
 _pe.calculate_points = _real_pe.calculate_points
-_pe.quarters_elapsed = _real_pe.quarters_elapsed
-_pe.apply_decay      = _real_pe.apply_decay
 _pe.PointsResult     = _real_pe.PointsResult
 
 # ---------------------------------------------------------------------------
-# 2. Fake database object — every test patches individual methods on this
+# 3. Fake database object
 # ---------------------------------------------------------------------------
 fake_db = MagicMock()
-sys.modules["src.prisma.client"].db = fake_db
+sys.modules["src.prisma.client"].db             = fake_db
+sys.modules["src.prisma.client"].connect_with_retry = AsyncMock()
 
 # ---------------------------------------------------------------------------
-# 3. CurrentUser model (mirrors the real one in dependencies.py)
+# 4. CurrentUser model
 # ---------------------------------------------------------------------------
 class CurrentUser(BaseModel):
-    id: str
-    email: str
-    roles: List[str]
-    department_id: str | None = None
+    id:            str
+    email:         str
+    roles:         List[str]
+    department_id: Optional[str] = None
 
 sys.modules["src.recognition.dependencies"].CurrentUser = CurrentUser
 
 # ---------------------------------------------------------------------------
-# 4. Lightweight schema stubs (enough for service.py to import)
-#
-# FIX: Added category_id to both request stubs. The real ReviewCreateRequest
-# requires category_id (UUID FK to review_categories) as of the DB-driven
-# category refactor. Without it, service.create_review() blows up accessing
-# payload.category_id before any DB call happens.
+# 5. Schema stubs — use category_ids (plural List) to match real schemas.py
 # ---------------------------------------------------------------------------
 class ReviewCreateRequest(BaseModel):
-    receiver_id: object
-    rating: int
-    comment: str
-    category_id: object = None      # FIX: added — FK to review_categories table
-    image_url: object = None
-    video_url: object = None
+    receiver_id:  object
+    rating:       int
+    comment:      str
+    category_ids: List[object]           # FIXED: plural list
+    image_url:    object = None
+    video_url:    object = None
 
 class ReviewUpdateRequest(BaseModel):
-    rating: int | None = None
-    comment: str | None = None
-    category_id: object = None      # FIX: added — optional FK; None means "no change"
-    image_url: object = None
-    video_url: object = None
+    rating:       Optional[int]           = None
+    comment:      Optional[str]           = None
+    category_ids: Optional[List[object]]  = None  # FIXED: plural, optional
+    image_url:    object                  = None
+    video_url:    object                  = None
 
 sys.modules["src.recognition.schemas"].ReviewCreateRequest = ReviewCreateRequest
 sys.modules["src.recognition.schemas"].ReviewUpdateRequest = ReviewUpdateRequest
 
 # ---------------------------------------------------------------------------
-# 5. Reusable factory helpers (imported by every test file)
+# 6. Factory helpers
 # ---------------------------------------------------------------------------
 
 def make_user(user_id="user-1", roles=None, email="user@test.com", dept=None):
@@ -140,12 +172,12 @@ def make_user(user_id="user-1", roles=None, email="user@test.com", dept=None):
 
 def make_review(**kwargs):
     """
-    Build a MagicMock that looks like a Prisma reviews row.
+    Build a MagicMock resembling a Prisma reviews row.
 
-    FIX: Added category_id, category_code and points snapshot fields.
-    _enrich_with_effective_points() calls vars(review) and then reads
-    raw_points + review_at. Without these, every enrichment call returns
-    effective_points=None and the returned dict is missing category fields.
+    FIXED: review_category_tags is a plain empty list so _build_review_dict()
+    can iterate it without hitting MagicMock iteration errors.
+    raw_points is a plain float so float() calls in the service don't fail.
+    __dict__ is populated so vars(review) works in _build_review_dict().
     """
     defaults = dict(
         review_id="rev-1",
@@ -161,18 +193,16 @@ def make_review(**kwargs):
         created_by="user-1",
         updated_at=datetime.now(timezone.utc),
         updated_by="user-1",
-        # FIX: points snapshot + category fields expected by _enrich_with_effective_points
-        category_id="cat-1",
-        category_code="TEAMWORK",
         raw_points=8.0,
-        category_multiplier=1.0,
-        reviewer_weight=2.0,
-        seasonal_multiplier=1.0,
+        review_category_tags=[],  # FIXED: plain list, not MagicMock
     )
     defaults.update(kwargs)
     obj = MagicMock()
     for k, v in defaults.items():
         setattr(obj, k, v)
+    # _build_review_dict calls vars(review) — populate __dict__ so it works
+    obj.__dict__.update({k: v for k, v in defaults.items()
+                         if not k.startswith("_")})
     return obj
 
 
@@ -204,19 +234,12 @@ def make_review_status(status_id="status-active"):
     return s
 
 
-# ---------------------------------------------------------------------------
-# 6. New helpers for the points-engine DB tables
-#    These are needed by service tests that exercise create_review /
-#    update_review, because _resolve_points_inputs() now queries four tables.
-# ---------------------------------------------------------------------------
-
 def make_category_row(
     category_id="cat-1",
     category_code="TEAMWORK",
     multiplier=1.0,
     is_active=True,
 ):
-    """Mimics a review_categories DB row."""
     row = MagicMock()
     row.category_id   = category_id
     row.category_code = category_code
@@ -226,21 +249,22 @@ def make_category_row(
 
 
 def make_role_row(reviewer_weight=1.0):
-    """Mimics a roles DB row."""
     row = MagicMock()
     row.reviewer_weight = reviewer_weight
     return row
 
 
 def make_seasonal_row(multiplier=1.0):
-    """Mimics a seasonal_multipliers DB row."""
     row = MagicMock()
     row.multiplier = multiplier
     return row
 
 
 def make_points_config_row(config_value=0.9):
-    """Mimics a points_config DB row (DECAY_RATE key)."""
+    """
+    Kept for backward compatibility. The current service.py no longer queries
+    points_config, but this helper is still imported by some test files.
+    """
     row = MagicMock()
     row.config_value = config_value
     return row
@@ -272,5 +296,4 @@ def sample_review():
 
 @pytest.fixture
 def db_patch():
-    """Returns the fake_db object for direct attribute inspection."""
     return fake_db

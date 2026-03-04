@@ -2,19 +2,21 @@
 test_router.py
 Unit tests for src/recognition/router.py
 
-Uses FastAPI TestClient with all auth dependencies overridden so no
-real token validation or DB calls happen. Tests routing, HTTP methods,
-query/path param validation, response codes, and service error propagation.
-
 FIXED:
-- _valid_body() now includes category_id — required field after DB refactor.
-  Without it every POST /v1/reviews call returns 422 "category_id: Field
-  required" before the service is even called, breaking all create tests.
-- test_create_review_missing_* tests now omit exactly the field under test
-  and include all other required fields (including category_id).
-- ReviewCreateRequest and ReviewUpdateRequest schema stubs in the loader
-  section now include category_id so the router's Pydantic validation uses
-  the correct field set.
+- _valid_body() now uses category_ids (plural list) matching the real
+  ReviewCreateRequest schema. Old tests used category_id (singular) which
+  no longer exists and caused every POST to return 422 before the service
+  was even called.
+- Removed quarters_elapsed / apply_decay stubs — they don't exist in
+  points_engine.py.
+- Added stubs for ReviewCategoryCreateRequest and ReviewCategoryUpdateRequest
+  so router.py can be imported (it imports both from src.recognition.schemas).
+- test_create_review_missing_category_ids_returns_422 replaces the old
+  singular category_id version.
+- test_create_review_invalid_category_id_uuid_returns_422 updated to use
+  category_ids list with an invalid UUID element.
+- test_update_review_category_ids_only_accepted replaces singular version.
+- test_update_review_invalid_category_ids_returns_422 updated similarly.
 """
 
 import os
@@ -40,7 +42,9 @@ for _p in [
 ]:
     sys.modules.setdefault(_p, types.ModuleType(_p))
 
-# Load the REAL points_engine into the stub namespace (same as conftest.py).
+# Load the REAL points_engine.
+# FIXED: points_engine.py only exports calculate_points and PointsResult.
+# quarters_elapsed and apply_decay do NOT exist — remove those assignments.
 import pathlib as _pathlib_pe
 _pe_mod_path = _pathlib_pe.Path(__file__).parent.parent / "points_engine.py"
 import importlib.util as _ilu_pe
@@ -49,12 +53,10 @@ _real_pe_mod = _ilu_pe.module_from_spec(_pe_mod_spec)
 _pe_mod_spec.loader.exec_module(_real_pe_mod)
 _pe_mod = sys.modules["src.recognition.points_engine"]
 _pe_mod.calculate_points = _real_pe_mod.calculate_points
-_pe_mod.quarters_elapsed = _real_pe_mod.quarters_elapsed
-_pe_mod.apply_decay      = _real_pe_mod.apply_decay
 _pe_mod.PointsResult     = _real_pe_mod.PointsResult
 
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 class CurrentUser(BaseModel):
     id: str
@@ -65,7 +67,7 @@ class CurrentUser(BaseModel):
 DEFAULT_USER = CurrentUser(id="user-1", email="u@test.com", roles=["EMPLOYEE"])
 
 # ---------------------------------------------------------------------------
-# Load real schemas
+# Load real schemas and wire into stub namespace
 # ---------------------------------------------------------------------------
 import importlib.util, pathlib
 
@@ -82,27 +84,49 @@ sys.modules["src.recognition.schemas"].ReviewCreateRequest      = _schemas.Revie
 sys.modules["src.recognition.schemas"].ReviewUpdateRequest      = _schemas.ReviewUpdateRequest
 sys.modules["src.recognition.schemas"].ReviewResponse           = _schemas.ReviewResponse
 sys.modules["src.recognition.schemas"].PaginatedReviewResponse  = _schemas.PaginatedReviewResponse
-# Stub ReviewCategoryResponse / PaginatedReviewCategoryResponse if absent
+
+# Stub category schemas if not present in schemas.py
 from pydantic import BaseModel as _BM
-from typing import List as _List
+from typing import List as _List, Optional as _Opt
 
 _ReviewCategoryResponse = getattr(_schemas, "ReviewCategoryResponse", None)
 if _ReviewCategoryResponse is None:
     class _ReviewCategoryResponse(_BM):
-        category_id: object
+        category_id:   object
         category_code: str
-        multiplier: float = 1.0
-        is_active: bool = True
+        multiplier:    float = 1.0
+        is_active:     bool  = True
 
 _PaginatedReviewCategoryResponse = getattr(_schemas, "PaginatedReviewCategoryResponse", None)
 if _PaginatedReviewCategoryResponse is None:
     class _PaginatedReviewCategoryResponse(_BM):
-        data: _List[_ReviewCategoryResponse] = []
+        data:       _List[_ReviewCategoryResponse] = []
         pagination: dict = {}
 
-sys.modules["src.recognition.schemas"].ReviewCategoryResponse = _ReviewCategoryResponse
-sys.modules["src.recognition.schemas"].PaginatedReviewCategoryResponse = _PaginatedReviewCategoryResponse
-sys.modules["src.recognition.dependencies"].CurrentUser         = CurrentUser
+# FIXED: router.py also imports ReviewCategoryCreateRequest and
+# ReviewCategoryUpdateRequest — stub them so the import doesn't fail.
+_ReviewCategoryCreateRequest = getattr(_schemas, "ReviewCategoryCreateRequest", None)
+if _ReviewCategoryCreateRequest is None:
+    class _ReviewCategoryCreateRequest(_BM):
+        category_code: str
+        category_name: str
+        multiplier:    float
+        description:   _Opt[str] = None
+
+_ReviewCategoryUpdateRequest = getattr(_schemas, "ReviewCategoryUpdateRequest", None)
+if _ReviewCategoryUpdateRequest is None:
+    class _ReviewCategoryUpdateRequest(_BM):
+        category_code: _Opt[str]   = None
+        category_name: _Opt[str]   = None
+        multiplier:    _Opt[float] = None
+        description:   _Opt[str]  = None
+        is_active:     _Opt[bool]  = None
+
+sys.modules["src.recognition.schemas"].ReviewCategoryResponse           = _ReviewCategoryResponse
+sys.modules["src.recognition.schemas"].PaginatedReviewCategoryResponse  = _PaginatedReviewCategoryResponse
+sys.modules["src.recognition.schemas"].ReviewCategoryCreateRequest      = _ReviewCategoryCreateRequest
+sys.modules["src.recognition.schemas"].ReviewCategoryUpdateRequest      = _ReviewCategoryUpdateRequest
+sys.modules["src.recognition.dependencies"].CurrentUser                 = CurrentUser
 
 # ---------------------------------------------------------------------------
 # Mock service
@@ -111,7 +135,7 @@ _service = MagicMock()
 sys.modules["src.recognition.service"].RecognitionService = _service
 
 # ---------------------------------------------------------------------------
-# Stub get_current_user / require_roles so router imports stubs
+# Stub auth dependencies
 # ---------------------------------------------------------------------------
 async def _stub_get_current_user():
     return DEFAULT_USER
@@ -138,10 +162,8 @@ from fastapi.testclient import TestClient
 app = FastAPI()
 app.include_router(_router_mod.router, prefix="/v1")
 
-# Override the stubs that the router captured at import time
 app.dependency_overrides[_router_mod.get_current_user] = lambda: DEFAULT_USER
 
-# Override every require_roles-produced dependency registered on routes
 for _route in app.routes:
     for _dep in getattr(_route, "dependencies", []):
         app.dependency_overrides[_dep.dependency] = lambda: DEFAULT_USER
@@ -168,6 +190,10 @@ def _review_json(**kw):
         created_by=str(uuid4()),
         updated_at=datetime.now(timezone.utc).isoformat(),
         updated_by=str(uuid4()),
+        category_tags=[],
+        category_ids=[],
+        category_codes=[],
+        raw_points=None,
     )
     base.update(kw)
     return base
@@ -292,13 +318,15 @@ class TestGetReviewRoute:
 class TestCreateReviewRoute:
 
     def _valid_body(self, **kw):
-        # FIX: category_id is now a required field on ReviewCreateRequest.
-        # Without it, FastAPI's Pydantic validation rejects the request with
-        # 422 before the service is called, breaking every create test.
+        """
+        FIXED: The real ReviewCreateRequest uses category_ids: List[UUID]
+        (plural list), not category_id: UUID (singular). Sending a single
+        UUID string caused every POST to 422 before the service was called.
+        """
         base = dict(
             receiver_id=str(uuid4()),
             rating=4,
-            category_id=str(uuid4()),   # FIX: added required field
+            category_ids=[str(uuid4())],   # FIXED: plural list with one UUID
             comment="Outstanding performance throughout the quarter.",
         )
         base.update(kw)
@@ -310,39 +338,33 @@ class TestCreateReviewRoute:
         assert resp.status_code == 201
 
     def test_create_review_missing_rating_returns_422(self):
-        # FIX: include all other required fields; only omit rating
-        resp = client.post("/v1/reviews", json=dict(
-            receiver_id=str(uuid4()),
-            category_id=str(uuid4()),
-            comment="This is a valid comment length.",
-        ))
+        body = self._valid_body()
+        del body["rating"]
+        resp = client.post("/v1/reviews", json=body)
         assert resp.status_code == 422
 
     def test_create_review_missing_comment_returns_422(self):
-        # FIX: include all other required fields; only omit comment
-        resp = client.post("/v1/reviews", json=dict(
-            receiver_id=str(uuid4()),
-            rating=3,
-            category_id=str(uuid4()),
-        ))
+        body = self._valid_body()
+        del body["comment"]
+        resp = client.post("/v1/reviews", json=body)
         assert resp.status_code == 422
 
     def test_create_review_missing_receiver_id_returns_422(self):
-        # FIX: include all other required fields; only omit receiver_id
-        resp = client.post("/v1/reviews", json=dict(
-            rating=3,
-            category_id=str(uuid4()),
-            comment="This is a valid comment length.",
-        ))
+        body = self._valid_body()
+        del body["receiver_id"]
+        resp = client.post("/v1/reviews", json=body)
         assert resp.status_code == 422
 
-    def test_create_review_missing_category_id_returns_422(self):
-        # FIX: new test — category_id is required; omitting it must 422
-        resp = client.post("/v1/reviews", json=dict(
-            receiver_id=str(uuid4()),
-            rating=3,
-            comment="This is a valid comment length.",
-        ))
+    def test_create_review_missing_category_ids_returns_422(self):
+        """FIXED: field is category_ids (plural list), not category_id."""
+        body = self._valid_body()
+        del body["category_ids"]
+        resp = client.post("/v1/reviews", json=body)
+        assert resp.status_code == 422
+
+    def test_create_review_empty_category_ids_returns_422(self):
+        """An empty list violates min_length=1 on category_ids."""
+        resp = client.post("/v1/reviews", json=self._valid_body(category_ids=[]))
         assert resp.status_code == 422
 
     def test_create_review_rating_out_of_range_returns_422(self):
@@ -377,9 +399,18 @@ class TestCreateReviewRoute:
         client.post("/v1/reviews", json=self._valid_body())
         assert _service.create_review.called
 
-    def test_create_review_invalid_category_id_uuid_returns_422(self):
-        # FIX: new test — category_id must be a valid UUID
-        resp = client.post("/v1/reviews", json=self._valid_body(category_id="not-a-uuid"))
+    def test_create_review_invalid_category_id_in_list_returns_422(self):
+        """FIXED: category_ids must be a list of valid UUIDs."""
+        resp = client.post("/v1/reviews", json=self._valid_body(
+            category_ids=["not-a-uuid"]
+        ))
+        assert resp.status_code == 422
+
+    def test_create_review_too_many_category_ids_returns_422(self):
+        """More than 5 category IDs should fail max_length validation."""
+        resp = client.post("/v1/reviews", json=self._valid_body(
+            category_ids=[str(uuid4()) for _ in range(6)]
+        ))
         assert resp.status_code == 422
 
 
@@ -446,17 +477,19 @@ class TestUpdateReviewRoute:
         resp = client.put(f"/v1/reviews/{uid}", json={"rating": 3, "hack": "x"})
         assert resp.status_code == 422
 
-    def test_update_review_category_id_only_accepted(self):
-        # FIX: new test — category_id alone is a valid update payload
+    def test_update_review_category_ids_only_accepted(self):
+        """FIXED: field is category_ids (plural list), not category_id."""
         uid = str(uuid4())
         _service.update_review = AsyncMock(return_value=_review_json())
-        resp = client.put(f"/v1/reviews/{uid}", json={"category_id": str(uuid4())})
+        resp = client.put(f"/v1/reviews/{uid}",
+                          json={"category_ids": [str(uuid4())]})
         assert resp.status_code == 200
 
-    def test_update_review_invalid_category_id_returns_422(self):
-        # FIX: new test — category_id must be a valid UUID format
+    def test_update_review_invalid_category_ids_returns_422(self):
+        """FIXED: category_ids list element must be a valid UUID."""
         uid = str(uuid4())
-        resp = client.put(f"/v1/reviews/{uid}", json={"category_id": "bad-uuid"})
+        resp = client.put(f"/v1/reviews/{uid}",
+                          json={"category_ids": ["bad-uuid"]})
         assert resp.status_code == 422
 
 
@@ -467,7 +500,6 @@ class TestUpdateReviewRoute:
 class TestRouterConfig:
 
     def _routes_map(self):
-        """Build {path: set(methods)} — merges multiple routes on same path."""
         result = {}
         for r in app.routes:
             path    = getattr(r, "path",    None)
