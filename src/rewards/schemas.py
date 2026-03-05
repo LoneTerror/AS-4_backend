@@ -124,15 +124,54 @@ class MinimalCategoryInfo(BaseModel):
 #CATALOG SCHEMAS (reward_catalog)
 
 class CreateRewardRequest(BaseModel):
-    reward_name: str = Field(..., min_length=1, max_length=200)
-    reward_code: str = Field(..., min_length=1, max_length=50, description="Unique SKU e.g. 'REW-AMZ-50'")
-    description: Optional[str] = None
+    # Prevent empty strings, restrict to safe characters
+    reward_name: str = Field(
+        ..., 
+        min_length=1, 
+        max_length=200,
+        pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
+        description="Name of the reward. Alphanumeric and basic punctuation only."
+    )
+    
+    # Strict uppercase alphanumeric and dashes/underscores
+    reward_code: str = Field(
+        ..., 
+        min_length=1, 
+        max_length=50, 
+        pattern=r'^[A-Z0-9_-]+$',
+        description="Unique SKU e.g. 'REW-AMZ-50'"
+    )
+    
+    # Optional, but blocks basic HTML/XSS injection
+    description: Optional[str] = Field(
+        None,
+        pattern=r'^[^<>]*$',
+        description="Optional description. HTML tags are not allowed."
+    )
+    
     category_id: UUID4
     
     default_points: int = Field(..., gt=0)
     min_points: int = Field(..., gt=0)
     max_points: int = Field(..., gt=0)
     available_stock: Optional[int] = Field(0, ge=0, description="Initial stock count")
+
+    @field_validator('reward_name', 'reward_code')
+    @classmethod
+    def check_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError('Field cannot be empty or just whitespace')
+        
+        return v.strip().upper() if v == 'reward_code' else v.strip()
+
+    @field_validator('description')
+    @classmethod
+    def check_desc_not_empty(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            if not v.strip():
+                raise ValueError('Description cannot be just whitespace')
+            return v.strip()
+        return v
 
     @model_validator(mode='after')
     def check_max_points(self) -> 'CreateRewardRequest':
@@ -145,9 +184,9 @@ class CreateRewardRequest(BaseModel):
             "examples": [
                 {
                     "reward_name": "Amazon $50 Gift Card",
-                    "reward_code": "AMZ-50-GC",
+                    "reward_code": "AMZ_50_GC",
                     "description": "A $50 digital gift card for Amazon.com purchases.",
-                    "category_id": "123e4567-e89b-12d3-a456-426614174000",
+                    "category_id": "cc0e8400-e29b-41d4-a716-446655440003",
                     "default_points": 500,
                     "min_points": 500,
                     "max_points": 500,
