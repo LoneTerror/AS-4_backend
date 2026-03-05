@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, UUID4, field_validator,model_validator, StrictBool
+from pydantic import BaseModel, Field, UUID4, field_validator,model_validator, StrictBool, StrictInt
 from typing import Optional, List, Any
 from datetime import datetime
 
@@ -129,8 +129,9 @@ class CreateRewardRequest(BaseModel):
         ..., 
         min_length=1, 
         max_length=200,
-        pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
-        description="Name of the reward. Alphanumeric and basic punctuation only."
+        # Added $, ₹, €, and £ to the allowed character class
+        pattern=r'^[a-zA-Z0-9\s\-_&.,()$₹€£]+$',
+        description="Name of the reward. Alphanumeric, basic punctuation, and currency symbols only."
     )
     
     # Strict uppercase alphanumeric and dashes/underscores
@@ -151,10 +152,10 @@ class CreateRewardRequest(BaseModel):
     
     category_id: UUID4
     
-    default_points: int = Field(..., gt=0)
-    min_points: int = Field(..., gt=0)
-    max_points: int = Field(..., gt=0)
-    available_stock: Optional[int] = Field(0, ge=0, description="Initial stock count")
+    default_points: StrictInt = Field(..., gt=0)
+    min_points: StrictInt = Field(..., gt=0)
+    max_points: StrictInt = Field(..., gt=0)
+    available_stock: Optional[StrictInt] = Field(0, ge=0, description="Initial stock count")
 
     @field_validator('reward_name', 'reward_code')
     @classmethod
@@ -197,13 +198,77 @@ class CreateRewardRequest(BaseModel):
     }
 
 class UpdateRewardRequest(BaseModel):
-    reward_name: Optional[str] = None
-    description: Optional[str] = None
-    default_points: Optional[int] = None
-    min_points: Optional[int] = None 
-    max_points: Optional[int] = None  
-    is_active: Optional[bool] = None
+    reward_name: Optional[str] = Field(
+        None, 
+        min_length=1, 
+        max_length=200,
+        pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
+        description="Name of the reward. Alphanumeric and basic punctuation only."
+    )
+    
+    description: Optional[str] = Field(
+        None,
+        pattern=r'^[^<>]*$',
+        description="Optional description. HTML tags are not allowed."
+    )
+    
+    default_points: StrictInt = Field(..., gt=0)
+    min_points: StrictInt = Field(..., gt=0)
+    max_points: StrictInt = Field(..., gt=0) 
+    
+    is_active: Optional[StrictBool] = Field(
+        None, 
+        description="Must be a pure boolean (true/false). Strings like 'true' are rejected."
+    )
+    
     category_id: Optional[UUID4] = None
+
+    @field_validator('reward_name')
+    @classmethod
+    def check_not_empty(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            if not v or not v.strip():
+                raise ValueError('Reward name cannot be empty or just whitespace')
+            return v.strip()
+        return v
+
+    @field_validator('description')
+    @classmethod
+    def check_desc_not_empty(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            if not v.strip():
+                raise ValueError('Description cannot be just whitespace')
+            return v.strip()
+        return v
+
+    @model_validator(mode='before')
+    @classmethod
+    def prevent_system_field_updates(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Explicitly missing 'reward_code' because SKUs should be immutable after creation
+            allowed_fields = {
+                'reward_name', 'description', 'default_points', 
+                'min_points', 'max_points', 'is_active', 'category_id'
+            }
+            extra_fields = [key for key in data.keys() if key not in allowed_fields]
+            
+            if extra_fields:
+                raise ValueError(f"Internal system fields or immutable fields (like reward_code) cannot be modified. Invalid fields detected: {', '.join(extra_fields)}")
+        return data
+
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "reward_name": "Updated Amazon $50 Gift Card",
+                    "description": "Updated description without HTML tags.",
+                    "default_points": 550,
+                    "is_active": False
+                }
+            ]
+        }
+    }
 
 class RewardItemResponse(BaseModel):
     catalog_id: UUID4
