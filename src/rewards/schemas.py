@@ -164,6 +164,7 @@ class UpdateRewardRequest(BaseModel):
     min_points: Optional[int] = None 
     max_points: Optional[int] = None  
     is_active: Optional[bool] = None
+    category_id: Optional[UUID4] = None
 
 class RewardItemResponse(BaseModel):
     catalog_id: UUID4

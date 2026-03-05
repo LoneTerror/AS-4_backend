@@ -168,6 +168,13 @@ class RewardService:
         )
         if not category:
             raise HTTPException(status_code=404, detail="Category not found")
+        
+        if not category.is_active:
+            logger.warning(f"Failed to create reward: Category {item.category_id} is inactive.")
+            raise HTTPException(
+                status_code=400, 
+                detail="Cannot create a reward item under an inactive category. Please activate the category first."
+            )
 
         existing = await self.db.reward_catalog.find_unique(
             where={"reward_code": item.reward_code}
@@ -357,6 +364,40 @@ class RewardService:
         update_data = request.model_dump(exclude_unset=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
+        
+        # --- NEW LOGIC: Validate new category if it's being updated ---
+        if "category_id" in update_data:
+            new_cat_id = str(update_data["category_id"])
+            new_category = await self.db.reward_categories.find_unique(
+                where={"category_id": new_cat_id}
+            )
+            
+            if not new_category:
+                raise HTTPException(status_code=404, detail="The specified target category was not found.")
+                
+            if not new_category.is_active:
+                logger.warning(f"Failed to move reward: Target category {new_cat_id} is inactive.")
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Cannot move a reward item to an inactive category. Please activate the target category first."
+                )
+            
+            # Ensure the UUID is safely cast to a string for Prisma
+            update_data["category_id"] = new_cat_id
+        # --------------------------------------------------------------
+
+        if update_data.get("is_active") is True:
+            # Get the category ID (either the newly provided one, or the existing one)
+            check_cat_id = update_data.get("category_id", existing_item.category_id)
+            
+            # If we didn't already fetch the new_category above, fetch the existing one
+            cat_to_check = new_category if "category_id" in update_data else await self.db.reward_categories.find_unique(where={"category_id": check_cat_id})
+            
+            if cat_to_check and not cat_to_check.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot reactivate this reward because its parent category is currently inactive."
+                )
 
         # --- NEW LOGIC: Check for actual changes ---
         has_changes = False
