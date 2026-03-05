@@ -124,6 +124,21 @@ class RewardService:
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
 
+        has_changes = False
+        for key, new_value in update_data.items():
+            existing_value = getattr(existing, key, None)
+
+            if existing_value != new_value:
+                has_changes = True
+                break
+                
+        if not has_changes:
+            raise HTTPException(
+                status_code=400, 
+                detail="The provided values are identical to the current data. No update required."
+            )
+        # -------------------------------------------
+
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
 
@@ -328,6 +343,7 @@ class RewardService:
         if not existing_item:
             raise HTTPException(status_code=404, detail="Reward item not found")
 
+        # 1. Evaluate min/max points logic first
         new_min = request.min_points if request.min_points is not None else existing_item.min_points
         new_max = request.max_points if request.max_points is not None else existing_item.max_points
 
@@ -337,10 +353,28 @@ class RewardService:
                 detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})"
             )
 
+        # 2. Extract provided fields
         update_data = request.model_dump(exclude_unset=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
 
+        # --- NEW LOGIC: Check for actual changes ---
+        has_changes = False
+        for key, new_value in update_data.items():
+            existing_value = getattr(existing_item, key, None)
+            
+            if existing_value != new_value:
+                has_changes = True
+                break
+                
+        if not has_changes:
+            raise HTTPException(
+                status_code=400, 
+                detail="The provided values are identical to the current data. No update required."
+            )
+        # -------------------------------------------
+
+        # 3. Apply audit fields and execute update
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
 
@@ -360,7 +394,6 @@ class RewardService:
             old_values=existing_item.model_dump(),
             new_values=updated_item.model_dump()
         )
-
         cat_data = None
         if updated_item.reward_categories:
             cat_data = schemas.MinimalCategoryInfo(

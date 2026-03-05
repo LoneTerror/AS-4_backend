@@ -49,18 +49,42 @@ class CreateCategoryRequest(BaseModel):
     }
 
 class UpdateCategoryRequest(BaseModel):
-    category_name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = None
+    category_name: Optional[str] = Field(
+        None, 
+        min_length=1, 
+        max_length=100,
+        pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
+        description="Name of the category. Alphanumeric and basic punctuation only."
+    )
+    
+    description: Optional[str] = Field(
+        None,
+        pattern=r'^[^<>]*$',
+        description="Optional description. HTML tags are not allowed."
+    )
+    
     is_active: Optional[bool] = None
 
     @field_validator('category_name')
     @classmethod
     def check_not_empty(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
-            if not v.strip():
+            if not v or not v.strip():
                 raise ValueError('Category name cannot be empty or just whitespace')
             return v.strip()
         return v
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "category_name": "Updated Category Name",
+                    "description": "Updated description without HTML tags.",
+                    "is_active": False
+                }
+            ]
+        }
+    }
 
 class CategoryResponse(BaseModel):
     category_id: UUID4
