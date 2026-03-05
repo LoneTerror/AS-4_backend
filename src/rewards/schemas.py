@@ -74,7 +74,19 @@ class UpdateCategoryRequest(BaseModel):
             return v.strip()
         return v
 
+    @model_validator(mode='before')
+    @classmethod
+    def prevent_system_field_updates(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            allowed_fields = {'category_name', 'description', 'is_active'}
+            extra_fields = [key for key in data.keys() if key not in allowed_fields]
+            
+            if extra_fields:
+                raise ValueError(f"Internal system fields cannot be modified. Invalid fields detected: {', '.join(extra_fields)}")
+        return data
+
     model_config = {
+        "extra": "forbid", 
         "json_schema_extra": {
             "examples": [
                 {
