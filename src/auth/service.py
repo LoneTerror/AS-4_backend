@@ -440,4 +440,4 @@ async def reset_password(token: str, new_password: str):
 
     return {
         "message": "Password reset successful. Please login with your new password."
-    }
+    }                                                                                                                           
