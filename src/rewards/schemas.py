@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, UUID4, field_validator,model_validator
+from pydantic import BaseModel, Field, UUID4, field_validator,model_validator, StrictBool
 from typing import Optional, List, Any
 from datetime import datetime
 
@@ -63,7 +63,11 @@ class UpdateCategoryRequest(BaseModel):
         description="Optional description. HTML tags are not allowed."
     )
     
-    is_active: Optional[bool] = None
+    # --- FIXED: Enforcing strict JSON boolean ---
+    is_active: Optional[StrictBool] = Field(
+        None, 
+        description="Must be a pure boolean (true/false). Strings like 'true' are rejected."
+    )
 
     @field_validator('category_name')
     @classmethod
@@ -86,7 +90,7 @@ class UpdateCategoryRequest(BaseModel):
         return data
 
     model_config = {
-        "extra": "forbid", 
+        "extra": "forbid",
         "json_schema_extra": {
             "examples": [
                 {
