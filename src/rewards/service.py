@@ -353,11 +353,18 @@ class RewardService:
         # 1. Evaluate min/max points logic first
         new_min = request.min_points if request.min_points is not None else existing_item.min_points
         new_max = request.max_points if request.max_points is not None else existing_item.max_points
+        new_default = request.default_points if request.default_points is not None else existing_item.default_points
 
         if new_min > new_max:
             raise HTTPException(
                 status_code=400,
                 detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})"
+            )
+            
+        if not (new_min <= new_default <= new_max):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Default points ({new_default}) must be between Min points ({new_min}) and Max points ({new_max})"
             )
 
         # 2. Extract provided fields
@@ -365,7 +372,6 @@ class RewardService:
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
         
-        # --- NEW LOGIC: Validate new category if it's being updated ---
         if "category_id" in update_data:
             new_cat_id = str(update_data["category_id"])
             new_category = await self.db.reward_categories.find_unique(

@@ -175,9 +175,18 @@ class CreateRewardRequest(BaseModel):
         return v
 
     @model_validator(mode='after')
-    def check_max_points(self) -> 'CreateRewardRequest':
+    def check_points_logic(self) -> 'CreateRewardRequest':
+        # 1. Check if Max is greater than Min
         if self.max_points < self.min_points:
             raise ValueError('max_points must be greater than or equal to min_points')
+        
+        # 2. Check if Default is within the Min/Max range
+        if not (self.min_points <= self.default_points <= self.max_points):
+            raise ValueError(
+                f'default_points ({self.default_points}) must be between '
+                f'min_points ({self.min_points}) and max_points ({self.max_points})'
+            )
+            
         return self
 
     model_config = {
