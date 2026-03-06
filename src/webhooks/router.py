@@ -20,7 +20,7 @@ def get_db():
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/webhooks", tags=["Webhooks"])
 
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+WEBHOOK_SECRET = os.environ.get("AGLORITHM", "")
 
 
 # ── Signature verification ─────────────────────────────────────────────────────
@@ -64,13 +64,13 @@ class HrisEmployeeCreatedPayload(BaseModel):
     Fired when a new employee is onboarded in the external HRIS.
     department_code and designation_code must already exist in your DB.
     """
-    external_id: str                        # sender's own ID — stored in logs only
+    external_id: str                     
     username: str
     email: EmailStr
-    department_code: str                    # must match departments.department_code
-    designation_code: str                   # must match designations.designation_code
-    date_of_joining: str                    # ISO date string e.g. "2024-03-01"
-    date_of_birth: Optional[str] = None     # ISO date string e.g. "1995-06-15"
+    department_code: str                   
+    designation_code: str                 
+    date_of_joining: str                   
+    date_of_birth: Optional[str] = None     
     manager_email: Optional[EmailStr] = None
 
 

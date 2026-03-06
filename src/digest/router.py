@@ -4,9 +4,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, status
 from prisma import Prisma
 
-from src.employees.dependencies import get_db
+from src.common.dependencies import check_route_permission, CurrentUser
+from src.prisma.client import db
 from src.notifications.email_sender import EmailSender, SMTPConfig
-from src.recognition.dependencies import require_roles   # MANAGER / ADMIN guard
 
 from .schemas import DigestEmailRequest, DigestResponse, WeeklyDigestData
 from .service import DigestService
@@ -15,6 +15,10 @@ router = APIRouter(prefix="/v1/digest", tags=["Weekly Digest"])
 
 
 # ── Dependency factories ───────────────────────────────────────────────────────
+
+def get_db() -> Prisma:
+    return db
+
 
 def get_email_sender() -> EmailSender:
     return EmailSender(SMTPConfig.from_env())
@@ -36,14 +40,12 @@ async def get_weekly_digest(
         description="Monday of the desired week in ISO 8601 e.g. 2026-02-23T00:00:00Z. Defaults to last completed week.",
         example="2026-02-23T00:00:00Z",
     ),
-    current_user=Depends(require_roles("MANAGER", "ADMIN", "SUPER_ADMIN")),
+    current_user: CurrentUser = Depends(check_route_permission),
     svc: DigestService = Depends(get_digest_service),
 ):
     """
     Return a week's recognition summary as JSON (for the dashboard).
     Pass `week_start` to select a specific week, or omit to get last completed week.
-
-    Roles: MANAGER, ADMIN, SUPER_ADMIN
     """
     return await svc.get_digest_data(week_start=week_start)
 
@@ -53,7 +55,7 @@ async def get_weekly_digest(
 @router.post("/send", status_code=status.HTTP_200_OK, response_model=DigestResponse)
 async def send_weekly_digest(
     payload: DigestEmailRequest,
-    current_user=Depends(require_roles("MANAGER", "ADMIN", "SUPER_ADMIN")),
+    current_user: CurrentUser = Depends(check_route_permission),
     svc: DigestService = Depends(get_digest_service),
 ):
     """
@@ -61,8 +63,6 @@ async def send_weekly_digest(
 
     - `manager_email` — recipient address
     - `week_start`    — optional Monday date (UTC); defaults to last completed week
-
-    Roles: MANAGER, ADMIN, SUPER_ADMIN
 
     Body example:
     {

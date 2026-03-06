@@ -10,7 +10,14 @@ from src.core.security import (
     decode_reset_token,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
-from src.core.email_utils import send_password_reset_email, send_password_reset_confirmation
+try:
+    from src.core.email_utils import send_password_reset_email, send_password_reset_confirmation
+    _email_utils_available = True
+except Exception as _email_import_err:
+    print(f"⚠️  email_utils import failed — password reset emails disabled: {_email_import_err}")
+    _email_utils_available = False
+    def send_password_reset_email(*a, **kw): pass
+    def send_password_reset_confirmation(*a, **kw): pass
 
 from fastapi import HTTPException, status
 from datetime import datetime, timedelta, timezone

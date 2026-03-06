@@ -4,13 +4,12 @@ Handles sending password reset emails via Gmail SMTP
 """
 
 import os
-import asyncio
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
-async def reset_token_reminder():
+def reset_token_reminder():
     print("🔑 Reset Token (for testing - copy this):")
 
 def send_password_reset_email(email: str, reset_token: str, username: str) -> bool:
@@ -169,7 +168,7 @@ def send_password_reset_email(email: str, reset_token: str, username: str) -> bo
             print("❌ ERROR: SMTP credentials not configured!")
             print("   Please set SMTP_USERNAME and SMTP_PASSWORD in your .env file")
             print("\n" + "=" * 80)
-            asyncio.run(reset_token_reminder())
+            reset_token_reminder()
             print("=" * 80)
             print(reset_token)
             print("=" * 80)
@@ -211,7 +210,7 @@ def send_password_reset_email(email: str, reset_token: str, username: str) -> bo
         print("   Check your Gmail App Password")
         print("   Make sure 2-Step Verification is enabled")
         print("\n" + "=" * 80)
-        asyncio.run(reset_token_reminder())
+        reset_token_reminder()
         print("=" * 80)
         print(reset_token)
         print("=" * 80)
@@ -220,7 +219,7 @@ def send_password_reset_email(email: str, reset_token: str, username: str) -> bo
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
         print("\n" + "=" * 80)
-        asyncio.run(reset_token_reminder())
+        reset_token_reminder()
         print("=" * 80)
         print(reset_token)
         print("=" * 80)
