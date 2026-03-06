@@ -1,3 +1,5 @@
+# src/auth/router.py
+
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer
 from typing import Optional
@@ -17,7 +19,7 @@ from src.auth.schemas import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     ResetPasswordRequest,
-    ResetPasswordResponse
+    ResetPasswordResponse,
 )
 from src.auth.service import (
     authenticate_user,
@@ -26,12 +28,11 @@ from src.auth.service import (
     refresh_access_token,
     validate_token,
     request_password_reset,
-    reset_password
+    reset_password,
 )
-from src.auth.dependencies import require_roles
+from src.common.dependencies import check_route_permission, CurrentUser
 from src.core.security import decode_token
 
-# Used to extract the current user's identity during logout
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
 
 router = APIRouter()
@@ -45,7 +46,7 @@ REQUIRED_COLUMNS = {"username", "email", "password", "designation_id", "departme
 
 
 def _parse_csv(content: bytes) -> list[dict]:
-    text = content.decode("utf-8-sig")  # strip BOM if present
+    text = content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
     return [row for row in reader]
 
@@ -56,7 +57,7 @@ def _parse_xlsx(content: bytes) -> list[dict]:
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="openpyxl is not installed. Add it to requirements.txt."
+            detail="openpyxl is not installed. Add it to requirements.txt.",
         )
     wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     ws = wb.active
@@ -72,7 +73,6 @@ def _parse_xlsx(content: bytes) -> list[dict]:
 
 
 def _row_to_signup(row: dict) -> tuple[Optional[SignUpRequest], Optional[str]]:
-    """Convert a raw dict row to SignUpRequest. Returns (request, None) or (None, error)."""
     row = {k.strip().lower(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
 
     missing = REQUIRED_COLUMNS - set(row.keys())
@@ -115,7 +115,7 @@ async def refresh(payload: RefreshRequest):
 @router.post("/logout")
 async def logout(
     payload: LogoutRequest,
-    token: str = Depends(oauth2_scheme)
+    token: str = Depends(oauth2_scheme),
 ):
     """Logout - revokes the refresh token"""
     user_data = decode_token(token)
@@ -127,11 +127,10 @@ async def logout(
 @router.post("/signup", response_model=EmployeeResponse)
 async def signup(
     payload: SignUpRequest,
-    # FIX: require_roles now returns a CurrentUser object — use user.id (not user["sub"])
-    user=Depends(require_roles("SUPER_ADMIN", "HR_ADMIN"))
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
-    """Create a new employee - requires SUPER_ADMIN or HR_ADMIN role"""
-    return await create_employee(payload, user.id)
+    """Create a new employee."""
+    return await create_employee(payload, current_user.id)
 
 
 @router.post("/validate", response_model=TokenValidationResponse)
@@ -173,92 +172,86 @@ Rows that fail are recorded in the response — the rest are still created (part
 )
 async def bulk_import_employees(
     file: UploadFile = File(..., description="CSV or XLSX file with employee data"),
-    # FIX: require_roles now returns a CurrentUser object — use user.id (not user["sub"])
-    user=Depends(require_roles("SUPER_ADMIN", "HR_ADMIN")),
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
-    # 1. Validate file type
     filename = (file.filename or "").lower()
     if not (filename.endswith(".csv") or filename.endswith(".xlsx")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only .csv and .xlsx files are supported."
+            detail="Only .csv and .xlsx files are supported.",
         )
 
     content = await file.read()
     if not content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty."
+            detail="Uploaded file is empty.",
         )
 
-    # 2. Parse rows
     try:
         rows = _parse_csv(content) if filename.endswith(".csv") else _parse_xlsx(content)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to parse file: {e}"
+            detail=f"Failed to parse file: {e}",
         )
 
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File contains no data rows."
+            detail="File contains no data rows.",
         )
 
-    # 3. Process each row via create_employee (same as /signup)
     results = []
     succeeded = 0
     failed = 0
 
-    for idx, row in enumerate(rows, start=2):  # start=2 because row 1 is the header
+    for idx, row in enumerate(rows, start=2):
         signup_payload, parse_error = _row_to_signup(row)
 
         if parse_error:
             failed += 1
             results.append({
-                "row": idx,
+                "row":      idx,
                 "username": row.get("username") or row.get("Username"),
-                "email": row.get("email") or row.get("Email"),
-                "status": "error",
-                "error": parse_error,
+                "email":    row.get("email") or row.get("Email"),
+                "status":   "error",
+                "error":    parse_error,
             })
             continue
 
         try:
-            # FIX: was user["sub"] — now user.id to match CurrentUser object
-            emp = await create_employee(signup_payload, user.id)
+            emp = await create_employee(signup_payload, current_user.id)
             succeeded += 1
             results.append({
-                "row": idx,
-                "username": emp.username,
-                "email": emp.email,
-                "status": "success",
+                "row":         idx,
+                "username":    emp.username,
+                "email":       emp.email,
+                "status":      "success",
                 "employee_id": str(emp.employee_id),
             })
         except HTTPException as e:
             failed += 1
             results.append({
-                "row": idx,
+                "row":      idx,
                 "username": signup_payload.username,
-                "email": signup_payload.email,
-                "status": "error",
-                "error": e.detail,
+                "email":    signup_payload.email,
+                "status":   "error",
+                "error":    e.detail,
             })
         except Exception as e:
             failed += 1
             results.append({
-                "row": idx,
+                "row":      idx,
                 "username": signup_payload.username,
-                "email": signup_payload.email,
-                "status": "error",
-                "error": str(e),
+                "email":    signup_payload.email,
+                "status":   "error",
+                "error":    str(e),
             })
 
-    # 4. Return summary
     return {
-        "total": len(rows),
+        "total":     len(rows),
         "succeeded": succeeded,
-        "failed": failed,
-        "results": results,
+        "failed":    failed,
+        "results":   results,
     }

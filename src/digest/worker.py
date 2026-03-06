@@ -86,9 +86,6 @@ async def _write_sentinel(db) -> None:
 
     await db.notifications.create(
         data={
-            # Use a placeholder employee_id — the first active employee's id
-            # is fetched inline; we just need any valid UUID.
-            # In practice this row is never surfaced to any user.
             "employee_id": await _any_employee_id(db),
             "title": f"[DIGEST] Weekly digest sentinel {date.today().isoformat()}",
             "message": "Automated digest worker sentinel — do not display.",
