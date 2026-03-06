@@ -1,11 +1,12 @@
-
-
 from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
 
 
+# ══════════════════════════════════════════════════════════════
+#  Existing schemas
+# ══════════════════════════════════════════════════════════════
 
 class RecentReview(BaseModel):
     """A single review received by the employee.
@@ -91,4 +92,85 @@ class PlatformStats(BaseModel):
     active_users: MetricWithGrowth
 
 
+# ══════════════════════════════════════════════════════════════
+#  Admin — Team Report schemas
+# ══════════════════════════════════════════════════════════════
 
+class TeamMemberReport(BaseModel):
+    """A single employee's stats within a team report.
+
+    Attributes:
+        employee_id: UUID of the employee.
+        username: Display name.
+        designation: Job title / designation.
+        total_earned_points: Lifetime points earned.
+        available_points: Current spendable balance.
+        reviews_received: Total reviews received (lifetime).
+        rewards_redeemed: Total rewards redeemed (lifetime).
+        reviews_this_month: Reviews received in the current calendar month.
+        points_this_month: Credit points earned in the current calendar month.
+        performance_score: Composite 0–100 score:
+            70 % normalised total_earned_points + 30 % normalised
+            reviews_received, both min-max scaled within the team.
+    """
+
+    employee_id: UUID
+    username: str
+    designation: str
+    total_earned_points: int
+    available_points: int
+    reviews_received: int
+    rewards_redeemed: int
+    reviews_this_month: int
+    points_this_month: int
+    performance_score: float = Field(
+        description="0–100 composite score normalised within the team"
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TeamReport(BaseModel):
+    """Full report for a single department, including member breakdown.
+
+    Attributes:
+        department_id: UUID of the department.
+        department_name: Human-readable name.
+        total_members: Head-count in the team.
+        total_points: Sum of all members' total_earned_points.
+        total_reviews: Sum of all reviews received by the team.
+        total_rewards: Sum of all rewards redeemed by the team.
+        avg_performance_score: Mean performance_score across members.
+        members: List ordered descending by performance_score.
+    """
+
+    department_id: UUID
+    department_name: str
+    total_members: int
+    total_points: int
+    total_reviews: int
+    total_rewards: int
+    avg_performance_score: float
+    members: List[TeamMemberReport]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TeamSummary(BaseModel):
+    """Lightweight card data for the admin teams overview grid.
+
+    Attributes:
+        department_id: UUID of the department.
+        department_name: Human-readable name.
+        total_members: Head-count.
+        total_points: Sum of lifetime earned points across the team.
+        avg_performance_score: Mean performance score across members.
+    """
+
+    department_id: UUID
+    department_name: str
+    total_members: int
+    total_points: int
+    avg_performance_score: float
+
+    model_config = ConfigDict(from_attributes=True)
