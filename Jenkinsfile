@@ -75,6 +75,9 @@ pipeline {
         //                         string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
         //                         string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME'),
         //                         string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
+        //                         string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
+        //                         string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_BOT_TOKEN'),
+        //                         string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_DEFAULT_CHANNEL_ID'),
         //                         ]) {
         //                             try {
         //                                 sh """
@@ -82,8 +85,21 @@ pipeline {
         //                                 --name target-app \
         //                                 --network zap-net \
         //                                 -e DATABASE_URL="${DATABASE_URL}" \
+        //                                 -e REDIS_URL="${REDIS_URL}" \
         //                                 -e SECRET_KEY="${SECRET_KEY}" \
         //                                 -e ALGORITHM="${ALGORITHM}" \
+        //                                 -e AUTH_SERVICE_URL="${AUTH_SERVICE_URL}" \
+        //                                 -e SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN}" \
+        //                                 -e SLACK_DEFAULT_CHANNEL_ID="${SLACK_DEFAULT_CHANNEL_ID}" \
+        //                                 -e SMTP_PASSWORD="${SMTP_PASSWORD}" \
+        //                                 -e SMTP_USERNAME="${SMTP_USERNAME}" \
+        //                                 -e SMTP_HOST="smtp.gmail.com" \
+        //                                 -e SMTP_PORT="587" \
+        //                                 -e SMTP_FROM_EMAIL="${SMTP_FROM_EMAIL}"\
+        //                                 -e SMTP_USE_TLS="true" \
+        //                                 -e SMTP_USE_SSL="false" \
+        //                                 -e FRONTEND_URL="https://localhost:3000" \
+        //                                 -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
         //                                 ${IMAGE}:${TAG}
         //                                 """
         //                                 sh 'sleep 10'
@@ -133,7 +149,10 @@ pipeline {
                         string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
                         string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
                         string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
-                        string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME')
+                        string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME'),
+                        string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
+                        string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_BOT_TOKEN'),
+                        string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_DEFAULT_CHANNEL_ID'),
                     ]) {
                         sh """
                         docker run -d \
@@ -143,6 +162,9 @@ pipeline {
                         -e DATABASE_URL="${DATABASE_URL}" \
                         -e REDIS_URL="${REDIS_URL}" \
                         -e SECRET_KEY="${SECRET_KEY}" \
+                        -e AUTH_SERVICE_URL="${AUTH_SERVICE_URL}" \
+                        -e SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN}" \
+                        -e SLACK_DEFAULT_CHANNEL_ID="${SLACK_DEFAULT_CHANNEL_ID}" \
                         -e SMTP_PASSWORD="${SMTP_PASSWORD}" \
                         -e SMTP_USERNAME="${SMTP_USERNAME}" \
                         -e SMTP_HOST="smtp.gmail.com" \

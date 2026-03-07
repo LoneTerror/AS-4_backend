@@ -9,11 +9,12 @@ const commonEnv = {
 // Define your microservices and their specific variables
 const pythonServices = [
   { name: "auth", port: 8001, delay: 10000 },
-  { name: "employees", port: 8003, delay: 15000 },
-  { name: "wallet", port: 8004, delay: 20000 },
-  { name: "recognition", port: 8005, delay: 25000 },
-  { name: "rewards", port: 8006, delay: 30000 },
-  { name: "organization", port: 8007, delay: 35000 },
+  { name: "roles", port: 8002, delay: 15000},
+  { name: "employees", port: 8003, delay: 20000 },
+  { name: "wallet", port: 8004, delay: 25000 },
+  { name: "recognition", port: 8005, delay: 30000 },
+  { name: "rewards", port: 8006, delay: 35000 },
+  { name: "organization", port: 8007, delay: 40000 },
 ];
 
 // Map over the array to generate the PM2 configuration objects
