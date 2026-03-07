@@ -4,6 +4,8 @@ from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
 from src.prisma.client import db, connect_with_retry
+from src.notifications.redis_client import connect_redis, disconnect_redis
+from src.common.dependencies import close_auth_client
 from src.analytics.router import router as analytics_router
 from src.common.middleware import (
     request_rate_limit_middleware,
@@ -17,7 +19,17 @@ from src.common.middleware import (
 async def lifespan(app: FastAPI):
     await connect_with_retry()
     print("Analytics Service: 🟢 Database Connected")
+
+    try:
+        await connect_redis()
+        print("Analytics Service: 🟢 Redis Connected")
+    except Exception as e:
+        print(f"Analytics Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+
     yield
+
+    await close_auth_client()
+    await disconnect_redis()
     await db.disconnect()
     print("Analytics Service: 🔴 Database Disconnected")
 

@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 
 from src.prisma.client import db
 from src.common.dependencies import CurrentUser
+from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
 from src.recognition.schemas import (
     ReviewCreateRequest,
     ReviewUpdateRequest,
@@ -16,31 +17,45 @@ from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
 
 logger = logging.getLogger(__name__)
-_notif = NotificationService(db)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Role priority used when resolving reviewer_weight from the roles table.
-# ─────────────────────────────────────────────────────────────────────────────
+def _get_notif() -> NotificationService:
+    try:
+        from src.notifications.redis_client import get_redis
+        r = get_redis()
+    except RuntimeError:
+        r = None
+    return NotificationService(db, redis=r)
+
 _ROLE_PRIORITY = ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]
 
+# ── Cache keys & TTLs ─────────────────────────────────────────────────────────
+TTL_CATEGORIES = 600  # 10 min
+TTL_REVIEWS    = 60   # 1 min — per user+page
+
+def _key_reviews(user_id: str, page: int, limit: int) -> str:
+    return f"recognition:reviews:{user_id}:{page}:{limit}"
+
+def _key_categories(page: int, limit: int, active_only: bool) -> str:
+    return f"recognition:categories:{page}:{limit}:{active_only}"
+
+async def invalidate_reviews(user_id: str):
+    await invalidate_pattern(f"recognition:reviews:{user_id}:*")
+
+async def invalidate_categories():
+    await invalidate_pattern("recognition:categories:*")
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERS
+# HELPERS  (unchanged from original)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_review_dict(review, tags: list) -> dict:
-    """
-    Merge a DB review object with its category tags into a plain dict
-    that matches ReviewResponse.
-
-    tags: list of review_category_tags rows (already fetched with the review).
-    """
     try:
         data = {k: v for k, v in vars(review).items() if not k.startswith("_")}
     except TypeError:
         data = {col: getattr(review, col) for col in review.__fields__}
 
-    # Build the authoritative tag list from the junction table rows
     tag_list = [
         {
             "category_id":         t.category_id,
@@ -52,12 +67,10 @@ def _build_review_dict(review, tags: list) -> dict:
     data["category_tags"]  = tag_list
     data["category_ids"]   = [t["category_id"]   for t in tag_list]
     data["category_codes"] = [t["category_code"] for t in tag_list]
-
     return data
 
 
 async def _fetch_review_with_tags(review_id: str):
-    """Fetch a review row together with its category tags in two parallel-ish queries."""
     review = await db.reviews.find_unique(where={"review_id": review_id})
     if not review:
         return None, []
@@ -73,24 +86,14 @@ async def _resolve_multipliers(
     reviewer_roles: list[str],
     review_dt: datetime,
 ) -> tuple[float, float, float, list[dict]]:
-    """
-    Validate each category and resolve all multipliers needed for points calc.
-
-    Returns
-    -------
-    (total_category_multiplier, reviewer_weight, seasonal_multiplier, tag_snapshots)
-
-    tag_snapshots is a list of dicts ready for bulk-insert into review_category_tags.
-    """
     if not category_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="At least one category must be provided",
         )
 
-    # ── 1. Fetch & validate each category ────────────────────────────────────
-    tag_snapshots  = []
-    multipliers    = []
+    tag_snapshots = []
+    multipliers   = []
 
     for cid in category_ids:
         row = await db.review_categories.find_unique(where={"category_id": cid})
@@ -107,14 +110,13 @@ async def _resolve_multipliers(
         m = float(row.multiplier)
         multipliers.append(m)
         tag_snapshots.append({
-            "category_id":           cid,
-            "multiplier_snapshot":   m,
+            "category_id":            cid,
+            "multiplier_snapshot":    m,
             "category_code_snapshot": row.category_code,
         })
 
     total_multiplier = sum(multipliers)
 
-    # ── 2. Reviewer weight ────────────────────────────────────────────────────
     reviewer_weight = 1.0
     for role_code in _ROLE_PRIORITY:
         if role_code in reviewer_roles:
@@ -123,9 +125,7 @@ async def _resolve_multipliers(
                 reviewer_weight = float(role_row.reviewer_weight)
             break
 
-    # ── 3. Seasonal multiplier ────────────────────────────────────────────────
     quarter = (review_dt.month - 1) // 3 + 1
-
     if review_dt.tzinfo is None:
         review_dt = review_dt.replace(tzinfo=timezone.utc)
 
@@ -161,13 +161,17 @@ async def _get_team_member_count(department_id: str | None) -> int:
 class RecognitionService:
 
     # =========================================================
-    # LIST REVIEWS
+    # LIST REVIEWS  — cached per user+page+limit
     # =========================================================
     @staticmethod
     async def list_reviews(page: int, limit: int, current_user: CurrentUser):
+        key    = _key_reviews(current_user.id, page, limit)
+        cached = await cache_get(key)
+        if cached is not None:
+            return cached
+
         skip  = (page - 1) * limit
         where = {}
-
         if not any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"]):
             where["OR"] = [
                 {"reviewer_id": current_user.id},
@@ -184,7 +188,7 @@ class RecognitionService:
         )
         total_pages = math.ceil(total / limit) if total > 0 else 0
 
-        return {
+        result = {
             "data": [
                 _build_review_dict(r, getattr(r, "review_category_tags", []))
                 for r in reviews
@@ -199,8 +203,11 @@ class RecognitionService:
             },
         }
 
+        await cache_set(key, result, ttl=TTL_REVIEWS)
+        return result
+
     # =========================================================
-    # GET REVIEW
+    # GET REVIEW  (unchanged — access-control sensitive, not cached)
     # =========================================================
     @staticmethod
     async def get_review(review_id: str, current_user: CurrentUser):
@@ -221,10 +228,15 @@ class RecognitionService:
         return _build_review_dict(review, getattr(review, "review_category_tags", []))
 
     # =========================================================
-    # LIST REVIEW CATEGORIES
+    # LIST REVIEW CATEGORIES  — cached
     # =========================================================
     @staticmethod
     async def list_review_categories(page: int, limit: int, active_only: bool = True):
+        key    = _key_categories(page, limit, active_only)
+        cached = await cache_get(key)
+        if cached is not None:
+            return cached
+
         skip  = (page - 1) * limit
         where = {"is_active": True} if active_only else {}
 
@@ -234,7 +246,7 @@ class RecognitionService:
         )
         total_pages = math.ceil(total / limit) if total > 0 else 0
 
-        return {
+        result = {
             "data": [
                 {k: v for k, v in vars(c).items() if not k.startswith("_")}
                 for c in categories
@@ -249,6 +261,9 @@ class RecognitionService:
             },
         }
 
+        await cache_set(key, result, ttl=TTL_CATEGORIES)
+        return result
+
     # =========================================================
     # CREATE REVIEW CATEGORY
     # =========================================================
@@ -257,7 +272,6 @@ class RecognitionService:
         payload: ReviewCategoryCreateRequest,
         current_user: CurrentUser,
     ):
-        # ── Uniqueness guards ──────────────────────────────────────────────
         existing_code = await db.review_categories.find_unique(
             where={"category_code": payload.category_code}
         )
@@ -292,6 +306,7 @@ class RecognitionService:
             }
         )
 
+        await invalidate_categories()
         logger.info(
             "Review category created | code=%s multiplier=%.4f by=%s",
             category.category_code, float(category.multiplier), current_user.id,
@@ -321,10 +336,7 @@ class RecognitionService:
 
         if payload.category_code is not None:
             conflict = await db.review_categories.find_first(
-                where={
-                    "category_code": payload.category_code,
-                    "NOT": {"category_id": category_id},
-                }
+                where={"category_code": payload.category_code, "NOT": {"category_id": category_id}}
             )
             if conflict:
                 raise HTTPException(
@@ -335,10 +347,7 @@ class RecognitionService:
 
         if payload.category_name is not None:
             conflict = await db.review_categories.find_first(
-                where={
-                    "category_name": payload.category_name,
-                    "NOT": {"category_id": category_id},
-                }
+                where={"category_name": payload.category_name, "NOT": {"category_id": category_id}}
             )
             if conflict:
                 raise HTTPException(
@@ -359,6 +368,7 @@ class RecognitionService:
             data=update_data,
         )
 
+        await invalidate_categories()
         logger.info(
             "Review category updated | id=%s fields=%s by=%s",
             category_id, list(update_data.keys()), current_user.id,
@@ -367,19 +377,17 @@ class RecognitionService:
         return {k: v for k, v in vars(updated).items() if not k.startswith("_")}
 
     # =========================================================
-    # CREATE REVIEW
+    # CREATE REVIEW  — invalidates both parties' caches
     # =========================================================
     @staticmethod
     async def create_review(payload: ReviewCreateRequest, current_user: CurrentUser):
 
-        # ── [1] Self-review guard ──────────────────────────────────────────
         if str(payload.receiver_id) == current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Self review not allowed",
             )
 
-        # ── [2] Reviewer must be active ────────────────────────────────────
         reviewer = await db.employees.find_unique(
             where={"employee_id": current_user.id},
             include={"status_master_employees_status_idTostatus_master": True},
@@ -393,7 +401,6 @@ class RecognitionService:
                 detail="Your account is not active and cannot submit reviews",
             )
 
-        # ── [3] Receiver must exist and be active ──────────────────────────
         receiver = await db.employees.find_unique(
             where={"employee_id": str(payload.receiver_id)},
             include={"status_master_employees_status_idTostatus_master": True},
@@ -412,7 +419,6 @@ class RecognitionService:
         now         = datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        # ── [4] Duplicate-pair guard (one review per receiver per month) ───
         already_reviewed = await db.reviews.find_first(
             where={
                 "reviewer_id": current_user.id,
@@ -426,7 +432,6 @@ class RecognitionService:
                 detail="You have already reviewed this person this month",
             )
 
-        # ── [5] Monthly quota ──────────────────────────────────────────────
         is_privileged = any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
         if not is_privileged:
             monthly_quota = await _get_team_member_count(current_user.department_id)
@@ -447,7 +452,6 @@ class RecognitionService:
                     ),
                 )
 
-        # ── [6] Resolve REVIEW_ACTIVE status ──────────────────────────────
         review_status = await db.status_master.find_first(
             where={"entity_type": "REVIEW", "status_code": "REVIEW_ACTIVE"}
         )
@@ -457,7 +461,6 @@ class RecognitionService:
                 detail="Review status configuration missing",
             )
 
-        # ── [7] Resolve multipliers + build tag snapshots ──────────────────
         category_ids_str = [str(cid) for cid in payload.category_ids]
 
         total_multiplier, reviewer_weight, seasonal_multiplier, tag_snapshots = (
@@ -468,8 +471,6 @@ class RecognitionService:
             )
         )
 
-        # ── [8] Calculate points ───────────────────────────────────────────
-        # formula: rating × sum(category_multipliers) × reviewer_weight × seasonal_multiplier
         joined_codes = ",".join(t["category_code_snapshot"] for t in tag_snapshots)
         pts = calculate_points(
             rating                    = payload.rating,
@@ -486,7 +487,6 @@ class RecognitionService:
             total_multiplier, pts.raw_points, current_user.roles,
         )
 
-        # ── [9] Write review row ───────────────────────────────────────────
         review = await db.reviews.create(
             data={
                 "reviewer_id": current_user.id,
@@ -505,7 +505,6 @@ class RecognitionService:
             }
         )
 
-        # ── [10] Write junction rows (one per tag) ─────────────────────────
         for snap in tag_snapshots:
             await db.review_category_tags.create(
                 data={
@@ -516,7 +515,10 @@ class RecognitionService:
                 }
             )
 
-        # ── [11] Auto-credit wallet ────────────────────────────────────────
+        # Invalidate review list caches for both parties
+        await invalidate_reviews(current_user.id)
+        await invalidate_reviews(str(payload.receiver_id))
+
         try:
             from src.wallet.service import credit_wallet_from_review
             wallet_result = await credit_wallet_from_review(
@@ -537,11 +539,10 @@ class RecognitionService:
         except Exception:
             logger.exception("Unexpected wallet credit failure for review %s", review.review_id)
 
-        # ── [12] Notify receiver ───────────────────────────────────────────
         try:
             stars   = "⭐" * payload.rating
             preview = payload.comment[:100] + ("..." if len(payload.comment) > 100 else "")
-            await _notif.create_notification(
+            await _get_notif().create_notification(
                 employee_id = str(payload.receiver_id),
                 title       = f"You received a {payload.rating}-star review {stars}",
                 message     = (
@@ -553,7 +554,6 @@ class RecognitionService:
         except Exception:
             logger.exception("Notification failed for review %s", review.review_id)
 
-        # Return the review enriched with tag data
         tags = await db.review_category_tags.find_many(
             where={"review_id": review.review_id},
             order={"created_at": "asc"},
@@ -561,7 +561,7 @@ class RecognitionService:
         return _build_review_dict(review, tags)
 
     # =========================================================
-    # UPDATE REVIEW
+    # UPDATE REVIEW  — invalidates both parties' caches
     # =========================================================
     @staticmethod
     async def update_review(
@@ -595,18 +595,15 @@ class RecognitionService:
                 detail="No fields provided for update",
             )
 
-        # ── Recalculate points if rating or categories changed ─────────────
         points_changed = payload.rating is not None or payload.category_ids is not None
         old_raw_points = float(getattr(review, "raw_points", 0) or 0)
 
         if points_changed:
             new_rating = payload.rating if payload.rating is not None else review.rating
 
-            # Resolve which category IDs to use
             if payload.category_ids is not None:
                 new_cat_ids = [str(cid) for cid in payload.category_ids]
             else:
-                # Keep existing tags — fetch from junction table
                 existing_tags = await db.review_category_tags.find_many(
                     where={"review_id": review_id}
                 )
@@ -640,11 +637,8 @@ class RecognitionService:
                 review_id, joined_codes, old_raw_points, new_raw_points,
             )
 
-            update_data.update({
-                "raw_points": new_raw_points,
-            })
+            update_data.update({"raw_points": new_raw_points})
 
-            # ── Replace junction rows if categories changed ────────────────
             if payload.category_ids is not None:
                 await db.review_category_tags.delete_many(where={"review_id": review_id})
                 for snap in tag_snapshots:
@@ -657,7 +651,6 @@ class RecognitionService:
                         }
                     )
 
-            # ── Adjust wallet for points delta ─────────────────────────────
             points_delta = new_raw_points - old_raw_points
             if abs(points_delta) > 0.0001:
                 try:
@@ -684,6 +677,10 @@ class RecognitionService:
             where={"review_id": review_id},
             data=update_data,
         )
+
+        # Invalidate both parties' caches
+        await invalidate_reviews(review.reviewer_id)
+        await invalidate_reviews(review.receiver_id)
 
         tags = await db.review_category_tags.find_many(
             where={"review_id": review_id},

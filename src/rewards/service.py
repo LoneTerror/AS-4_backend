@@ -1,21 +1,67 @@
-import json, uuid
+"""src/rewards/service.py — with Redis caching."""
+import json
+import uuid
 from fastapi import HTTPException, status, Request
 from prisma import Prisma, Json
-from uuid import UUID
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from . import schemas
 from src.core.logger import logger
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
+from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TTLs (seconds)
+# ─────────────────────────────────────────────────────────────────────────────
+TTL_CATALOG    = 600   # 10 min — almost never changes
+TTL_CATEGORIES = 600   # 10 min — rarely changes
+TTL_HISTORY    = 60    # 1 min  — per-wallet, invalidated on redeem
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cache-key helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _key_catalog(active_only: bool, page: int, size: int) -> str:
+    return f"rewards:catalog:{active_only}:{page}:{size}"
+
+def _key_categories(active_only: bool) -> str:
+    return f"rewards:categories:{active_only}"
+
+def _key_history(wallet_id: Optional[str], page: int, size: int) -> str:
+    wid = wallet_id or "all"
+    return f"rewards:history:{wid}:{page}:{size}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public invalidation helpers  (called after writes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def invalidate_catalog() -> None:
+    await invalidate_pattern("rewards:catalog:*")
+
+async def invalidate_categories() -> None:
+    await invalidate_pattern("rewards:categories:*")
+
+async def invalidate_history(wallet_id: Optional[str] = None) -> None:
+    """Bust a specific wallet's history pages, plus the global 'all' pages."""
+    await invalidate_pattern("rewards:history:all:*")
+    if wallet_id:
+        await invalidate_pattern(f"rewards:history:{wallet_id}:*")
+
 
 class RewardService:
     def __init__(self, db: Prisma):
         self.db = db
-        self._notif = NotificationService(db)
+        try:
+            from src.notifications.redis_client import get_redis
+            r = get_redis()
+        except RuntimeError:
+            r = None
+        self._notif = NotificationService(db, redis=r)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 🕵️ AUDIT LOG HELPER (Private Method)
+    # Audit log helper
     # ─────────────────────────────────────────────────────────────────────────
     async def _log_change(
         self,
@@ -28,10 +74,6 @@ class RewardService:
         old_values: Optional[Dict[str, Any]] = None,
         new_values: Optional[Dict[str, Any]] = None
     ):
-        """
-        Writes a record to the audit_log table.
-        We use Json.dumps() to ensure dictionaries are stored correctly.
-        """
         try:
             await self.db.audit_log.create(
                 data={
@@ -45,42 +87,34 @@ class RewardService:
                     "new_values": Json(new_values) if new_values else Json({})
                 }
             )
-            logger.debug(f"Audit log created: {operation} on {table_name} for record {record_id}")
         except Exception as e:
             logger.error(f"FAILED TO AUDIT LOG: {e}", exc_info=True)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # HELPER: GET REFERENCE DATA
+    # Helpers
     # ─────────────────────────────────────────────────────────────────────────
     async def _get_sys_id(self, table, code_field, code_value):
-        """Generic helper to fetch ID from lookup tables (Status, Types)"""
-        record = await getattr(self.db, table).find_unique(
-            where={code_field: code_value}
-        )
+        record = await getattr(self.db, table).find_unique(where={code_field: code_value})
         if not record:
-            raise HTTPException(
-                status_code=500,
-                detail=f"System Configuration Error: {code_value} not found in {table}"
-            )
+            raise HTTPException(status_code=500,
+                detail=f"System Configuration Error: {code_value} not found in {table}")
         if table == "transaction_types": return record.type_id
-        if table == "status_master": return record.status_id
+        if table == "status_master":     return record.status_id
         return None
 
     def _get_stock_status(self, stock: int) -> str:
-        if stock <= 0: return "Out of Stock"
-        if stock < 10: return "Limited Stock"
+        if stock <= 0:  return "Out of Stock"
+        if stock < 10:  return "Limited Stock"
         return "In Stock"
 
     # ─────────────────────────────────────────────────────────────────────────
-    # CATEGORY MANAGEMENT
+    # Category management
     # ─────────────────────────────────────────────────────────────────────────
     async def create_category(self, request: schemas.CreateCategoryRequest, user_id: str, req_info: Request):
-        logger.info(f"User {user_id} attempting to create category: {request.category_code}")
         existing = await self.db.reward_categories.find_unique(
             where={"category_code": request.category_code}
         )
         if existing:
-            logger.warning(f"Category creation failed: code '{request.category_code}' already exists")
             raise HTTPException(status_code=400, detail="Category code already exists")
 
         new_category = await self.db.reward_categories.create(
@@ -95,25 +129,32 @@ class RewardService:
         )
 
         await self._log_change(
-            table_name="reward_categories",
-            record_id=new_category.category_id,
-            operation="INSERT",
-            user_id=user_id,
+            table_name="reward_categories", record_id=new_category.category_id,
+            operation="INSERT", user_id=user_id,
             ip_address=req_info.client.host,
             user_agent=req_info.headers.get("user-agent"),
             new_values=new_category.model_dump()
         )
-        logger.info(f"Successfully created category {new_category.category_id}")
+
+        await invalidate_categories()   # bust cached category lists
         return new_category
 
     async def get_categories(self, active_only: bool = True):
-        where_clause = {"is_active": True} if active_only else {}
-        return await self.db.reward_categories.find_many(where=where_clause)
+        key = _key_categories(active_only)
+        cached = await cache_get(key)
+        if cached is not None:
+            logger.debug("cache HIT %s", key)
+            return cached   # raw list — Pydantic validation happens in router
 
-    async def update_category(self, category_id: str, request: schemas.UpdateCategoryRequest, user_id: str, req_info: Request):
-        existing = await self.db.reward_categories.find_unique(
-            where={"category_id": category_id}
-        )
+        where_clause = {"is_active": True} if active_only else {}
+        result = await self.db.reward_categories.find_many(where=where_clause)
+        serialised = [r.model_dump() for r in result]
+        await cache_set(key, serialised, ttl=TTL_CATEGORIES)
+        return result
+
+    async def update_category(self, category_id: str, request: schemas.UpdateCategoryRequest,
+                               user_id: str, req_info: Request):
+        existing = await self.db.reward_categories.find_unique(where={"category_id": category_id})
         if not existing:
             raise HTTPException(status_code=404, detail="Category not found")
 
@@ -125,24 +166,22 @@ class RewardService:
         update_data["updated_at"] = datetime.now(timezone.utc)
 
         updated_category = await self.db.reward_categories.update(
-            where={"category_id": category_id},
-            data=update_data
+            where={"category_id": category_id}, data=update_data
         )
 
         await self._log_change(
-            table_name="reward_categories",
-            record_id=category_id,
-            operation="UPDATE",
-            user_id=user_id,
+            table_name="reward_categories", record_id=category_id,
+            operation="UPDATE", user_id=user_id,
             ip_address=req_info.client.host,
             user_agent=req_info.headers.get("user-agent"),
-            old_values=existing.model_dump(),
-            new_values=updated_category.model_dump()
+            old_values=existing.model_dump(), new_values=updated_category.model_dump()
         )
+
+        await invalidate_categories()
         return updated_category
 
     # ─────────────────────────────────────────────────────────────────────────
-    # CATALOG MANAGEMENT
+    # Catalog management
     # ─────────────────────────────────────────────────────────────────────────
     async def create_item(self, item: schemas.CreateRewardRequest, user_id: str, req_info: Request):
         category = await self.db.reward_categories.find_unique(
@@ -151,9 +190,7 @@ class RewardService:
         if not category:
             raise HTTPException(status_code=404, detail="Category not found")
 
-        existing = await self.db.reward_catalog.find_unique(
-            where={"reward_code": item.reward_code}
-        )
+        existing = await self.db.reward_catalog.find_unique(where={"reward_code": item.reward_code})
         if existing:
             raise HTTPException(status_code=400, detail="Reward code already exists")
 
@@ -175,14 +212,14 @@ class RewardService:
         )
 
         await self._log_change(
-            table_name="reward_catalog",
-            record_id=new_item.catalog_id,
-            operation="INSERT",
-            user_id=user_id,
+            table_name="reward_catalog", record_id=new_item.catalog_id,
+            operation="INSERT", user_id=user_id,
             ip_address=req_info.client.host,
             user_agent=req_info.headers.get("user-agent"),
             new_values=new_item.model_dump()
         )
+
+        await invalidate_catalog()
 
         cat_data = None
         if new_item.reward_categories:
@@ -208,6 +245,12 @@ class RewardService:
         )
 
     async def get_catalog(self, active_only: bool = True, page: int = 1, size: int = 20):
+        key = _key_catalog(active_only, page, size)
+        cached = await cache_get(key)
+        if cached is not None:
+            logger.debug("cache HIT %s", key)
+            return cached
+
         skip = (page - 1) * size
         where_clause = {"is_active": True} if active_only else {}
         total_items = await self.db.reward_catalog.count(where=where_clause)
@@ -230,14 +273,8 @@ class RewardService:
                     category_code=item.reward_categories.category_code
                 )
 
-            if item.available_stock <= 0:
-                status_msg = "Out of Stock"
-            elif item.available_stock < 10:
-                status_msg = "Limited Stock"
-            else:
-                status_msg = "In Stock"
+            stock_msg = self._get_stock_status(item.available_stock)
 
-            # 3. Create Response Object
             mapped_data.append(schemas.RewardItemResponse(
                 catalog_id=item.catalog_id,
                 reward_name=item.reward_name,
@@ -249,13 +286,13 @@ class RewardService:
                 is_active=item.is_active,
                 created_at=item.created_at,
                 category=cat_data,
-                stock_status=status_msg,
+                stock_status=stock_msg,
                 available_stock=item.available_stock
             ))
 
         total_pages = (total_items + size - 1) // size
-        return {
-            "data": mapped_data,
+        result = {
+            "data": [r.model_dump() for r in mapped_data],
             "pagination": {
                 "current_page": page,
                 "per_page": size,
@@ -266,11 +303,13 @@ class RewardService:
             }
         }
 
-    async def add_stock(self, catalog_id: str, request: schemas.AddStockRequest, user_id: str, req_info: Request):
-        """Safely increments inventory using atomic operations."""
-        existing_item = await self.db.reward_catalog.find_unique(
-            where={"catalog_id": catalog_id}
-        )
+        await cache_set(key, result, ttl=TTL_CATALOG)
+        # Return original objects (not the serialised dict) so caller gets typed data
+        return {**result, "data": mapped_data}
+
+    async def add_stock(self, catalog_id: str, request: schemas.AddStockRequest,
+                        user_id: str, req_info: Request):
+        existing_item = await self.db.reward_catalog.find_unique(where={"catalog_id": catalog_id})
         if not existing_item:
             raise HTTPException(status_code=404, detail="Reward item not found")
 
@@ -285,15 +324,15 @@ class RewardService:
         )
 
         await self._log_change(
-            table_name="reward_catalog",
-            record_id=catalog_id,
-            operation="RESTOCK",
-            user_id=user_id,
+            table_name="reward_catalog", record_id=catalog_id,
+            operation="RESTOCK", user_id=user_id,
             ip_address=req_info.client.host,
             user_agent=req_info.headers.get("user-agent"),
             old_values={"available_stock": existing_item.available_stock},
             new_values={"available_stock": updated_item.available_stock, "added": request.amount}
         )
+
+        await invalidate_catalog()
 
         cat_data = None
         if updated_item.reward_categories:
@@ -318,21 +357,17 @@ class RewardService:
             available_stock=updated_item.available_stock
         )
 
-    async def update_item(self, catalog_id: str, request: schemas.UpdateRewardRequest, user_id: str, req_info: Request):
-        existing_item = await self.db.reward_catalog.find_unique(
-            where={"catalog_id": catalog_id}
-        )
+    async def update_item(self, catalog_id: str, request: schemas.UpdateRewardRequest,
+                          user_id: str, req_info: Request):
+        existing_item = await self.db.reward_catalog.find_unique(where={"catalog_id": catalog_id})
         if not existing_item:
             raise HTTPException(status_code=404, detail="Reward item not found")
 
         new_min = request.min_points if request.min_points is not None else existing_item.min_points
         new_max = request.max_points if request.max_points is not None else existing_item.max_points
-
         if new_min > new_max:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})"
-            )
+            raise HTTPException(status_code=400,
+                detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})")
 
         update_data = request.model_dump(exclude_unset=True)
         if not update_data:
@@ -348,15 +383,14 @@ class RewardService:
         )
 
         await self._log_change(
-            table_name="reward_catalog",
-            record_id=catalog_id,
-            operation="UPDATE",
-            user_id=user_id,
+            table_name="reward_catalog", record_id=catalog_id,
+            operation="UPDATE", user_id=user_id,
             ip_address=req_info.client.host,
             user_agent=req_info.headers.get("user-agent"),
-            old_values=existing_item.model_dump(),
-            new_values=updated_item.model_dump()
+            old_values=existing_item.model_dump(), new_values=updated_item.model_dump()
         )
+
+        await invalidate_catalog()
 
         cat_data = None
         if updated_item.reward_categories:
@@ -382,86 +416,62 @@ class RewardService:
         )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # REDEMPTION / GRANTING LOGIC (WITH INVENTORY)
+    # Redemption (unchanged logic, cache invalidation added at the end)
     # ─────────────────────────────────────────────────────────────────────────
     async def grant_reward(self, request: schemas.GrantRewardRequest, granted_by_user_id: str):
-        """
-        Handles the Redemption with Inventory Checks:
-        1. Validate inputs (Active? Points limits?)
-        2. CHECK STOCK (early exit for obvious cases)
-        3. START DB TRANSACTION
-        4. Atomically deduct points & decrement stock with in-tx guard
-        5. Create Transaction & History Records
-          6. Notify recipient (outside transaction — never rolls back the grant)
-        """
         logger.info(f"Initiating grant_reward. Catalog ID: {request.catalog_id}, Wallet ID: {request.wallet_id}")
 
         reward_item = await self.db.reward_catalog.find_unique(
             where={"catalog_id": str(request.catalog_id)}
         )
         if not reward_item or not reward_item.is_active:
-            logger.warning(f"Grant failed: Reward {request.catalog_id} invalid or inactive.")
             raise HTTPException(status_code=400, detail="Reward is invalid or inactive")
 
         if reward_item.available_stock <= 0:
-            logger.warning(f"Grant failed: Reward {request.catalog_id} out of stock.")
             raise HTTPException(status_code=400, detail="Out of stock! This reward is no longer available.")
 
         if request.points < reward_item.min_points or request.points > reward_item.max_points:
-            logger.warning(f"Grant failed: Points {request.points} outside bounds for {request.catalog_id}.")
             raise HTTPException(status_code=400, detail="Points are outside the allowed range")
 
         wallet = await self.db.wallets.find_unique(where={"wallet_id": str(request.wallet_id)})
         if not wallet:
-            logger.warning(f"Grant failed: Wallet {request.wallet_id} not found.")
             raise HTTPException(status_code=404, detail="Wallet not found")
 
         if wallet.available_points < request.points:
-            logger.warning(f"Grant failed: Insufficient points in wallet {request.wallet_id}.")
             raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
-        type_id = await self._get_sys_id("transaction_types", "type_code", "REWARD_REDEMPTION")
-        status_id = await self._get_sys_id("status_master", "status_code", "APPROVED")
+        type_id   = await self._get_sys_id("transaction_types", "type_code", "REWARD_REDEMPTION")
+        status_id = await self._get_sys_id("status_master",     "status_code", "APPROVED")
 
         ref_number = f"TXN-{int(datetime.now().timestamp())}-{str(uuid.uuid4())[:8]}"
 
-        # ── ATOMIC WRITE TRANSACTION ───────────────────────────────────────
         try:
-            logger.debug(f"Starting atomic transaction for grant_reward {ref_number}")
             async with self.db.tx() as transaction:
-
                 await transaction.wallets.update(
                     where={"wallet_id": str(request.wallet_id)},
                     data={
                         "available_points": {"decrement": request.points},
-                        "redeemed_points": {"increment": request.points},
+                        "redeemed_points":  {"increment": request.points},
                         "updated_by": granted_by_user_id,
                         "updated_at": datetime.now(timezone.utc)
                     }
                 )
 
-                # ✅ FIX 2: added missing updated_by — its absence caused a Prisma NOT NULL
-                #    constraint error that silently rolled back every redemption transaction.
-                # ✅ FIX 3: added available_stock gt:0 guard inside the transaction so two
-                #    concurrent redemptions can't both pass the pre-flight check and push
-                #    stock negative. If the row no longer qualifies, update returns None.
                 updated_catalog = await transaction.reward_catalog.update(
                     where={
                         "catalog_id": str(request.catalog_id),
-                        "available_stock": {"gt": 0}  # ✅ FIX 3: atomic race-condition guard
+                        "available_stock": {"gt": 0}
                     },
                     data={
                         "available_stock": {"decrement": 1},
                         "updated_at": datetime.now(timezone.utc),
-                        "updated_by": granted_by_user_id  # ✅ FIX 2: was missing
+                        "updated_by": granted_by_user_id
                     }
                 )
 
                 if not updated_catalog:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Out of stock! This reward was just claimed by someone else."
-                    )
+                    raise HTTPException(status_code=400,
+                        detail="Out of stock! This reward was just claimed by someone else.")
 
                 await transaction.transactions.create(
                     data={
@@ -491,9 +501,14 @@ class RewardService:
                     }
                 )
 
-            # ── Notify recipient ───────────────────────────────────────────
-            # Intentionally OUTSIDE the db.tx() block so a notification
-            # failure can never roll back the redemption that just committed.
+            # ── Post-commit: invalidate caches & notify ────────────────────
+            # All cache ops are fire-and-forget; failures must never roll back.
+            await invalidate_catalog()                              # stock changed
+            await invalidate_history(str(request.wallet_id))       # user's history stale
+            # Leaderboard + platform stats may have changed too
+            from src.analytics.service import invalidate_leaderboard
+            await invalidate_leaderboard()
+
             try:
                 new_balance = wallet.available_points - request.points
                 await self._notif.create_notification(
@@ -509,37 +524,35 @@ class RewardService:
                 )
             except Exception:
                 logger.exception(
-                    "Redemption notification failed for history %s — redemption was completed successfully",
+                    "Redemption notification failed for history %s — redemption completed successfully",
                     history_record.history_id,
                 )
 
-            logger.info(f"Transaction {ref_number} completed successfully for wallet {request.wallet_id}")
+            logger.info(f"Transaction {ref_number} completed for wallet {request.wallet_id}")
             return {
-                "history_id": history_record.history_id,
-                "points": history_record.points,
-                "granted_at": history_record.granted_at,
-                "status": "COMPLETED",
-                # Use live post-decrement value instead of stale pre-fetch snapshot
+                "history_id":      history_record.history_id,
+                "points":          history_record.points,
+                "granted_at":      history_record.granted_at,
+                "status":          "COMPLETED",
                 "new_stock_level": updated_catalog.available_stock
             }
 
         except HTTPException:
-            # Re-raise clean HTTP errors (e.g. the out-of-stock guard above) without
-            # wrapping them in the generic 500 handler below.
             raise
         except Exception as e:
             logger.error(f"Atomic transaction failed for {ref_number}: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # HISTORY QUERIES
+    # History
     # ─────────────────────────────────────────────────────────────────────────
-    async def get_history(
-        self,
-        wallet_id: Optional[str] = None, 
-        page: int = 1,
-        size: int = 10
-    ):
+    async def get_history(self, wallet_id: Optional[str] = None, page: int = 1, size: int = 10):
+        key = _key_history(wallet_id, page, size)
+        cached = await cache_get(key)
+        if cached is not None:
+            logger.debug("cache HIT %s", key)
+            return cached
+
         skip_count = (page - 1) * size
         where_clause = {}
         if wallet_id:
@@ -558,16 +571,16 @@ class RewardService:
 
         total_items = await self.db.reward_history.count(where=where_clause)
 
-        return {
-            "data": history,
+        result = {
+            "data":        [h.model_dump() for h in history],
             "total_items": total_items,
-            "page": page,
-            "size": size
+            "page":        page,
+            "size":        size
         }
 
+        await cache_set(key, result, ttl=TTL_HISTORY)
+        return {**result, "data": history}   # return typed objects to caller
+
     async def get_wallet_id_for_user(self, user_id: str) -> Optional[str]:
-        """Helper to find a user's wallet ID using their User ID"""
-        wallet = await self.db.wallets.find_first(
-            where={"employee_id": user_id}
-        )
+        wallet = await self.db.wallets.find_first(where={"employee_id": user_id})
         return wallet.wallet_id if wallet else None

@@ -4,18 +4,26 @@ from prisma.errors import UniqueViolationError
 from src.prisma.client import db
 from datetime import datetime, timezone
 from src.common.dependencies import CurrentUser
+from src.common.cache import cache_get, cache_set
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
 
 from src.recognition.points_engine import calculate_points
 
 logger = logging.getLogger(__name__)
-_notif = NotificationService(db)
 
+def _get_notif() -> NotificationService:
+    try:
+        from src.notifications.redis_client import get_redis
+        r = get_redis()
+    except RuntimeError:
+        r = None
+    return NotificationService(db, redis=r)
 
-# -----------------------------
-# Utility
-# -----------------------------
+# ── Cache key — transaction_types is seed data, never changes ────────────────
+_KEY_TXN_TYPES = "wallet:transaction_types"
+TTL_TXN_TYPES  = 3600  # 1 hr
+# ─────────────────────────────────────────────────────────────────────────────
 
 WNF = "Wallet not found"
 AD  = "Access Denied"
@@ -25,9 +33,24 @@ def is_admin(user: CurrentUser) -> bool:
     return any(role in user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
 
 
-# -----------------------------
-# Transaction creation
-# -----------------------------
+async def get_transaction_types(current_user: CurrentUser):
+    cached = await cache_get(_KEY_TXN_TYPES)
+    if cached is not None:
+        return cached
+
+    types = await db.transaction_types.find_many()
+    data = [
+        {
+            "type_id":   str(t.type_id),
+            "code":      t.type_code,
+            "name":      t.type_name,
+            "is_credit": t.is_credit,
+        }
+        for t in types
+    ]
+    await cache_set(_KEY_TXN_TYPES, data, ttl=TTL_TXN_TYPES)
+    return data
+
 
 async def create_transaction(data, current_user: CurrentUser):
     if not is_admin(current_user):
@@ -117,7 +140,7 @@ async def create_transaction(data, current_user: CurrentUser):
         try:
             direction = "credited to" if txn_type.is_credit else "debited from"
             emoji     = "💰" if txn_type.is_credit else "💸"
-            await _notif.create_notification(
+            await _get_notif().create_notification(
                 employee_id = wallet.employee_id,
                 title       = f"{amount} points {direction} your wallet {emoji}",
                 message     = (
@@ -146,10 +169,6 @@ async def create_transaction(data, current_user: CurrentUser):
             detail="Transaction with this reference number already exists"
         )
 
-
-# -----------------------------
-# Transaction queries
-# -----------------------------
 
 async def get_transactions(
     wallet_id: str,
@@ -258,10 +277,6 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
     }
 
 
-# -----------------------------
-# Wallet queries
-# -----------------------------
-
 async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
     if not is_admin(current_user) and employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
@@ -312,10 +327,6 @@ async def get_points_summary(wallet_id: str, current_user: CurrentUser):
         "points_this_year":  sum(t.amount for t in year_txns),
     }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# REVIEW → WALLET CREDIT
-# ─────────────────────────────────────────────────────────────────────────────
 
 async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     review_id = str(review_id)
@@ -461,7 +472,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
 
         try:
             stars = "⭐" * review.rating
-            await _notif.create_notification(
+            await _get_notif().create_notification(
                 employee_id = employee_id,
                 title       = f"{points} points credited to your wallet 💰",
                 message     = (
@@ -498,24 +509,6 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
             detail="Points already credited for this review"
         )
 
-
-async def get_transaction_types(current_user: CurrentUser):
-    types = await db.transaction_types.find_many()
-
-    return [
-        {
-            "type_id":   str(t.type_id),
-            "code":      t.type_code,
-            "name":      t.type_name,
-            "is_credit": t.is_credit,
-        }
-        for t in types
-    ]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# REVIEW UPDATE → WALLET ADJUSTMENT
-# ─────────────────────────────────────────────────────────────────────────────
 
 async def adjust_wallet_for_review_update(
     review_id: str,
@@ -615,7 +608,7 @@ async def adjust_wallet_for_review_update(
 
         try:
             emoji = "💰" if int_delta > 0 else "📉"
-            await _notif.create_notification(
+            await _get_notif().create_notification(
                 employee_id = employee_id,
                 title       = f"Your wallet was adjusted {emoji}",
                 message     = (

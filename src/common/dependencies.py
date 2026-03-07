@@ -2,6 +2,7 @@
 
 import os
 import uuid
+import hashlib
 import httpx
 from typing import List, Optional
 from fastapi import Depends, HTTPException, Request, status
@@ -11,9 +12,46 @@ from pydantic import BaseModel
 from prisma import Prisma
 
 from src.prisma.client import db
+from src.common.cache import cache_get, cache_set
 
 security = HTTPBearer(auto_error=False)
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
+
+# ── How long to cache a validated token result ────────────────────────────────
+# JWTs are stateless — a token valid at time T stays valid until its exp claim.
+# Caching for 30s means a revoked/expired token can still work for up to 30s.
+# Safe for this system; lower to 10s if you need tighter revocation guarantees.
+_AUTH_CACHE_TTL = 30
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── Singleton HTTP client ─────────────────────────────────────────────────────
+_auth_client: httpx.AsyncClient | None = None
+
+
+def get_auth_client() -> httpx.AsyncClient:
+    global _auth_client
+    if _auth_client is None or _auth_client.is_closed:
+        _auth_client = httpx.AsyncClient(
+            timeout=5.0,
+            limits=httpx.Limits(
+                max_keepalive_connections=20,
+                max_connections=20,
+                keepalive_expiry=30,
+            ),
+        )
+    return _auth_client
+
+
+async def close_auth_client() -> None:
+    """Call this in your lifespan shutdown to cleanly close pooled connections."""
+    global _auth_client
+    if _auth_client and not _auth_client.is_closed:
+        await _auth_client.aclose()
+        _auth_client = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 class CurrentUser(BaseModel):
@@ -36,16 +74,25 @@ async def get_current_user(
         )
 
     token      = credentials.credentials
-    # Always forward a request ID for traceability — generate one if not provided
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
+    # ── Cache lookup ──────────────────────────────────────────────────────────
+    # Key is a SHA-256 hash of the raw token — never store the token itself.
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    cache_key  = f"auth:token:{token_hash}"
+
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return CurrentUser(**cached)
+    # ─────────────────────────────────────────────────────────────────────────
+
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(
-                AUTH_SERVICE_URL,
-                json={"token": token},
-                headers={"X-Request-ID": request_id},
-            )
+        client   = get_auth_client()
+        response = await client.post(
+            AUTH_SERVICE_URL,
+            json={"token": token},
+            headers={"X-Request-ID": request_id},
+        )
 
         if response.status_code != 200:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
@@ -57,12 +104,17 @@ async def get_current_user(
                                 detail="Invalid or expired authentication token")
 
         roles = [r.upper() for r in data.get("roles", [])]
-        return CurrentUser(
+        user  = CurrentUser(
             id=data["user_id"],
             email=data.get("email", ""),
             roles=roles,
             department_id=data.get("department_id"),
         )
+
+        # Cache the validated result — only reached on cache miss
+        await cache_set(cache_key, user.model_dump(), ttl=_AUTH_CACHE_TTL)
+
+        return user
 
     except httpx.RequestError:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -83,13 +135,10 @@ async def check_route_permission(
     if "SUPER_ADMIN" in current_user.roles:
         return current_user
 
-    # Use the route template, not the resolved URL, so that paths like
-    # /v1/roles/abc-123 correctly match the stored key GET:/v1/roles/{role_id}
     matched_route = request.scope.get("route")
     if isinstance(matched_route, APIRoute):
         path_template = matched_route.path
     else:
-        # Fallback for non-APIRoute matches (e.g. Mount, WebSocket)
         path_template = request.scope.get("path", request.url.path)
 
     route_key = f"{request.method}:{path_template}"
@@ -105,7 +154,6 @@ async def check_route_permission(
             detail=f"No permissions configured for {route_key}",
         )
 
-    # Each row has exactly one role (one role_id FK); collect all allowed codes
     allowed_role_codes = {p.roles.role_code.upper() for p in allowed}
 
     if not any(r in allowed_role_codes for r in current_user.roles):

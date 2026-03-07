@@ -10,7 +10,9 @@ from src.recognition.router import router as recognition_router
 from src.recognition.router import categories_router as review_categories_router
 from src.digest.router import router as digest_router
 from src.notifications.email_sender import EmailSender, SMTPConfig
+from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.digest.worker import digest_worker_loop
+from src.common.dependencies import close_auth_client
 from src.common.middleware import (
     request_rate_limit_middleware,
     http_exception_handler,
@@ -24,12 +26,20 @@ async def lifespan(app: FastAPI):
     await connect_with_retry()
     print("Recognition Service: 🟢 Database Connected")
 
+    try:
+        await connect_redis()
+        print("Recognition Service: 🟢 Redis Connected")
+    except Exception as e:
+        print(f"Recognition Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+
     sender = EmailSender(SMTPConfig.from_env())
     digest_task = asyncio.create_task(digest_worker_loop(db, sender))
 
     yield
 
     digest_task.cancel()
+    await close_auth_client()
+    await disconnect_redis()
     await db.disconnect()
     print("Recognition Service: 🔴 Database Disconnected")
 

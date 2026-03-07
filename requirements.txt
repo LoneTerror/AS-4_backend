@@ -28,6 +28,9 @@ python-multipart>=0.0.12,<1.0.0
 # Environment variables
 python-dotenv>=1.0.0,<2.0.0
 
+#Redis
+redis[asyncio]
+
 # Date utilities
 python-dateutil>=2.9.0,<3.0.0
 
