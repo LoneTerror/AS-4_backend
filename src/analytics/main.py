@@ -55,7 +55,7 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 
 
-origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://backend.aabhar.top").split(",")
+origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top").split(",")
 
 app.add_middleware(
     CORSMiddleware,

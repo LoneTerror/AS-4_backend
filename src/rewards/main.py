@@ -57,7 +57,7 @@ async def health_check():
         "database": "Connected" if db.is_connected() else "Disconnected",
     }
 
-origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://backend.aabhar.top").split(",")
+origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top").split(",")
 
 app.add_middleware(
     CORSMiddleware,

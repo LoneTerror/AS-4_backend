@@ -40,7 +40,7 @@ app = FastAPI(
     openapi_url="/v1/openapi.json",
 )
 
-origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://backend.aabhar.top").split(",")
+origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top").split(",")
 
 app.add_middleware(
     CORSMiddleware,

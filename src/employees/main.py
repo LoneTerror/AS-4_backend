@@ -106,7 +106,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://backend.aabhar.top").split(",")
+origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top").split(",")
 
 app.add_middleware(
     CORSMiddleware,
