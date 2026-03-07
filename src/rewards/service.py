@@ -106,8 +106,11 @@ class RewardService:
         logger.info(f"Successfully created category {new_category.category_id}")
         return new_category
 
-    async def get_categories(self, active_only: bool = True):
-        where_clause = {"is_active": True} if active_only else {}
+    async def get_categories(self, is_active: Optional[bool] = None):
+        where_clause = {}
+        if is_active is not None:
+            where_clause["is_active"] = is_active
+        
         return await self.db.reward_categories.find_many(where=where_clause)
 
     async def update_category(self, category_id: str, request: schemas.UpdateCategoryRequest, user_id: str, req_info: Request):
@@ -120,6 +123,21 @@ class RewardService:
         update_data = request.model_dump(exclude_unset=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
+
+        has_changes = False
+        for key, new_value in update_data.items():
+            existing_value = getattr(existing, key, None)
+
+            if existing_value != new_value:
+                has_changes = True
+                break
+                
+        if not has_changes:
+            raise HTTPException(
+                status_code=400, 
+                detail="The provided values are identical to the current data. No update required."
+            )
+        # -------------------------------------------
 
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
@@ -150,6 +168,13 @@ class RewardService:
         )
         if not category:
             raise HTTPException(status_code=404, detail="Category not found")
+        
+        if not category.is_active:
+            logger.warning(f"Failed to create reward: Category {item.category_id} is inactive.")
+            raise HTTPException(
+                status_code=400, 
+                detail="Cannot create a reward item under an inactive category. Please activate the category first."
+            )
 
         existing = await self.db.reward_catalog.find_unique(
             where={"reward_code": item.reward_code}
@@ -325,19 +350,78 @@ class RewardService:
         if not existing_item:
             raise HTTPException(status_code=404, detail="Reward item not found")
 
+        # 1. Evaluate min/max points logic first
         new_min = request.min_points if request.min_points is not None else existing_item.min_points
         new_max = request.max_points if request.max_points is not None else existing_item.max_points
+        new_default = request.default_points if request.default_points is not None else existing_item.default_points
 
         if new_min > new_max:
             raise HTTPException(
                 status_code=400,
                 detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})"
             )
+            
+        if not (new_min <= new_default <= new_max):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Default points ({new_default}) must be between Min points ({new_min}) and Max points ({new_max})"
+            )
 
+        # 2. Extract provided fields
         update_data = request.model_dump(exclude_unset=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
+        
+        if "category_id" in update_data:
+            new_cat_id = str(update_data["category_id"])
+            new_category = await self.db.reward_categories.find_unique(
+                where={"category_id": new_cat_id}
+            )
+            
+            if not new_category:
+                raise HTTPException(status_code=404, detail="The specified target category was not found.")
+                
+            if not new_category.is_active:
+                logger.warning(f"Failed to move reward: Target category {new_cat_id} is inactive.")
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Cannot move a reward item to an inactive category. Please activate the target category first."
+                )
+            
+            # Ensure the UUID is safely cast to a string for Prisma
+            update_data["category_id"] = new_cat_id
+        # --------------------------------------------------------------
 
+        if update_data.get("is_active") is True:
+            # Get the category ID (either the newly provided one, or the existing one)
+            check_cat_id = update_data.get("category_id", existing_item.category_id)
+            
+            # If we didn't already fetch the new_category above, fetch the existing one
+            cat_to_check = new_category if "category_id" in update_data else await self.db.reward_categories.find_unique(where={"category_id": check_cat_id})
+            
+            if cat_to_check and not cat_to_check.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot reactivate this reward because its parent category is currently inactive."
+                )
+
+        # --- NEW LOGIC: Check for actual changes ---
+        has_changes = False
+        for key, new_value in update_data.items():
+            existing_value = getattr(existing_item, key, None)
+            
+            if existing_value != new_value:
+                has_changes = True
+                break
+                
+        if not has_changes:
+            raise HTTPException(
+                status_code=400, 
+                detail="The provided values are identical to the current data. No update required."
+            )
+        # -------------------------------------------
+
+        # 3. Apply audit fields and execute update
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
 
@@ -357,7 +441,6 @@ class RewardService:
             old_values=existing_item.model_dump(),
             new_values=updated_item.model_dump()
         )
-
         cat_data = None
         if updated_item.reward_categories:
             cat_data = schemas.MinimalCategoryInfo(
