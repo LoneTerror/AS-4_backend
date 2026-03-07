@@ -9,7 +9,7 @@ from . import schemas
 from src.core.logger import logger
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
-from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
+from src.common.cache import cache_get, cache_set, invalidate_pattern
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TTLs (seconds)
@@ -136,15 +136,20 @@ class RewardService:
             new_values=new_category.model_dump()
         )
 
-        await invalidate_categories()   # bust cached category lists
+        await invalidate_categories()
         return new_category
 
     async def get_categories(self, active_only: bool = True):
+        """
+        Returns categories, using Redis cache when available.
+        active_only=True  → only is_active=True rows (default, used by most callers)
+        active_only=False → all rows (admin view)
+        """
         key = _key_categories(active_only)
         cached = await cache_get(key)
         if cached is not None:
             logger.debug("cache HIT %s", key)
-            return cached   # raw list — Pydantic validation happens in router
+            return cached  # plain list of dicts — Pydantic validation happens in router
 
         where_clause = {"is_active": True} if active_only else {}
         result = await self.db.reward_categories.find_many(where=where_clause)
@@ -161,6 +166,16 @@ class RewardService:
         update_data = request.model_dump(exclude_unset=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
+
+        has_changes = any(
+            getattr(existing, k, None) != v
+            for k, v in update_data.items()
+        )
+        if not has_changes:
+            raise HTTPException(
+                status_code=400,
+                detail="The provided values are identical to the current data. No update required."
+            )
 
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
@@ -189,6 +204,13 @@ class RewardService:
         )
         if not category:
             raise HTTPException(status_code=404, detail="Category not found")
+
+        if not category.is_active:
+            logger.warning(f"Failed to create reward: Category {item.category_id} is inactive.")
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot create a reward item under an inactive category. Please activate the category first."
+            )
 
         existing = await self.db.reward_catalog.find_unique(where={"reward_code": item.reward_code})
         if existing:
@@ -273,8 +295,6 @@ class RewardService:
                     category_code=item.reward_categories.category_code
                 )
 
-            stock_msg = self._get_stock_status(item.available_stock)
-
             mapped_data.append(schemas.RewardItemResponse(
                 catalog_id=item.catalog_id,
                 reward_name=item.reward_name,
@@ -286,7 +306,7 @@ class RewardService:
                 is_active=item.is_active,
                 created_at=item.created_at,
                 category=cat_data,
-                stock_status=stock_msg,
+                stock_status=self._get_stock_status(item.available_stock),
                 available_stock=item.available_stock
             ))
 
@@ -304,7 +324,6 @@ class RewardService:
         }
 
         await cache_set(key, result, ttl=TTL_CATALOG)
-        # Return original objects (not the serialised dict) so caller gets typed data
         return {**result, "data": mapped_data}
 
     async def add_stock(self, catalog_id: str, request: schemas.AddStockRequest,
@@ -363,15 +382,66 @@ class RewardService:
         if not existing_item:
             raise HTTPException(status_code=404, detail="Reward item not found")
 
-        new_min = request.min_points if request.min_points is not None else existing_item.min_points
-        new_max = request.max_points if request.max_points is not None else existing_item.max_points
+        # Resolve final min / default / max (provided value or fall back to existing)
+        new_min     = request.min_points     if request.min_points     is not None else existing_item.min_points
+        new_max     = request.max_points     if request.max_points     is not None else existing_item.max_points
+        new_default = request.default_points if request.default_points is not None else existing_item.default_points
+
         if new_min > new_max:
-            raise HTTPException(status_code=400,
-                detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Min points ({new_min}) cannot be greater than Max points ({new_max})"
+            )
+
+        if not (new_min <= new_default <= new_max):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Default points ({new_default}) must be between Min points ({new_min}) and Max points ({new_max})"
+            )
 
         update_data = request.model_dump(exclude_unset=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
+
+        # Validate category change if requested
+        new_category = None
+        if "category_id" in update_data:
+            new_cat_id = str(update_data["category_id"])
+            new_category = await self.db.reward_categories.find_unique(
+                where={"category_id": new_cat_id}
+            )
+            if not new_category:
+                raise HTTPException(status_code=404, detail="The specified target category was not found.")
+            if not new_category.is_active:
+                logger.warning(f"Failed to move reward: Target category {new_cat_id} is inactive.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot move a reward item to an inactive category. Please activate the target category first."
+                )
+            update_data["category_id"] = new_cat_id
+
+        # Prevent reactivating a reward whose parent category is inactive
+        if update_data.get("is_active") is True:
+            check_cat_id = update_data.get("category_id", existing_item.category_id)
+            cat_to_check = new_category if new_category else await self.db.reward_categories.find_unique(
+                where={"category_id": check_cat_id}
+            )
+            if cat_to_check and not cat_to_check.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot reactivate this reward because its parent category is currently inactive."
+                )
+
+        # Guard: reject no-op updates
+        has_changes = any(
+            getattr(existing_item, k, None) != v
+            for k, v in update_data.items()
+        )
+        if not has_changes:
+            raise HTTPException(
+                status_code=400,
+                detail="The provided values are identical to the current data. No update required."
+            )
 
         update_data["updated_by"] = user_id
         update_data["updated_at"] = datetime.now(timezone.utc)
@@ -416,7 +486,7 @@ class RewardService:
         )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Redemption (unchanged logic, cache invalidation added at the end)
+    # Redemption
     # ─────────────────────────────────────────────────────────────────────────
     async def grant_reward(self, request: schemas.GrantRewardRequest, granted_by_user_id: str):
         logger.info(f"Initiating grant_reward. Catalog ID: {request.catalog_id}, Wallet ID: {request.wallet_id}")
@@ -501,11 +571,9 @@ class RewardService:
                     }
                 )
 
-            # ── Post-commit: invalidate caches & notify ────────────────────
-            # All cache ops are fire-and-forget; failures must never roll back.
-            await invalidate_catalog()                              # stock changed
-            await invalidate_history(str(request.wallet_id))       # user's history stale
-            # Leaderboard + platform stats may have changed too
+            # Post-commit: invalidate caches & notify
+            await invalidate_catalog()
+            await invalidate_history(str(request.wallet_id))
             from src.analytics.service import invalidate_leaderboard
             await invalidate_leaderboard()
 
@@ -579,7 +647,7 @@ class RewardService:
         }
 
         await cache_set(key, result, ttl=TTL_HISTORY)
-        return {**result, "data": history}   # return typed objects to caller
+        return {**result, "data": history}
 
     async def get_wallet_id_for_user(self, user_id: str) -> Optional[str]:
         wallet = await self.db.wallets.find_first(where={"employee_id": user_id})
