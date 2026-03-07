@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
-from src.prisma.client import db,connect_with_retry
+from src.prisma.client import db, connect_with_retry
+from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.common.middleware import (
     request_rate_limit_middleware,
     http_exception_handler,
@@ -19,8 +20,17 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Reward Microservice...")
     await connect_with_retry()
     logger.info("Rewards Service: 🟢 Database Connected Successfully")
+
+    try:
+        await connect_redis()
+        logger.info("Rewards Service: 🔴 Redis Connected")
+    except Exception as e:
+        logger.warning("Rewards Service: Redis unavailable (%s) — notifications will not be queued in real-time", e)
+
     yield
+
     logger.info("Shutting down Reward Microservice...")
+    await disconnect_redis()
     await db.disconnect()
     logger.info("Rewards Service: 🔴 Database Disconnected Successfully")
 
@@ -37,7 +47,6 @@ app = FastAPI(
 )
 
 @app.get("/health", tags=["System"])
-@app.get("/", include_in_schema=False)
 async def health_check():
     logger.debug("Health check endpoint pinged.")
     return {
@@ -62,15 +71,3 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
 
 app.include_router(rewards_router.router)
-
-@app.get("/")
-@app.get("/health")
-def health_check():
-    # Using debug so health checks don't spam the info/production logs
-    logger.debug("Health check endpoint pinged.")
-    return {
-        "service": "Reward Microservice",
-        "status": "System Operational",
-        "version": "0.1.0",
-        "database": "Connected" if db.is_connected() else "Disconnected",
-    }

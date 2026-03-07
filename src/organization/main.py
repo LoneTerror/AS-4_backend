@@ -15,6 +15,9 @@ from src.organization.router import (
     audit_logs_router,
     seasonal_multipliers_router,
 )
+from src.notifications.redis_client import connect_redis, disconnect_redis
+from src.common.dependencies import close_auth_client
+from src.organization.router import departments_router, designations_router, department_types_router
 
 
 @asynccontextmanager
@@ -22,8 +25,18 @@ async def lifespan(app: FastAPI):
     print("Organization Service: Connecting to Database...")
     await connect_with_retry()
     print("Organization Service: 🟢 Database Connected")
+
+    try:
+        await connect_redis()
+        print("Organization Service: 🟢 Redis Connected")
+    except Exception as e:
+        print(f"Organization Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+
     yield
-    print("Organization Service: Disconnecting Database...")
+
+    print("Organization Service: Disconnecting...")
+    await close_auth_client()
+    await disconnect_redis()
     await db.disconnect()
     print("Organization Service: 🔴 Database Disconnected")
 
@@ -56,8 +69,8 @@ async def health_check():
     }
 
 API_PREFIX = "/v1"
-app.include_router(departments_router, prefix=API_PREFIX + "/org/departments", tags=["Departments"])
-app.include_router(designations_router, prefix=API_PREFIX + "/org/designations", tags=["Designations"])
+app.include_router(departments_router,    prefix=API_PREFIX + "/org/departments",     tags=["Departments"])
+app.include_router(designations_router,   prefix=API_PREFIX + "/org/designations",    tags=["Designations"])
 app.include_router(department_types_router, prefix=API_PREFIX + "/org/department-types", tags=["Department Types"])
 app.include_router(roles_router, prefix=API_PREFIX + "/org/roles", tags=["Roles"])
 app.include_router(statuses_router, prefix=API_PREFIX + "/org/statuses", tags=["Status Master"])

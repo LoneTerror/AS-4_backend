@@ -1,9 +1,15 @@
 generator client {
   provider                    = "prisma-client-py"
   binaryTargets               = ["native", "debian-openssl-3.0.x"]
+<<<<<<< HEAD
   recursive_type_depth        = "5"
   enable_experimental_decimal = "true"
   interface                   = "asyncio"
+=======
+  interface                   = "asyncio"
+  enable_experimental_decimal = "true"
+  recursive_type_depth        = "5"
+>>>>>>> 3823205d5502190a19f3c48ddb54e866a87d6057
 }
 
 datasource db {

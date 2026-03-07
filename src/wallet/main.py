@@ -3,8 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
-from src.prisma.client import db,connect_with_retry
+from src.prisma.client import db, connect_with_retry
 from src.wallet.routes import router as wallet_router
+from src.notifications.redis_client import connect_redis, disconnect_redis
+from src.common.dependencies import close_auth_client
 from src.common.middleware import (
     request_rate_limit_middleware,
     http_exception_handler,
@@ -17,7 +19,17 @@ from src.common.middleware import (
 async def lifespan(app: FastAPI):
     await connect_with_retry()
     print("Wallet Service: 🟢 Database Connected")
+
+    try:
+        await connect_redis()
+        print("Wallet Service: 🟢 Redis Connected")
+    except Exception as e:
+        print(f"Wallet Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+
     yield
+
+    await close_auth_client()
+    await disconnect_redis()
     await db.disconnect()
     print("Wallet Service: 🔴 Database Disconnected")
 
@@ -50,9 +62,4 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
-@app.get("/health", tags=["System"])
-async def health_check():
-    return {"status": "healthy", "service": "Wallet Service"}
-
-# Router
 app.include_router(wallet_router, prefix="/v1")

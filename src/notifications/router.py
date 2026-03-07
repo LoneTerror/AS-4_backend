@@ -1,6 +1,7 @@
+# src/notifications/router.py
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from prisma import Prisma
 
 from src.common.dependencies import get_current_user, CurrentUser
@@ -22,8 +23,13 @@ def get_db() -> Prisma:
     return db
 
 
-def get_notification_service(db: Prisma = Depends(get_db)) -> NotificationService:
-    return NotificationService(db)
+def get_notification_service(
+    request: Request,
+    db: Prisma = Depends(get_db),
+) -> NotificationService:
+    # Pass Redis from app.state so create_notification() enqueues automatically
+    r = getattr(request.app.state, "redis", None)
+    return NotificationService(db, redis=r)
 
 
 # ── Read routes ────────────────────────────────────────────────────────────────
@@ -40,10 +46,7 @@ async def list_notifications(
         limit=limit,
         unread_only=unread_only,
     )
-    return NotificationListResponse(
-        notifications=items,
-        total=len(items),
-    )
+    return NotificationListResponse(notifications=items, total=len(items))
 
 
 @router.get("/unread-count")
@@ -77,10 +80,7 @@ async def mark_one_read(
         employee_id=current_user.id,
     )
     if updated is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Notification not found.",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found.")
     return updated
 
 
@@ -92,20 +92,13 @@ async def send_custom_notification(
     current_user: CurrentUser = Depends(get_current_user),
     svc: NotificationService = Depends(get_notification_service),
 ):
-    """
-    Send a custom notification to one or more specific employees.
-    The email worker will pick these up automatically within its next poll cycle.
-    """
     created = await svc.create_bulk_notifications(
         employee_ids=[str(eid) for eid in payload.employee_ids],
         title=payload.title,
         message=payload.message,
         type=payload.type,
     )
-    return {
-        "created": len(created),
-        "notifications": created,
-    }
+    return {"created": len(created), "notifications": created}
 
 
 @router.post("/announcements", status_code=status.HTTP_201_CREATED, response_model=AnnouncementResponse)
@@ -114,28 +107,16 @@ async def send_announcement(
     current_user: CurrentUser = Depends(get_current_user),
     svc: NotificationService = Depends(get_notification_service),
 ):
-    """
-    Blast a notification to employees company-wide, or target by department
-    or a specific list of employee IDs.
-    """
     if payload.employee_ids:
         recipient_ids = [str(eid) for eid in payload.employee_ids]
     elif payload.department_ids:
-        recipient_ids = await svc.get_active_employee_ids_by_department(
-            payload.department_ids
-        )
+        recipient_ids = await svc.get_active_employee_ids_by_department(payload.department_ids)
         if not recipient_ids:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No active employees found in the specified department(s).",
-            )
+            raise HTTPException(status_code=404, detail="No active employees found in the specified department(s).")
     else:
         recipient_ids = await svc.get_all_active_employee_ids()
         if not recipient_ids:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No active employees found.",
-            )
+            raise HTTPException(status_code=404, detail="No active employees found.")
 
     await svc.create_bulk_notifications(
         employee_ids=recipient_ids,

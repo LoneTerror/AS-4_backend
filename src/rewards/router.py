@@ -58,13 +58,13 @@ async def update_category(
 
 @router.get("/categories", response_model=List[schemas.CategoryResponse])
 async def get_categories(
-    active_only: bool = True,
+    is_active: Optional[bool] = None, # None means fetch everything
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    logger.debug(f"User {current_user.id} fetching categories. Active only: {active_only}")
+    logger.debug(f"User {current_user.id} fetching categories. is_active: {is_active}")
     svc = service.RewardService(db)
-    return await svc.get_categories(active_only=active_only)
+    return await svc.get_categories(is_active=is_active)
 
 
 # --- CATALOG ENDPOINTS ---

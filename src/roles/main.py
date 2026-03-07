@@ -1,21 +1,34 @@
-# src/roles/main.py
-
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
+from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.prisma.client import db
 from src.roles.router import router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # -------- STARTUP --------
     print("Roles Service: Connecting to Database...")
     await db.connect()
     print("Roles Service: 🟢 Database Connected")
+
+    print("Roles Service: Connecting to Redis...")
+    await connect_redis()
+    print("Roles Service: 🟢 Redis Connected")
+
     yield
+
+    # -------- SHUTDOWN --------
+    print("Roles Service: Disconnecting Redis...")
+    await disconnect_redis()
+    print("Roles Service: 🔴 Redis Disconnected")
+
+    print("Roles Service: Disconnecting Database...")
     await db.disconnect()
+    print("Roles Service: 🔴 Database Disconnected")
 
 
 app = FastAPI(
