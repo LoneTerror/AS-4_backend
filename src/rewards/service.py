@@ -139,21 +139,31 @@ class RewardService:
         await invalidate_categories()
         return new_category
 
-    async def get_categories(self, active_only: bool = True):
+    async def get_categories(self, is_active: Optional[bool] = None):
         """
         Returns categories, using Redis cache when available.
-        active_only=True  → only is_active=True rows (default, used by most callers)
-        active_only=False → all rows (admin view)
+        is_active=True  → only is_active=True rows
+        is_active=False → only is_active=False rows
+        is_active=None  → all rows (admin view)
         """
-        key = _key_categories(active_only)
+        # Generate a dynamic cache key based on the filter
+        key = f"categories_list_active:{is_active}"
+        
         cached = await cache_get(key)
         if cached is not None:
             logger.debug("cache HIT %s", key)
             return cached  # plain list of dicts — Pydantic validation happens in router
 
-        where_clause = {"is_active": True} if active_only else {}
+        # --- FIXED LOGIC FOR ERR-442 ---
+        where_clause = {}
+        if is_active is not None:
+            # This safely handles both True and False strict boolean checks
+            where_clause = {"is_active": is_active}
+        # -------------------------------
+
         result = await self.db.reward_categories.find_many(where=where_clause)
         serialised = [r.model_dump() for r in result]
+        
         await cache_set(key, serialised, ttl=TTL_CATEGORIES)
         return result
 
