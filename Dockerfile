@@ -24,7 +24,7 @@ RUN npm install -g prisma@6 && npm cache clean --force
 
 # Copy ONLY the Prisma schema first to cache generation
 # (Adjust the path if your schema is in a 'prisma/' directory)
-COPY schema.prisma . 
+COPY prisma/schema.prisma ./prisma/
 
 ENV XDG_CACHE_HOME="/app/.cache" \
     PRISMA_HOME="/app/.prisma" \
