@@ -55,12 +55,16 @@ RUN npm install -g pm2 && npm cache clean --force
 # Create non-root user
 RUN addgroup --system appgroup && adduser --system --group appuser
 
-# Copy application and venv from builder with correct ownership in one step
+# Copy application and venv from builder
 COPY --from=builder --chown=appuser:appgroup /app /app
 
+# CRITICAL FIX: Explicitly create the .pm2 directory and grant ownership
+RUN mkdir -p /app/.pm2 && chown -R appuser:appgroup /app/.pm2
+
+# Now switch to the non-root user
 USER appuser
 
-# CRITICAL FIX: Ensure the Python virtual environment is in the PATH for runtime
+# Ensure the Python virtual environment is in the PATH for runtime
 ENV PATH="/app/venv/bin:$PATH"
 
 ENV XDG_CACHE_HOME="/app/.cache" \
