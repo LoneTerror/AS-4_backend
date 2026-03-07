@@ -69,10 +69,12 @@ pipeline {
         //                     sh 'docker network create zap-net || true'
         //                     withCredentials([
         //                         string(credentialsId: 'rr-backend-db-url', variable: 'DATABASE_URL'),
+        //                         string(credentialsId: 'rr-backend-redis-url',variable: 'REDIS_URL'),
         //                         string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
         //                         string(credentialsId: 'rr-backend-algorithm', variable: 'ALGORITHM'),
         //                         string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
-        //                         string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME')
+        //                         string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME'),
+        //                         string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
         //                         ]) {
         //                             try {
         //                                 sh """
@@ -127,8 +129,10 @@ pipeline {
                     
                     withCredentials([
                         string(credentialsId: 'rr-backend-db-url', variable: 'DATABASE_URL'),
+                        string(credentialsId: 'rr-backend-redis-url',variable: 'REDIS_URL'),
                         string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
                         string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
+                        string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
                         string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME')
                     ]) {
                         sh """
@@ -137,11 +141,13 @@ pipeline {
                         --restart always \
                         -p 8000:8000 \
                         -e DATABASE_URL="${DATABASE_URL}" \
+                        -e REDIS_URL="${REDIS_URL}" \
                         -e SECRET_KEY="${SECRET_KEY}" \
                         -e SMTP_PASSWORD="${SMTP_PASSWORD}" \
                         -e SMTP_USERNAME="${SMTP_USERNAME}" \
                         -e SMTP_HOST="smtp.gmail.com" \
                         -e SMTP_PORT="587" \
+                        -e SMTP_FROM_EMAIL="${SMTP_FROM_EMAIL}"\
                         -e SMTP_USE_TLS="true" \
                         -e SMTP_USE_SSL="false" \
                         -e FRONTEND_URL="https://localhost:3000" \
