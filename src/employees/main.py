@@ -1,10 +1,12 @@
+# src/employees/main.py
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from contextlib import asynccontextmanager
-import asyncio
-import logging
 
 from src.prisma.client import db, connect_with_retry
 from src.employees.router import router as emp_router
@@ -12,17 +14,30 @@ from src.notifications.router import router as notifications_router
 from src.notifications.email_sender import EmailSender, SMTPConfig
 from src.notifications.slack_sender import SlackSender, SlackConfig
 from src.notifications.worker import email_worker_loop, celebration_worker_loop
-from src.webhooks.router import router as webhooks_router  # ← new
+from src.notifications.redis_client import connect_redis, disconnect_redis, get_redis
+from src.notifications.service import NotificationService
+from src.webhooks.router import router as webhooks_router
 
 logger = logging.getLogger(__name__)
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ── Database ───────────────────────────────────────────────────────────
     print("Employee Service: Connecting to Database...")
     await connect_with_retry()
     print("Employee Service: 🟢 Database Connected")
+
+    # ── Redis ──────────────────────────────────────────────────────────────
+    try:
+        r = await connect_redis()
+        print("Employee Service: 🔴 Redis Connected")
+    except Exception as exc:
+        logger.warning(
+            "Redis unavailable (%s) — workers will fall back to DB recovery scan on next restart.",
+            exc,
+        )
+        r = None
 
     # ── Email ──────────────────────────────────────────────────────────────
     smtp_config = SMTPConfig.from_env()
@@ -37,22 +52,36 @@ async def lifespan(app: FastAPI):
     except KeyError as e:
         logger.warning("Slack disabled — missing env var: %s. Continuing without Slack.", e)
 
+    # ── Inject Redis into NotificationService (used by routers) ───────────
+    # The module-level _notif in employees/service.py doesn't have Redis context,
+    # so we store the redis client on app.state for router-level DI if needed.
+    app.state.redis = r
+
     # ── Workers ────────────────────────────────────────────────────────────
-    worker_task = asyncio.create_task(
-        email_worker_loop(db, email_sender, slack_sender),
-        name="email_notification_worker",
-    )
-    celebration_task = asyncio.create_task(
-        celebration_worker_loop(db, email_sender, slack_sender),
-        name="celebration_notification_worker",
-    )
-    print("Employee Service: 📧 Email worker started")
-    print("Employee Service: 🎉 Celebration worker started")
+    if r is not None:
+        worker_task = asyncio.create_task(
+            email_worker_loop(db, email_sender, r, slack_sender),
+            name="email_notification_worker",
+        )
+        celebration_task = asyncio.create_task(
+            celebration_worker_loop(db, email_sender, r, slack_sender),
+            name="celebration_notification_worker",
+        )
+        print("Employee Service: 📧 Email worker started (Redis queue mode)")
+        print("Employee Service: 🎉 Celebration worker started")
+    else:
+        # Redis unavailable — workers still start but use DB recovery only
+        from src.notifications.worker import _recover_pending
+        logger.warning("Workers not started — Redis unavailable. Notifications will queue in DB.")
+        worker_task = None
+        celebration_task = None
 
     yield
 
     # ── Shutdown ───────────────────────────────────────────────────────────
     for task in (worker_task, celebration_task):
+        if task is None:
+            continue
         task.cancel()
         try:
             await task
@@ -60,6 +89,7 @@ async def lifespan(app: FastAPI):
             pass
 
     print("Employee Service: 📧 Workers stopped")
+    await disconnect_redis()
     print("Employee Service: Disconnecting Database...")
     await db.disconnect()
     print("Employee Service: 🔴 Database Disconnected")
@@ -86,18 +116,35 @@ app.add_middleware(
 API_PREFIX = "/v1"
 app.include_router(emp_router, prefix=API_PREFIX + "/employees", tags=["Employees"])
 app.include_router(notifications_router, tags=["Notifications"])
-app.include_router(webhooks_router, tags=["Webhooks"])  # ← new
+app.include_router(webhooks_router, tags=["Webhooks"])
 
 
 @app.get("/health", tags=["System"])
 async def health_check():
-    return {"status": "healthy", "service": "Employee Service"}
+    r = app.state.redis
+    redis_ok = False
+    if r:
+        try:
+            await r.ping()
+            redis_ok = True
+        except Exception:
+            pass
+    return {
+        "status": "healthy",
+        "service": "Employee Service",
+        "redis": "connected" if redis_ok else "unavailable",
+    }
 
 
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
-    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
     schema.setdefault("components", {})
     schema["components"]["securitySchemes"] = {
         "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}

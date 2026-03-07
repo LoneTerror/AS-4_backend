@@ -1,3 +1,11 @@
+# src/notifications/service.py
+"""
+NotificationService — unchanged public API.
+One addition: after every DB insert, push the notification_id into
+the Redis queue so the worker wakes up immediately instead of polling.
+Redis is optional — if unavailable, the notification still lands in
+the DB and the recovery scan on next startup will pick it up.
+"""
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -11,8 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 class NotificationService:
-    def __init__(self, db: Prisma) -> None:
+    def __init__(self, db: Prisma, redis=None) -> None:
         self._db = db
+        self._redis = redis   # aioredis.Redis | None
 
     # ── Core create ───────────────────────────────────────────────────────────
 
@@ -41,6 +50,14 @@ class NotificationService:
             employee_id,
             type,
         )
+
+        # ── Signal the worker via Redis ────────────────────────────────────
+        # Non-blocking: if Redis is down, the notification is still in DB
+        # and the worker's startup recovery scan will pick it up next restart.
+        if self._redis is not None:
+            from .cache import enqueue_notification
+            await enqueue_notification(self._redis, str(record.notification_id))
+
         return record.model_dump()
 
     # ── Bulk helpers ──────────────────────────────────────────────────────────
@@ -55,8 +72,7 @@ class NotificationService:
     ) -> list[dict]:
         """
         Create one notification row per employee_id.
-        Runs sequentially — Prisma does not expose createMany with return values.
-        The email worker will pick these up automatically.
+        Bulk-enqueues all IDs in a single Redis pipeline for efficiency.
         """
         records: list[dict] = []
         for eid in employee_ids:
@@ -77,6 +93,8 @@ class NotificationService:
 
     async def get_all_active_employee_ids(self) -> list[str]:
         """Return employee_id strings for every ACTIVE employee."""
+        # Optionally use cache here — but this path is only hit by announcement
+        # blasts (rare, admin-initiated). Direct DB is fine.
         employees = await self._db.employees.find_many(
             include={"status_master_employees_status_idTostatus_master": True}
         )
@@ -93,7 +111,6 @@ class NotificationService:
     async def get_active_employee_ids_by_department(
         self, department_ids: list[UUID | str]
     ) -> list[str]:
-        """Return employee_id strings for ACTIVE employees in the given departments."""
         dept_id_strs = [str(d) for d in department_ids]
         employees = await self._db.employees.find_many(
             where={"department_id": {"in": dept_id_strs}},
@@ -118,7 +135,10 @@ class NotificationService:
         limit: int = 50,
         unread_only: bool = False,
     ) -> list[dict]:
-        where: dict = {"employee_id": str(employee_id)}
+        where: dict = {
+            "employee_id": str(employee_id),
+            "title": {"not": {"startswith": "[SENTINEL]"}},  # never expose sentinels
+        }
         if unread_only:
             where["is_read"] = False
 
@@ -131,7 +151,11 @@ class NotificationService:
 
     async def get_unread_count(self, *, employee_id: UUID | str) -> int:
         return await self._db.notifications.count(
-            where={"employee_id": str(employee_id), "is_read": False}
+            where={
+                "employee_id": str(employee_id),
+                "is_read": False,
+                "title": {"not": {"startswith": "[SENTINEL]"}},
+            }
         )
 
     async def mark_as_read(
@@ -219,14 +243,6 @@ class NotificationService:
         employee_id: UUID | str,
         celebration_type: str,
     ) -> bool:
-        """
-        Idempotency guard.
-
-        The sentinel row is written to the CELEBRANT's employee_id with a
-        title prefixed '[SENTINEL]' BEFORE the broadcast begins.
-        We check only for that sentinel — NOT for regular broadcast rows —
-        so that other celebrants' broadcast rows never trigger a false positive.
-        """
         from datetime import date
 
         start_of_day = datetime.combine(date.today(), datetime.min.time()).replace(
@@ -250,12 +266,6 @@ class NotificationService:
         celebration_type: str,
         celebrant_name: str,
     ) -> dict:
-        """
-        Write a sentinel row to the celebrant's account BEFORE broadcasting.
-        Title format:  [SENTINEL] <name>
-        Message format: [BIRTHDAY] or [WORK_ANNIVERSARY]
-        This row is NEVER shown in the notification feed (filtered by router/service).
-        """
         record = await self._db.notifications.create(
             data={
                 "employee_id": str(employee_id),

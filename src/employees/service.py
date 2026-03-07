@@ -12,7 +12,20 @@ from src.notifications.schemas import NotificationType
 
 
 logger = logging.getLogger(__name__)
-_notif = NotificationService(db)
+
+
+def _get_notif_service() -> NotificationService:
+    """
+    Always returns a NotificationService with the live Redis client.
+    Called at request time (not import time) so Redis is guaranteed
+    to be connected when this runs.
+    """
+    try:
+        from src.notifications.redis_client import get_redis
+        r = get_redis()
+    except RuntimeError:
+        r = None
+    return NotificationService(db, redis=r)
 
 # Password Hashing Config
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -318,7 +331,7 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
         # guaranteed to exist before we reference their ID.
         # Failure here never rolls back the employee creation.
         try:
-            await _notif.create_notification(
+            await _get_notif_service().create_notification(
                 employee_id=new_emp.employee_id,
                 title="Welcome to the platform! 🎉",
                 message=(

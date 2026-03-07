@@ -5,6 +5,8 @@ from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 
 from src.prisma.client import db, connect_with_retry
+from src.notifications.redis_client import connect_redis, disconnect_redis
+from src.common.dependencies import close_auth_client
 from src.organization.router import departments_router, designations_router, department_types_router
 
 
@@ -13,8 +15,18 @@ async def lifespan(app: FastAPI):
     print("Organization Service: Connecting to Database...")
     await connect_with_retry()
     print("Organization Service: 🟢 Database Connected")
+
+    try:
+        await connect_redis()
+        print("Organization Service: 🟢 Redis Connected")
+    except Exception as e:
+        print(f"Organization Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+
     yield
-    print("Organization Service: Disconnecting Database...")
+
+    print("Organization Service: Disconnecting...")
+    await close_auth_client()
+    await disconnect_redis()
     await db.disconnect()
     print("Organization Service: 🔴 Database Disconnected")
 
@@ -41,8 +53,8 @@ async def health_check():
     return {"status": "healthy", "service": "Organization Service"}
 
 API_PREFIX = "/v1"
-app.include_router(departments_router, prefix=API_PREFIX + "/org/departments", tags=["Departments"])
-app.include_router(designations_router, prefix=API_PREFIX + "/org/designations", tags=["Designations"])
+app.include_router(departments_router,    prefix=API_PREFIX + "/org/departments",     tags=["Departments"])
+app.include_router(designations_router,   prefix=API_PREFIX + "/org/designations",    tags=["Designations"])
 app.include_router(department_types_router, prefix=API_PREFIX + "/org/department-types", tags=["Department Types"])
 
 def custom_openapi():

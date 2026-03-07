@@ -1,4 +1,4 @@
-"""Service layer for the dashboard analytics endpoints."""
+"""Service layer for the dashboard analytics endpoints — with Redis caching."""
 import asyncio
 import logging
 import traceback
@@ -37,15 +37,59 @@ from src.analytics.schemas import (
     TeamReport,
     TeamSummary,
 )
+from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
 
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TTLs (seconds)
+# ─────────────────────────────────────────────────────────────────────────────
+TTL_TEAMS        = 300   # 5 min  — heavy aggregation, changes rarely
+TTL_PLATFORM     = 120   # 2 min  — counters, ok to be slightly stale
+TTL_LEADERBOARD  = 300   # 5 min  — points rarely change mid-session
+TTL_REVIEWS      = 60    # 1 min  — per-user, invalidated on new review
 
-# ──────────────────────────────────────────────────────────────
-#  Recent reviews
-# ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Cache-key helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _key_reviews(employee_id: str)   -> str: return f"dashboard:reviews:{employee_id}"
+def _key_leaderboard()               -> str: return "dashboard:leaderboard"
+def _key_platform(employee_id: str)  -> str: return f"dashboard:platform:{employee_id}"
+def _key_teams()                     -> str: return "dashboard:teams"
+def _key_team(dept_id: str)          -> str: return f"dashboard:team:{dept_id}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public invalidation helpers  (called by other services after writes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def invalidate_reviews(employee_id: str) -> None:
+    """Call after a new review is submitted for *employee_id*."""
+    await cache_delete(_key_reviews(employee_id))
+    await cache_delete(_key_platform(employee_id))
+
+async def invalidate_leaderboard() -> None:
+    """Call after points are awarded / redeemed."""
+    await cache_delete(_key_leaderboard())
+
+async def invalidate_teams() -> None:
+    """Call after department membership changes."""
+    await cache_delete(_key_teams())
+    await invalidate_pattern("dashboard:team:*")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Recent reviews
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def get_recent_reviews_list(employee_id: str) -> List[RecentReview]:
+    key = _key_reviews(employee_id)
+    cached = await cache_get(key)
+    if cached is not None:
+        logger.debug("cache HIT %s", key)
+        return [RecentReview(**r) for r in cached]
+
     raw = await get_recent_reviews(employee_id, limit=5)
     out = []
     for r in raw:
@@ -57,14 +101,22 @@ async def get_recent_reviews_list(employee_id: str) -> List[RecentReview]:
             comment=r.comment,
             review_at=r.review_at,
         ))
+
+    await cache_set(key, [o.model_dump() for o in out], ttl=TTL_REVIEWS)
     return out
 
 
-# ──────────────────────────────────────────────────────────────
-#  Leaderboard
-# ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Leaderboard
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def get_leaderboard_list() -> List[LeaderboardEntry]:
+    key = _key_leaderboard()
+    cached = await cache_get(key)
+    if cached is not None:
+        logger.debug("cache HIT %s", key)
+        return [LeaderboardEntry(**e) for e in cached]
+
     raw = await get_leaderboard(limit=10)
     out = []
     for rank, w in enumerate(raw, start=1):
@@ -77,14 +129,22 @@ async def get_leaderboard_list() -> List[LeaderboardEntry]:
             department=dept.department_name if dept else "N/A",
             total_earned_points=w.total_earned_points,
         ))
+
+    await cache_set(key, [o.model_dump() for o in out], ttl=TTL_LEADERBOARD)
     return out
 
 
-# ──────────────────────────────────────────────────────────────
-#  Platform stats
-# ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Platform stats
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def get_platform_stats(employee_id: str) -> PlatformStats:
+    key = _key_platform(employee_id)
+    cached = await cache_get(key)
+    if cached is not None:
+        logger.debug("cache HIT %s", key)
+        return PlatformStats(**cached)
+
     (
         user_points, pts_this, pts_last,
         rewards_total, rewards_this, rewards_last,
@@ -103,21 +163,21 @@ async def get_platform_stats(employee_id: str) -> PlatformStats:
         get_active_users_count(),
         get_active_users_count_last_month(),
     )
-    return PlatformStats(
-        total_points=MetricWithGrowth(value=user_points, this_month=pts_this, last_month=pts_last),
-        rewards_redeemed=MetricWithGrowth(value=rewards_total, this_month=rewards_this, last_month=rewards_last),
-        reviews_received=MetricWithGrowth(value=reviews_total, this_month=reviews_this, last_month=reviews_last),
-        active_users=MetricWithGrowth(value=active_now, this_month=active_now, last_month=active_last),
+
+    result = PlatformStats(
+        total_points    =MetricWithGrowth(value=user_points,    this_month=pts_this,     last_month=pts_last),
+        rewards_redeemed=MetricWithGrowth(value=rewards_total,  this_month=rewards_this, last_month=rewards_last),
+        reviews_received=MetricWithGrowth(value=reviews_total,  this_month=reviews_this, last_month=reviews_last),
+        active_users    =MetricWithGrowth(value=active_now,     this_month=active_now,   last_month=active_last),
     )
 
+    await cache_set(key, result.model_dump(), ttl=TTL_PLATFORM)
+    return result
 
-# ──────────────────────────────────────────────────────────────
-#  Admin — Team Reports
-#
-#  Key design: raw Prisma model objects are passed directly
-#  between query functions — no UUID serialisation at all.
-#  Each employee's queries run concurrently via asyncio.gather.
-# ──────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin — Team Reports
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_scores(members_raw: list) -> list:
     if not members_raw:
@@ -138,12 +198,6 @@ def _compute_scores(members_raw: list) -> list:
 
 
 async def _build_member(emp, credit_type_ids: list) -> dict:
-    """
-    Build stats for one employee.
-    emp and wallet are raw Prisma objects — their .employee_id /
-    .wallet_id fields are passed directly to the next query without
-    any str() conversion, avoiding UUID type mismatch errors.
-    """
     wallet = await get_wallet_for_employee(emp)
 
     if wallet:
@@ -177,17 +231,10 @@ async def _build_member(emp, credit_type_ids: list) -> dict:
 
 
 async def _dept_members(dept) -> list:
-    """
-    Returns scored member dicts for one department.
-    Passes the raw dept object to get_employees_in_department
-    so department_id is never converted to str.
-    """
     employees = await get_employees_in_department(dept)
     if not employees:
         return []
-
     credit_type_ids = await get_credit_type_ids()
-
     members_raw = await asyncio.gather(
         *[_build_member(emp, credit_type_ids) for emp in employees]
     )
@@ -195,6 +242,12 @@ async def _dept_members(dept) -> list:
 
 
 async def get_teams_summary() -> List[TeamSummary]:
+    key = _key_teams()
+    cached = await cache_get(key)
+    if cached is not None:
+        logger.debug("cache HIT %s", key)
+        return [TeamSummary(**s) for s in cached]
+
     departments = await get_all_departments()
     logger.info("[teams_summary] %d departments", len(departments))
 
@@ -223,10 +276,17 @@ async def get_teams_summary() -> List[TeamSummary]:
             )
         )
 
+    await cache_set(key, [s.model_dump() for s in summaries], ttl=TTL_TEAMS)
     return summaries
 
 
 async def get_team_report(department_id: str) -> TeamReport | None:
+    key = _key_team(department_id)
+    cached = await cache_get(key)
+    if cached is not None:
+        logger.debug("cache HIT %s", key)
+        return TeamReport(**cached)
+
     dept = await get_department_by_id(department_id)
     if not dept:
         return None
@@ -234,7 +294,7 @@ async def get_team_report(department_id: str) -> TeamReport | None:
     scored = await _dept_members(dept)
 
     if not scored:
-        return TeamReport(
+        report = TeamReport(
             department_id=dept.department_id,
             department_name=dept.department_name,
             total_members=0,
@@ -244,19 +304,21 @@ async def get_team_report(department_id: str) -> TeamReport | None:
             avg_performance_score=0.0,
             members=[],
         )
+    else:
+        scored.sort(key=lambda m: m["performance_score"], reverse=True)
+        members = [TeamMemberReport(**m) for m in scored]
+        report = TeamReport(
+            department_id=dept.department_id,
+            department_name=dept.department_name,
+            total_members=len(members),
+            total_points=sum(m.total_earned_points for m in members),
+            total_reviews=sum(m.reviews_received   for m in members),
+            total_rewards=sum(m.rewards_redeemed   for m in members),
+            avg_performance_score=round(
+                sum(m.performance_score for m in members) / len(members), 1
+            ),
+            members=members,
+        )
 
-    scored.sort(key=lambda m: m["performance_score"], reverse=True)
-    members = [TeamMemberReport(**m) for m in scored]
-
-    return TeamReport(
-        department_id=dept.department_id,
-        department_name=dept.department_name,
-        total_members=len(members),
-        total_points=sum(m.total_earned_points for m in members),
-        total_reviews=sum(m.reviews_received   for m in members),
-        total_rewards=sum(m.rewards_redeemed   for m in members),
-        avg_performance_score=round(
-            sum(m.performance_score for m in members) / len(members), 1
-        ),
-        members=members,
-    )
+    await cache_set(key, report.model_dump(), ttl=TTL_TEAMS)
+    return report
