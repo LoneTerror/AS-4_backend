@@ -63,15 +63,14 @@ app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://www.aabhar.top").split(",")
+origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://backend.aabhar.top").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # Best practice: list specific methods if possible
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(recognition_router, prefix="/v1", tags=["Reviews"])

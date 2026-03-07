@@ -57,15 +57,14 @@ async def health_check():
         "database": "Connected" if db.is_connected() else "Disconnected",
     }
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://www.aabhar.top").split(",")
+origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://backend.aabhar.top").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # Best practice: list specific methods if possible
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
 )
 
 app.middleware("http")(request_rate_limit_middleware)
