@@ -1,3 +1,4 @@
+import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,9 +19,9 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        print("Organization Service: 🟢 Redis Connected")
+        print("Organization Service: 💚 Redis Connected")
     except Exception as e:
-        print(f"Organization Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+        print(f"Organization Service: 💔 Redis Disconnected ({e}) — caching disabled")
 
     yield
 
@@ -40,12 +41,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://www.aabhar.top").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8001", "http://localhost:8003", "http://localhost:8005"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"], # Best practice: list specific methods if possible
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 @app.get("/health", tags=["System"])

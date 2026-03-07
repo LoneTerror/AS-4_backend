@@ -1,3 +1,4 @@
+import os
 import asyncio
 
 from fastapi import FastAPI, HTTPException
@@ -28,9 +29,9 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        print("Recognition Service: 🟢 Redis Connected")
+        print("Recognition Service: 💚 Redis Connected")
     except Exception as e:
-        print(f"Recognition Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+        print(f"Recognition Service: 💔 Redis Disconnected ({e}) — caching disabled")
 
     sender = EmailSender(SMTPConfig.from_env())
     digest_task = asyncio.create_task(digest_worker_loop(db, sender))
@@ -62,13 +63,15 @@ app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://www.aabhar.top").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
-    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    allow_methods=["*"], # Best practice: list specific methods if possible
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(recognition_router, prefix="/v1", tags=["Reviews"])

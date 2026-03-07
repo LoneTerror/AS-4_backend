@@ -1,3 +1,4 @@
+import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,14 +18,14 @@ async def lifespan(app: FastAPI):
 
     print("Roles Service: Connecting to Redis...")
     await connect_redis()
-    print("Roles Service: 🟢 Redis Connected")
+    print("Roles Service: 💚 Redis Connected")
 
     yield
 
     # -------- SHUTDOWN --------
     print("Roles Service: Disconnecting Redis...")
     await disconnect_redis()
-    print("Roles Service: 🔴 Redis Disconnected")
+    print("Roles Service: 💔 Redis Disconnected")
 
     print("Roles Service: Disconnecting Database...")
     await db.disconnect()
@@ -39,12 +40,15 @@ app = FastAPI(
     openapi_url="/v1/openapi.json",
 )
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://www.aabhar.top").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"], # Best practice: list specific methods if possible
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(router)

@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -23,9 +24,9 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        logger.info("Rewards Service: 🔴 Redis Connected")
+        logger.info("Rewards Service: 💚 Redis Connected")
     except Exception as e:
-        logger.warning("Rewards Service: Redis unavailable (%s) — notifications will not be queued in real-time", e)
+        logger.warning("Rewards Service: 💔 Redis Disconnected (%s) — notifications will not be queued in real-time", e)
 
     yield
 
@@ -56,13 +57,15 @@ async def health_check():
         "database": "Connected" if db.is_connected() else "Disconnected",
     }
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://www.aabhar.top").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
-    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    allow_methods=["*"], # Best practice: list specific methods if possible
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 app.middleware("http")(request_rate_limit_middleware)

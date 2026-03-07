@@ -1,5 +1,6 @@
 # src/employees/main.py
 import asyncio
+import os
 import logging
 from contextlib import asynccontextmanager
 
@@ -31,10 +32,10 @@ async def lifespan(app: FastAPI):
     # ── Redis ──────────────────────────────────────────────────────────────
     try:
         r = await connect_redis()
-        print("Employee Service: 🔴 Redis Connected")
+        print("Employee Service: 💚 Redis Connected")
     except Exception as exc:
         logger.warning(
-            "Redis unavailable (%s) — workers will fall back to DB recovery scan on next restart.",
+            "💔 Redis Disconnected (%s) — workers will fall back to DB recovery scan on next restart.",
             exc,
         )
         r = None
@@ -105,12 +106,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top,https://www.aabhar.top").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8001", "http://localhost:8005"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"], # Best practice: list specific methods if possible
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 API_PREFIX = "/v1"
