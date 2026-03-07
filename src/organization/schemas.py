@@ -1,7 +1,8 @@
 from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, Any
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal
 
 
 # ─────────────────────────────────────────────
@@ -168,3 +169,157 @@ class UpdateDesignationRequest(BaseModel):
     @classmethod
     def uppercase_code(cls, v: Optional[str]) -> Optional[str]:
         return v.upper() if v else v
+
+
+# ─────────────────────────────────────────────
+# 5.4 Roles Schemas
+# ─────────────────────────────────────────────
+
+class RoleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    role_id: UUID
+    role_name: str
+    role_code: str
+    description: Optional[str] = None
+    reviewer_weight: Decimal
+    created_at: datetime
+
+
+class RoleDetailResponse(RoleResponse):
+    updated_at: Optional[datetime] = None
+
+
+class CreateRoleRequest(BaseModel):
+    role_name: str = Field(..., max_length=100)
+    role_code: str = Field(..., max_length=50)
+    description: Optional[str] = None
+    reviewer_weight: Optional[Decimal] = Field(default=Decimal("1.0000"), gt=0)
+
+    @field_validator("role_code")
+    @classmethod
+    def uppercase_code(cls, v: str) -> str:
+        return v.upper()
+
+
+class UpdateRoleRequest(BaseModel):
+    role_name: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = None
+    reviewer_weight: Optional[Decimal] = Field(None, gt=0)
+
+
+class AssignRoleRequest(BaseModel):
+    employee_id: UUID
+
+
+class AssignRoleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    employee_role_id: UUID
+    employee_id: UUID
+    role_id: UUID
+    role_code: str
+    assigned_at: datetime
+    assigned_by: UUID
+    is_active: bool
+
+
+class RevokeRoleResponse(BaseModel):
+    message: str
+    employee_id: UUID
+    role_id: UUID
+    revoked_at: datetime
+
+
+# ─────────────────────────────────────────────
+# 5.5 Status Master Schemas
+# ─────────────────────────────────────────────
+
+class StatusResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    status_id: UUID
+    status_code: str
+    status_name: str
+    description: Optional[str] = None
+    entity_type: str
+    created_at: datetime
+
+
+class StatusDetailResponse(StatusResponse):
+    updated_at: Optional[datetime] = None
+
+
+class CreateStatusRequest(BaseModel):
+    status_code: str = Field(..., max_length=50)
+    status_name: str = Field(..., max_length=100)
+    description: Optional[str] = None
+    entity_type: str = Field(..., max_length=50)
+
+    @field_validator("status_code")
+    @classmethod
+    def uppercase_status_code(cls, v: str) -> str:
+        return v.upper()
+
+    @field_validator("entity_type")
+    @classmethod
+    def validate_entity_type(cls, v: str) -> str:
+        allowed = {"EMPLOYEE", "REVIEW", "TRANSACTION", "REWARD"}
+        if v.upper() not in allowed:
+            raise ValueError(f"entity_type must be one of: {', '.join(allowed)}")
+        return v.upper()
+
+
+class UpdateStatusRequest(BaseModel):
+    status_name: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = None
+
+
+# ─────────────────────────────────────────────
+# 5.6 Audit Log Schemas
+# ─────────────────────────────────────────────
+
+class AuditLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    audit_id: UUID
+    table_name: str
+    record_id: UUID
+    operation_type: str
+    old_values: Optional[Any] = None
+    new_values: Optional[Any] = None
+    performed_by: UUID
+    performed_at: datetime
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+
+
+class AuditLogListResponse(BaseModel):
+    data: List[AuditLogResponse]
+    pagination: PaginationMeta
+
+
+# ─────────────────────────────────────────────
+# 5.7 Seasonal Multiplier Schemas
+# ─────────────────────────────────────────────
+
+class SeasonalMultiplierResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    seasonal_multiplier_id: UUID
+    quarter: int
+    label: str
+    multiplier: Decimal
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
+    created_at: datetime
+
+
+class CreateSeasonalMultiplierRequest(BaseModel):
+    quarter: int = Field(..., ge=1, le=4)
+    label: str = Field(..., max_length=50)
+    multiplier: Decimal = Field(..., gt=0)
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
+
+
+class UpdateSeasonalMultiplierRequest(BaseModel):
+    label: Optional[str] = Field(None, max_length=50)
+    multiplier: Optional[Decimal] = Field(None, gt=0)
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None

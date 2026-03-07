@@ -3,9 +3,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from src.prisma.client import db, connect_with_retry
-from src.organization.router import departments_router, designations_router, department_types_router
+from src.organization.router import (
+    departments_router,
+    designations_router,
+    department_types_router,
+    roles_router,
+    statuses_router,
+    audit_logs_router,
+    seasonal_multipliers_router,
+)
 
 
 @asynccontextmanager
@@ -38,12 +47,22 @@ app.add_middleware(
 
 @app.get("/health", tags=["System"])
 async def health_check():
-    return {"status": "healthy", "service": "Organization Service"}
+    return {
+        "status": "healthy",
+        "service": "Organization Service",
+        "version": "1.0.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "dependencies": {"database": "connected"},
+    }
 
 API_PREFIX = "/v1"
 app.include_router(departments_router, prefix=API_PREFIX + "/org/departments", tags=["Departments"])
 app.include_router(designations_router, prefix=API_PREFIX + "/org/designations", tags=["Designations"])
 app.include_router(department_types_router, prefix=API_PREFIX + "/org/department-types", tags=["Department Types"])
+app.include_router(roles_router, prefix=API_PREFIX + "/org/roles", tags=["Roles"])
+app.include_router(statuses_router, prefix=API_PREFIX + "/org/statuses", tags=["Status Master"])
+app.include_router(audit_logs_router, prefix=API_PREFIX + "/org/audit-logs", tags=["Audit Logs"])
+app.include_router(seasonal_multipliers_router, prefix=API_PREFIX + "/org/seasonal-multipliers", tags=["Seasonal Multipliers"])
 
 def custom_openapi():
     if app.openapi_schema:
