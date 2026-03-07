@@ -57,7 +57,9 @@ for name, app, port in services:
         "uvicorn", app,
         "--host", "0.0.0.0",
         "--port", str(port),
-        "--reload"
+        "--proxy-headers",             
+        "--forwarded-allow-ips", "*",  
+        # "--reload"                   
     ])
     processes.append((name, p, port))
     healthy = wait_for_service(name, port, HEALTH_TIMEOUT)
