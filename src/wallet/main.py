@@ -56,12 +56,12 @@ app.add_exception_handler(HTTPException, http_exception_handler)
 
 origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top").split(",")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 app.include_router(wallet_router, prefix="/v1")

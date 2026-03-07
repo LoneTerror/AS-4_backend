@@ -59,13 +59,13 @@ async def health_check():
 
 origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top").split(",")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(HTTPException, http_exception_handler)

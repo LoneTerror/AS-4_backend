@@ -43,13 +43,13 @@ app = FastAPI(
 
 origins = os.getenv("ALLOWED_ORIGINS", "https://aabhar.top").split(",")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 @app.get("/health", tags=["System"])
 async def health_check():
