@@ -3,7 +3,7 @@ from fastapi import HTTPException, status
 from prisma.errors import UniqueViolationError
 from src.prisma.client import db
 from datetime import datetime, timezone
-from src.wallet.dependencies import CurrentUser
+from src.common.dependencies import CurrentUser
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
 
@@ -66,7 +66,6 @@ async def create_transaction(data, current_user: CurrentUser):
 
     status_id = success_status.status_id
 
-    # Debit check
     if not txn_type.is_credit and wallet.available_points < amount:
         raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
@@ -85,27 +84,27 @@ async def create_transaction(data, current_user: CurrentUser):
         async with db.tx() as transaction:
             new_txn = await transaction.transactions.create(
                 data={
-                    "wallet_id":          wallet_id,
-                    "amount":             amount,
+                    "wallet_id":           wallet_id,
+                    "amount":              amount,
                     "transaction_type_id": txn_type_id,
-                    "status_id":          status_id,
-                    "description":        data.description,
-                    "reference_number":   data.reference_number,
-                    "created_by":         created_by,
-                    "updated_by":         created_by,
-                    "created_at":         datetime.now(timezone.utc),
-                    "updated_at":         datetime.now(timezone.utc),
+                    "status_id":           status_id,
+                    "description":         data.description,
+                    "reference_number":    data.reference_number,
+                    "created_by":          created_by,
+                    "updated_by":          created_by,
+                    "created_at":          datetime.now(timezone.utc),
+                    "updated_at":          datetime.now(timezone.utc),
                 }
             )
 
             result = await transaction.wallets.update_many(
                 where={"wallet_id": wallet_id, "version": wallet.version},
                 data={
-                    "available_points":   new_available,
-                    "redeemed_points":    new_redeemed,
+                    "available_points":    new_available,
+                    "redeemed_points":     new_redeemed,
                     "total_earned_points": new_total,
-                    "version":            wallet.version + 1,
-                    "updated_by":         created_by,
+                    "version":             wallet.version + 1,
+                    "updated_by":          created_by,
                 }
             )
 
@@ -115,7 +114,6 @@ async def create_transaction(data, current_user: CurrentUser):
                     detail="Wallet was updated by another transaction."
                 )
 
-        # ── Notify wallet owner ────────────────────────────────────────────
         try:
             direction = "credited to" if txn_type.is_credit else "debited from"
             emoji     = "💰" if txn_type.is_credit else "💸"
@@ -320,20 +318,8 @@ async def get_points_summary(wallet_id: str, current_user: CurrentUser):
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
-    """
-    Credit the receiver's wallet for a review.
-
-    Points are read from reviews.raw_points (frozen at write time by the
-    recognition service).  For legacy rows that pre-date raw_points storage,
-    we re-derive it by summing multiplier_snapshots from review_category_tags
-    and looking up the reviewer_weight and seasonal_multiplier from their
-    source tables.
-
-    Idempotent: a UniqueViolationError on reference_number means already credited.
-    """
     review_id = str(review_id)
 
-    # ── 1. Fetch review ───────────────────────────────────────────────────
     review = await db.reviews.find_unique(
         where={"review_id": review_id},
         include={"review_category_tags": True},
@@ -344,17 +330,13 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     employee_id = review.receiver_id
     created_by  = review.created_by
 
-    # ── 2. Resolve points ─────────────────────────────────────────────────
     if review.raw_points is not None:
-        # Happy path: use the value frozen at write time.
         points = max(1, round(review.raw_points))
         breakdown = {
             "source":     "stored",
             "raw_points": review.raw_points,
         }
     else:
-        # Legacy path: review predates raw_points column.
-        # Re-derive from source tables — never read dropped columns.
         logger.warning(
             "review %s has no raw_points — recalculating from source tables", review_id
         )
@@ -363,7 +345,6 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
             sum(float(t.multiplier_snapshot) for t in tags) if tags else 1.0
         )
 
-        # Reviewer weight from roles table
         from src.recognition.service import _ROLE_PRIORITY
         reviewer_weight = 1.0
         reviewer = await db.employees.find_unique(
@@ -383,7 +364,6 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                         reviewer_weight = float(role_row.reviewer_weight)
                     break
 
-        # Seasonal multiplier from seasonal_multipliers table
         review_dt = review.review_at or datetime.now(timezone.utc)
         if review_dt.tzinfo is None:
             review_dt = review_dt.replace(tzinfo=timezone.utc)
@@ -417,12 +397,10 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     if points == 0:
         return {"message": "No points awarded for this rating", "credited_points": 0}
 
-    # ── 3. Fetch wallet ───────────────────────────────────────────────────
     wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
     if not wallet:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=WNF)
 
-    # ── 4. Resolve CREDIT transaction type ────────────────────────────────
     txn_type = await db.transaction_types.find_unique(where={"type_code": "CREDIT"})
     if not txn_type:
         raise HTTPException(
@@ -430,20 +408,18 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
             detail="CREDIT transaction type missing. Run seed_transaction_types.py"
         )
 
-    # ── 5. Resolve APPROVED status ────────────────────────────────────────
     status_record = await db.status_master.find_first(where={"status_code": "APPROVED"})
     if not status_record:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="APPROVED status not found in status_master. Run seed_transaction_types.py"
+            detail="APPROVED status not found in status_master."
         )
 
-    # ── 6. Write transaction + update wallet ──────────────────────────────
     reference     = f"REVIEW-{review_id}"
     new_available = wallet.available_points    + points
     new_total     = wallet.total_earned_points + points
 
-    tags        = getattr(review, "review_category_tags", []) or []
+    tags           = getattr(review, "review_category_tags", []) or []
     category_label = (
         ",".join(t.category_code_snapshot for t in tags) if tags else "REVIEW"
     )
@@ -483,7 +459,6 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                     detail="Wallet updated concurrently — please retry"
                 )
 
-        # ── Notify receiver (non-blocking) ────────────────────────────────
         try:
             stars = "⭐" * review.rating
             await _notif.create_notification(
@@ -525,9 +500,6 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
 
 
 async def get_transaction_types(current_user: CurrentUser):
-    if not is_admin(current_user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=AD)
-
     types = await db.transaction_types.find_many()
 
     return [
@@ -550,13 +522,6 @@ async def adjust_wallet_for_review_update(
     delta_points: float,
     current_user: CurrentUser,
 ):
-    """
-    Adjust the receiver's wallet when a review's raw_points change on update.
-
-    delta_points = new_raw_points - old_raw_points
-      > 0  →  credit  (rating/category increased)
-      < 0  →  debit   (rating/category decreased)
-    """
     review_id = str(review_id)
     int_delta = round(delta_points)
 
@@ -564,7 +529,6 @@ async def adjust_wallet_for_review_update(
         return {"message": "No wallet adjustment needed (delta rounds to zero)",
                 "credited_points": 0, "new_balance": None}
 
-    # ── 1. Fetch review ───────────────────────────────────────────────────
     review = await db.reviews.find_unique(where={"review_id": review_id})
     if not review:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
@@ -572,12 +536,10 @@ async def adjust_wallet_for_review_update(
     employee_id = review.receiver_id
     updated_by  = current_user.id
 
-    # ── 2. Fetch wallet ───────────────────────────────────────────────────
     wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
     if not wallet:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=WNF)
 
-    # ── 3. Debit floor guard ──────────────────────────────────────────────
     if int_delta < 0 and wallet.available_points + int_delta < 0:
         logger.warning(
             "Skipping wallet debit for review update %s — would go negative "
@@ -590,16 +552,14 @@ async def adjust_wallet_for_review_update(
             "new_balance":     wallet.available_points,
         }
 
-    # ── 4. Resolve transaction type ───────────────────────────────────────
     type_code = "CREDIT" if int_delta > 0 else "DEBIT"
     txn_type  = await db.transaction_types.find_unique(where={"type_code": type_code})
     if not txn_type:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"{type_code} transaction type missing. Run seed_transaction_types.py",
+            detail=f"{type_code} transaction type missing.",
         )
 
-    # ── 5. Resolve APPROVED status ────────────────────────────────────────
     status_record = await db.status_master.find_first(where={"status_code": "APPROVED"})
     if not status_record:
         raise HTTPException(
@@ -607,13 +567,12 @@ async def adjust_wallet_for_review_update(
             detail="APPROVED status not found in status_master.",
         )
 
-    # ── 6. Compute new balances ───────────────────────────────────────────
     abs_delta     = abs(int_delta)
     new_available = wallet.available_points + int_delta
     new_total     = wallet.total_earned_points + (int_delta if int_delta > 0 else 0)
 
-    now       = datetime.now(timezone.utc)
-    reference = f"REVIEW-UPDATE-{review_id}-{now.strftime('%Y%m%dT%H%M%S')}"
+    now            = datetime.now(timezone.utc)
+    reference      = f"REVIEW-UPDATE-{review_id}-{now.strftime('%Y%m%dT%H%M%S')}"
     direction_word = "adjusted +" if int_delta > 0 else "adjusted "
 
     try:
@@ -654,7 +613,6 @@ async def adjust_wallet_for_review_update(
                     detail="Wallet updated concurrently — please retry",
                 )
 
-        # ── Notify receiver (non-blocking) ────────────────────────────────
         try:
             emoji = "💰" if int_delta > 0 else "📉"
             await _notif.create_notification(

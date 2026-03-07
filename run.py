@@ -22,13 +22,15 @@ else:
     print("Warning: no .env found")
 
 services = [
-    ("auth",         "src.auth.main:app",          8001),
+    ("auth",         "src.auth.main:app",           8001),
+    ("roles",    "src.roles.main:app",              8002),
     ("employees",    "src.employees.main:app",      8003),
     ("wallet",       "src.wallet.main:app",         8004),
     ("recognition",  "src.recognition.main:app",    8005),
     ("rewards",      "src.rewards.main:app",        8006),
     ("organization", "src.organization.main:app",   8007),
     ("analytics",    "src.analytics.main:app",      8008),
+    
 ]
 
 STAGGER_SECONDS = 3

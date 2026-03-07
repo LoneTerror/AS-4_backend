@@ -3,7 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from src.analytics.dependencies import CurrentUser, require_roles
+from src.common.dependencies import CurrentUser, check_route_permission
 from src.analytics.schemas import (
     RecentReview,
     LeaderboardEntry,
@@ -21,8 +21,7 @@ from src.analytics.service import (
 
 router = APIRouter()
 
-_auth = Depends(require_roles("EMPLOYEE", "MANAGER", "HR_ADMIN", "SUPER_ADMIN"))
-_admin_auth = Depends(require_roles("HR_ADMIN", "SUPER_ADMIN"))
+_auth = Depends(check_route_permission)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -75,7 +74,7 @@ async def platform_stats(current_user: CurrentUser = _auth):
         "Accessible by HR_ADMIN and SUPER_ADMIN only."
     ),
 )
-async def list_teams(current_user: CurrentUser = _admin_auth):
+async def list_teams(current_user: CurrentUser = _auth):
     """Return lightweight summary cards for all departments."""
     return await get_teams_summary()
 
@@ -89,7 +88,7 @@ async def list_teams(current_user: CurrentUser = _admin_auth):
         "stats and performance scores. HR_ADMIN / SUPER_ADMIN only."
     ),
 )
-async def team_detail(department_id: str, current_user: CurrentUser = _admin_auth):
+async def team_detail(department_id: str, current_user: CurrentUser = _auth):
     """Return full team report with member breakdown ordered by performance score."""
     report = await get_team_report(department_id)
     if report is None:

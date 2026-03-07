@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 
 from src.prisma.client import db
-from src.recognition.dependencies import CurrentUser
+from src.common.dependencies import CurrentUser
 from src.recognition.schemas import (
     ReviewCreateRequest,
     ReviewUpdateRequest,

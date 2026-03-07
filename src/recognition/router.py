@@ -1,7 +1,9 @@
+# src/recognition/router.py
+
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Path
 
-from src.recognition.dependencies import CurrentUser, get_current_user, require_roles
+from src.common.dependencies import check_route_permission, CurrentUser
 from src.recognition.schemas import (
     ReviewCreateRequest,
     ReviewUpdateRequest,
@@ -14,7 +16,7 @@ from src.recognition.schemas import (
 )
 from src.recognition.service import RecognitionService
 
-router           = APIRouter(prefix="/reviews")
+router            = APIRouter(prefix="/reviews")
 categories_router = APIRouter(prefix="/review-categories")
 
 
@@ -38,9 +40,7 @@ async def list_review_categories(
     page:        int  = Query(1,    ge=1),
     page_size:   int  = Query(20,   ge=1, le=100),
     active_only: bool = Query(True, description="Return only active categories"),
-    current_user: CurrentUser = Depends(
-        require_roles("EMPLOYEE", "MANAGER", "HR_ADMIN", "SUPER_ADMIN")
-    ),
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await RecognitionService.list_review_categories(page, page_size, active_only)
 
@@ -150,7 +150,7 @@ _CATEGORY_UPDATE_REQUEST_BODY = {
 )
 async def create_review_category(
     payload: ReviewCategoryCreateRequest,
-    current_user: CurrentUser = Depends(require_roles("HR_ADMIN", "SUPER_ADMIN")),
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await RecognitionService.create_review_category(payload, current_user)
 
@@ -171,7 +171,7 @@ async def create_review_category(
 async def update_review_category(
     payload: ReviewCategoryUpdateRequest,
     id: UUID = Path(..., description="Unique review category identifier"),
-    current_user: CurrentUser = Depends(require_roles("HR_ADMIN", "SUPER_ADMIN")),
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await RecognitionService.update_review_category(str(id), payload, current_user)
 
@@ -189,9 +189,7 @@ async def update_review_category(
 async def list_reviews(
     page:      int = Query(1,  ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: CurrentUser = Depends(
-        require_roles("EMPLOYEE", "MANAGER", "HR_ADMIN", "SUPER_ADMIN")
-    ),
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     """
     - **EMPLOYEE / MANAGER**: only reviews they gave or received.
@@ -208,7 +206,7 @@ async def list_reviews(
 )
 async def get_review(
     id: UUID = Path(..., description="Unique review identifier"),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await RecognitionService.get_review(str(id), current_user)
 
@@ -351,7 +349,7 @@ _UPDATE_REQUEST_BODY = {
 )
 async def create_review(
     payload: ReviewCreateRequest,
-    current_user: CurrentUser = Depends(require_roles("EMPLOYEE", "MANAGER")),
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await RecognitionService.create_review(payload, current_user)
 
@@ -372,7 +370,7 @@ async def create_review(
 async def update_review(
     payload: ReviewUpdateRequest,
     id: UUID = Path(..., description="Unique review identifier"),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     """
     - **Review creator**: can update their own reviews.
