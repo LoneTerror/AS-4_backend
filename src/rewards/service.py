@@ -155,6 +155,7 @@ class RewardService:
         where_clause = {"is_active": is_active} if is_active is not None else {}
         result = await self.db.reward_categories.find_many(where=where_clause)
         serialised = [r.model_dump() for r in result]
+        
         await cache_set(key, serialised, ttl=TTL_CATEGORIES)
         return result
 

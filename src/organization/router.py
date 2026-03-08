@@ -1,14 +1,19 @@
 # src/organization/router.py
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from typing import Optional
 from uuid import UUID
+from datetime import datetime
 from src.organization import schemas, service
 from src.common.dependencies import check_route_permission, CurrentUser
 
 departments_router = APIRouter()
 designations_router = APIRouter()
 department_types_router = APIRouter()
+roles_router = APIRouter()
+statuses_router = APIRouter()
+audit_logs_router = APIRouter()
+seasonal_multipliers_router = APIRouter()
 
 
 # ══════════════════════════════════════════════
@@ -108,3 +113,172 @@ async def get_all_department_types(
 ):
     """Retrieve all department types for frontend dropdowns."""
     return await service.list_department_types()
+
+# ══════════════════════════════════════════════
+#  5.4 ROLES ROUTES
+# ══════════════════════════════════════════════
+
+@roles_router.get("", response_model=list[schemas.RoleResponse])
+async def list_roles(current_user: CurrentUser = Depends(check_route_permission)):
+    """Returns all system roles with reviewer weights."""
+    return await service.list_roles()
+
+
+@roles_router.get("/{role_id}", response_model=schemas.RoleDetailResponse)
+async def get_role(role_id: str, current_user: CurrentUser = Depends(check_route_permission)):
+    """Full detail of a single role."""
+    return await service.get_role(role_id)
+
+
+@roles_router.post("", response_model=schemas.RoleDetailResponse, status_code=201)
+async def create_role(
+    payload: schemas.CreateRoleRequest,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Creates a new system role. SUPER_ADMIN only."""
+    return await service.create_role(payload, current_user.id)
+
+
+@roles_router.put("/{role_id}", response_model=schemas.RoleDetailResponse)
+async def update_role(
+    role_id: str,
+    payload: schemas.UpdateRoleRequest,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Updates a role. SUPER_ADMIN only."""
+    return await service.update_role(role_id, payload, current_user.id)
+
+
+@roles_router.post("/{role_id}/assign", response_model=schemas.AssignRoleResponse, status_code=201)
+async def assign_role(
+    role_id: str,
+    payload: schemas.AssignRoleRequest,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Assigns a role to an employee."""
+    return await service.assign_role(role_id, payload, current_user.id)
+
+
+@roles_router.delete("/{role_id}/assign/{employee_id}", response_model=schemas.RevokeRoleResponse)
+async def revoke_role(
+    role_id: str,
+    employee_id: str,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Revokes a role from an employee."""
+    return await service.revoke_role(role_id, employee_id, current_user.id)
+
+
+# ══════════════════════════════════════════════
+#  5.5 STATUS MASTER ROUTES
+# ══════════════════════════════════════════════
+
+@statuses_router.get("", response_model=list[schemas.StatusResponse])
+async def list_statuses(
+    entity_type: Optional[str] = Query(None),
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Returns all status entries, optionally filtered by entity_type."""
+    return await service.list_statuses(entity_type)
+
+
+@statuses_router.get("/{status_id}", response_model=schemas.StatusDetailResponse)
+async def get_status(status_id: str, current_user: CurrentUser = Depends(check_route_permission)):
+    """Full detail of a single status entry."""
+    return await service.get_status(status_id)
+
+
+@statuses_router.post("", response_model=schemas.StatusDetailResponse, status_code=201)
+async def create_status(
+    payload: schemas.CreateStatusRequest,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Creates a new status code. SUPER_ADMIN only."""
+    return await service.create_status(payload, current_user.id)
+
+
+@statuses_router.put("/{status_id}", response_model=schemas.StatusDetailResponse)
+async def update_status(
+    status_id: str,
+    payload: schemas.UpdateStatusRequest,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Updates status name or description. SUPER_ADMIN only."""
+    return await service.update_status(status_id, payload, current_user.id)
+
+
+# ══════════════════════════════════════════════
+#  5.6 AUDIT LOGS ROUTES
+# ══════════════════════════════════════════════
+
+@audit_logs_router.get("", response_model=dict)
+async def list_audit_logs(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    table_name: Optional[str] = None,
+    record_id: Optional[str] = None,
+    operation_type: Optional[str] = None,
+    performed_by: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Paginated audit log viewer with filters. SUPER_ADMIN only."""
+    return await service.list_audit_logs(
+        page, limit, table_name, record_id, operation_type, performed_by, start_date, end_date
+    )
+
+
+@audit_logs_router.get("/{audit_id}", response_model=schemas.AuditLogResponse)
+async def get_audit_log(audit_id: str, current_user: CurrentUser = Depends(check_route_permission)):
+    """Returns full detail of a single audit log entry. SUPER_ADMIN only."""
+    return await service.get_audit_log(audit_id)
+
+
+# ══════════════════════════════════════════════
+#  5.7 SEASONAL MULTIPLIERS ROUTES
+# ══════════════════════════════════════════════
+
+@seasonal_multipliers_router.get("/active", response_model=schemas.SeasonalMultiplierResponse)
+async def get_active_multiplier(current_user: CurrentUser = Depends(check_route_permission)):
+    """Returns the single currently active seasonal multiplier."""
+    return await service.get_active_seasonal_multiplier()
+
+
+@seasonal_multipliers_router.get("", response_model=list[schemas.SeasonalMultiplierResponse])
+async def list_seasonal_multipliers(
+    quarter: Optional[int] = Query(None, ge=1, le=4),
+    active_only: bool = Query(False),
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Returns all seasonal multipliers ordered by quarter and effective_from."""
+    return await service.list_seasonal_multipliers(quarter, active_only)
+
+
+@seasonal_multipliers_router.post("", response_model=schemas.SeasonalMultiplierResponse, status_code=201)
+async def create_seasonal_multiplier(
+    payload: schemas.CreateSeasonalMultiplierRequest,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Creates a new seasonal multiplier. SUPER_ADMIN only."""
+    return await service.create_seasonal_multiplier(payload, current_user.id)
+
+
+@seasonal_multipliers_router.put("/{mult_id}", response_model=schemas.SeasonalMultiplierResponse)
+async def update_seasonal_multiplier(
+    mult_id: str,
+    payload: schemas.UpdateSeasonalMultiplierRequest,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Updates a seasonal multiplier. SUPER_ADMIN only."""
+    return await service.update_seasonal_multiplier(mult_id, payload, current_user.id)
+
+
+@seasonal_multipliers_router.delete("/{mult_id}", status_code=204)
+async def delete_seasonal_multiplier(
+    mult_id: str,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Deletes a future seasonal multiplier only. SUPER_ADMIN only."""
+    await service.delete_seasonal_multiplier(mult_id)
+    return Response(status_code=204)
