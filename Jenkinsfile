@@ -77,6 +77,7 @@ pipeline {
         //                         string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
         //                         string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
         //                         string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_BOT_TOKEN'),
+        //                         string(credentialsId: 'rr-backend-cors-origins', variable: 'FRONTEND_CORS_ORIGINS'),
         //                         string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_DEFAULT_CHANNEL_ID'),
         //                         ]) {
         //                             try {
@@ -99,6 +100,7 @@ pipeline {
         //                                 -e SMTP_USE_TLS="true" \
         //                                 -e SMTP_USE_SSL="false" \
         //                                 -e FRONTEND_URL="https://localhost:3000" \
+        //                                 -e FRONTEND_CORS_ORIGINS="${FRONTEND_CORS_ORIGINS}" \
         //                                 -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
         //                                 ${IMAGE}:${TAG}
         //                                 """
@@ -153,6 +155,7 @@ pipeline {
                         string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
                         string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_BOT_TOKEN'),
                         string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_DEFAULT_CHANNEL_ID'),
+                        string(credentialsId: 'rr-backend-cors-origins', variable: 'FRONTEND_CORS_ORIGINS')
                     ]) {
                         sh """
                         docker run -d \
@@ -177,6 +180,7 @@ pipeline {
                         -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
                         -e OTEL_SERVICE_NAME="rnr-backend" \
                         -e OTEL_EXPORTER_OTLP_ENDPOINT="http://host.docker.internal:4317" \
+                        -e FRONTEND_CORS_ORIGINS="${FRONTEND_CORS_ORIGINS}" \
                         ${IMAGE}:${TAG}
                         """
                     }

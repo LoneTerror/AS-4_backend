@@ -74,6 +74,6 @@ ENV XDG_CACHE_HOME="/app/.cache" \
     PRISMA_BINARY_CACHE_DIR="/app/.cache" \
     PM2_HOME="/app/.pm2"
 
-EXPOSE 8000 8001 8002 8003 8004 8005 8006 8007
+EXPOSE 8000 8001 8002 8003 8004 8005 8006 8007 8008
 
 CMD ["pm2-runtime", "start", "/app/ecosystem.config.js"]
