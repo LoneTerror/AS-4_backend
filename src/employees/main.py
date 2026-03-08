@@ -127,9 +127,9 @@ app = FastAPI(
     title="Employee Service",
     description="Microservice for handling employee profiles, hierarchy, and search",
     version="1.0.0",
-    root_path="/employees",
-    docs_url="/v1/docs",
-    openapi_url="/v1/openapi.json",
+    root_path="/v1/employees", 
+    openapi_url="/openapi.json", # Moved to root
+    docs_url="/docs",
     lifespan=lifespan,
 )
 

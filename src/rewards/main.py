@@ -68,10 +68,10 @@ app = FastAPI(
     title="Reward Microservice",
     description="API for managing the reward catalog and point redemptions.",
     version="1.0.0",
-    root_path="/rewards",
-    openapi_url="/v1/openapi.json",
-    docs_url="/v1/docs",
-    redoc_url="/v1/redoc",
+    root_path="/v1/rewards", 
+    openapi_url="/openapi.json", 
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
 )
 

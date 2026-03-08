@@ -66,10 +66,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Wallet Service",
     version="1.0.0",
-    openapi_url="/v1/openapi.json",
-    root_path="/wallet",
-    docs_url="/v1/docs",
-    redoc_url="/v1/redoc",
+    root_path="/v1/wallet", 
+    openapi_url="/openapi.json", 
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan
 )
 

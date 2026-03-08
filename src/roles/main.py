@@ -67,8 +67,9 @@ app = FastAPI(
     title="Roles & Permissions Service",
     version="1.0.0",
     lifespan=lifespan,
-    docs_url="/v1/docs",
-    openapi_url="/v1/openapi.json",
+    root_path="/v1/roles", 
+    openapi_url="/openapi.json", 
+    docs_url="/docs",
 )
 
 # Grab the env var, default to localhost for local dev fallback

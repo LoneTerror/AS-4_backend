@@ -73,8 +73,9 @@ app = FastAPI(
     title="Organization Service",
     description="Microservice for handling company structure: Departments and Designations",
     version="1.0.0",
-    docs_url="/v1/docs",
-    openapi_url="/v1/openapi.json",
+    root_path="/v1/org", 
+    openapi_url="/openapi.json", # Moved to root
+    docs_url="/docs",
     lifespan=lifespan
 )
 
