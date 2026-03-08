@@ -183,12 +183,15 @@ pipeline {
                     echo "🚀 Application deployed to http://192.168.116.137:8000" 
                     
                     // Active Health Check Observation
-                    echo "⏳ Waiting for application to become healthy..."
-                    timeout(time: 2, unit: 'MINUTES') {
+                    echo "⏳ Waiting for staggered services to boot..."
+                    timeout(time: 3, unit: 'MINUTES') { // Bumped to 3 mins to allow for stagger
                         waitUntil {
                             script {
-                                // Adjust /docs to your actual health check endpoint if you have a dedicated one like /health
-                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://192.168.116.137:8001/health || true", returnStdout: true).trim()
+                                // Pinging the auth service through the Nginx gateway
+                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://192.168.116.137:8000/auth/health || true", returnStdout: true).trim()
+                                if (r != "200") {
+                                    echo "Still waiting for Auth Service... HTTP Code: ${r}"
+                                }
                                 return (r == "200")
                             }
                         }
