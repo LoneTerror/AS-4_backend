@@ -8,6 +8,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
+# --- OpenTelemetry Imports ---
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+# -----------------------------
+
 from src.prisma.client import db, connect_with_retry
 from src.employees.router import router as emp_router
 from src.notifications.router import router as notifications_router
@@ -19,6 +28,24 @@ from src.notifications.service import NotificationService
 from src.webhooks.router import router as webhooks_router
 
 logger = logging.getLogger(__name__)
+
+# ==========================================
+# OpenTelemetry Configuration
+# ==========================================
+# 1. Identify the service in Jaeger
+resource = Resource.create({"service.name": "rnr-employees"})
+provider = TracerProvider(resource=resource)
+
+# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
+otlp_exporter = OTLPSpanExporter()
+
+# 3. Process traces in batches in the background
+processor = BatchSpanProcessor(otlp_exporter)
+provider.add_span_processor(processor)
+
+# 4. Register globally
+trace.set_tracer_provider(provider)
+# ==========================================
 
 
 @asynccontextmanager
@@ -158,6 +185,18 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
+
+
+# ==========================================
+# Instrument FastAPI
+# ==========================================
+# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
+FastAPIInstrumentor.instrument_app(
+    app,
+    excluded_urls="health,v1/docs,v1/openapi.json"
+)
+# ==========================================
+
 
 if __name__ == "__main__":
     uvicorn.run("src.employees.main:app", host="0.0.0.0", port=8003, reload=True)

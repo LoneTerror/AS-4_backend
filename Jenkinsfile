@@ -158,6 +158,7 @@ pipeline {
                         docker run -d \
                         --name rnr-backend-test \
                         --restart always \
+                        --add-host host.docker.internal:host-gateway \
                         -p 8000:8000 \
                         -e DATABASE_URL="${DATABASE_URL}" \
                         -e REDIS_URL="${REDIS_URL}" \
@@ -174,10 +175,25 @@ pipeline {
                         -e SMTP_USE_SSL="false" \
                         -e FRONTEND_URL="https://localhost:3000" \
                         -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
+                        -e OTEL_SERVICE_NAME="rnr-backend" \
+                        -e OTEL_EXPORTER_OTLP_ENDPOINT="http://host.docker.internal:4317" \
                         ${IMAGE}:${TAG}
                         """
                     }
                     echo "🚀 Application deployed to http://192.168.116.137:8000" 
+                    
+                    // Active Health Check Observation
+                    echo "⏳ Waiting for application to become healthy..."
+                    timeout(time: 2, unit: 'MINUTES') {
+                        waitUntil {
+                            script {
+                                // Adjust /docs to your actual health check endpoint if you have a dedicated one like /health
+                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://192.168.116.137:8000/docs || true", returnStdout: true).trim()
+                                return (r == "200")
+                            }
+                        }
+                    }
+                    echo "✅ Application is fully booted and responding!"
                 }
             }
         }
@@ -200,9 +216,40 @@ pipeline {
             // cleanWs() 
             // sh "docker rmi ${IMAGE}:${TAG} || true" 
         }
+        success {
+            withCredentials([
+                string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'),
+                string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL')
+            ]) {
+                sh """
+                curl -X POST -H 'Authorization: Bearer ${SLACK_TOKEN}' \
+                -H 'Content-type: application/json' \
+                --data '{
+                    "channel":"${SLACK_CHANNEL}",
+                    "text":"✅ *Success*: Build #${env.BUILD_NUMBER} of rnr-backend deployed to VM1 successfully.\\n🔍 <${env.BUILD_URL}|View Jenkins Logs> | 📊 <http://192.168.116.137:16686|View Live Traces in Jaeger>"
+                }' \
+                https://slack.com/api/chat.postMessage
+                """
+            }
+        }
         failure {
             // Keep the system clean on failure without losing build cache
-            sh "docker ps -q -f name=target-app | xargs -r docker stop"
+            sh "docker ps -q -f name=target-app | xargs -r docker stop || true"
+            
+            withCredentials([
+                string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'),
+                string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL')
+            ]) {
+                sh """
+                curl -X POST -H 'Authorization: Bearer ${SLACK_TOKEN}' \
+                -H 'Content-type: application/json' \
+                --data '{
+                    "channel":"${SLACK_CHANNEL}",
+                    "text":"❌ *Failure*: Build #${env.BUILD_NUMBER} of rnr-backend failed.\\n🔍 <${env.BUILD_URL}|Check Jenkins Logs immediately>"
+                }' \
+                https://slack.com/api/chat.postMessage
+                """
+            }
         }
     }
 }

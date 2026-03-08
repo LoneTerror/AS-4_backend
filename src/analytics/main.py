@@ -3,6 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 
+# --- OpenTelemetry Imports ---
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+# -----------------------------
+
 from src.prisma.client import db, connect_with_retry
 from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.common.dependencies import close_auth_client
@@ -13,6 +22,24 @@ from src.common.middleware import (
     validation_exception_handler,
     generic_exception_handler
 )
+
+# ==========================================
+# OpenTelemetry Configuration
+# ==========================================
+# 1. Identify the service in Jaeger
+resource = Resource.create({"service.name": "rnr-analytics"})
+provider = TracerProvider(resource=resource)
+
+# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
+otlp_exporter = OTLPSpanExporter()
+
+# 3. Process traces in batches in the background
+processor = BatchSpanProcessor(otlp_exporter)
+provider.add_span_processor(processor)
+
+# 4. Register globally
+trace.set_tracer_provider(provider)
+# ==========================================
 
 
 @asynccontextmanager
@@ -63,6 +90,16 @@ app.add_middleware(
 )
 
 app.include_router(analytics_router, prefix="/v1/dashboard", tags=["Dashboard"])
+
+# ==========================================
+# Instrument FastAPI
+# ==========================================
+# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
+FastAPIInstrumentor.instrument_app(
+    app,
+    excluded_urls="health,v1/docs,v1/openapi.json,v1/redoc"
+)
+# ==========================================
 
 if __name__ == "__main__":
     import uvicorn

@@ -5,6 +5,15 @@ from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+# --- OpenTelemetry Imports ---
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+# -----------------------------
+
 from src.prisma.client import db, connect_with_retry
 from src.organization.router import (
     departments_router,
@@ -18,6 +27,24 @@ from src.organization.router import (
 from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.common.dependencies import close_auth_client
 from src.organization.router import departments_router, designations_router, department_types_router
+
+# ==========================================
+# OpenTelemetry Configuration
+# ==========================================
+# 1. Identify the service in Jaeger
+resource = Resource.create({"service.name": "rnr-organization"})
+provider = TracerProvider(resource=resource)
+
+# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
+otlp_exporter = OTLPSpanExporter()
+
+# 3. Process traces in batches in the background
+processor = BatchSpanProcessor(otlp_exporter)
+provider.add_span_processor(processor)
+
+# 4. Register globally
+trace.set_tracer_provider(provider)
+# ==========================================
 
 
 @asynccontextmanager
@@ -92,6 +119,16 @@ def custom_openapi():
     return schema
 
 app.openapi = custom_openapi
+
+# ==========================================
+# Instrument FastAPI
+# ==========================================
+# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
+FastAPIInstrumentor.instrument_app(
+    app,
+    excluded_urls="health,v1/docs,v1/openapi.json"
+)
+# ==========================================
 
 if __name__ == "__main__":
     uvicorn.run("src.organization.main:app", host="0.0.0.0", port=8007, reload=True)
