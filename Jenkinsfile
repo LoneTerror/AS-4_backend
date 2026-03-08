@@ -122,7 +122,7 @@ pipeline {
         // }
 
         /* stage('Push Image') {
-            when { branch 'develop' }
+            when { branch 'pipeline-branch' }
             steps {
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     sh '''
