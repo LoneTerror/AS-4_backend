@@ -188,7 +188,7 @@ pipeline {
                         waitUntil {
                             script {
                                 // Adjust /docs to your actual health check endpoint if you have a dedicated one like /health
-                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://192.168.116.137:8000/docs || true", returnStdout: true).trim()
+                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://192.168.116.137:8001/health || true", returnStdout: true).trim()
                                 return (r == "200")
                             }
                         }
