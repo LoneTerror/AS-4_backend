@@ -44,9 +44,10 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install ONLY runtime dependencies and clean apt cache
+# Install ONLY runtime dependencies, add networking tools, and clean apt cache
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 nginx ca-certificates libatomic1 nodejs npm && \
+    libpq5 nginx ca-certificates libatomic1 nodejs npm \
+    curl iputils-ping netcat-openbsd dnsutils && \
     rm -rf /var/lib/apt/lists/*
 
 # Install pm2 globally and clean npm cache
