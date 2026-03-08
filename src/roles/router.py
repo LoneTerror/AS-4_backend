@@ -12,7 +12,7 @@ from src.roles.schemas import (
 )
 import src.roles.service as service
 
-router = APIRouter(tags=["Role Management"])
+router = APIRouter(prefix="/v1",tags=["Role Management"])
 
 
 # ── Roles ─────────────────────────────────────────────────────────────────────

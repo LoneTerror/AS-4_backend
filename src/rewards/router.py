@@ -21,7 +21,7 @@ COMMON_ERRORS = {
 }
 
 router = APIRouter(
-    prefix="/v1/rewards",
+    prefix="/v1",
     tags=["Rewards"],
     responses=COMMON_ERRORS,
 )

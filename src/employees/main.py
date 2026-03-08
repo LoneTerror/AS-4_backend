@@ -147,7 +147,7 @@ app.add_middleware(
 )
 
 API_PREFIX = "/v1"
-app.include_router(emp_router, prefix=API_PREFIX + "/employees", tags=["Employees"])
+app.include_router(emp_router, prefix=API_PREFIX, tags=["Employees"])
 app.include_router(notifications_router, tags=["Notifications"])
 app.include_router(webhooks_router, tags=["Webhooks"])
 

@@ -73,7 +73,7 @@ async def health_check():
     return {"status": "healthy", "service": "Auth Service"}
 
 API_PREFIX = "/v1"
-app.include_router(auth_router, prefix=API_PREFIX + "/auth", tags=["Auth"])
+app.include_router(auth_router, prefix=API_PREFIX, tags=["Auth"])
 
 def custom_openapi():
     if app.openapi_schema:

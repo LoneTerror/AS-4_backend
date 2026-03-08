@@ -29,7 +29,7 @@ from src.common.dependencies import check_route_permission, CurrentUser
 router = APIRouter()
 
 # Transactions Router
-transactions_router = APIRouter(prefix="/transactions", tags=["Transactions"])
+transactions_router = APIRouter(prefix="/v1", tags=["Transactions"])
 
 
 @transactions_router.post("", response_model=TransactionResponse)
