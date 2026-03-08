@@ -15,6 +15,7 @@ const pythonServices = [
   { name: "recognition",  port: 8005, delay: 25 },
   { name: "rewards",      port: 8006, delay: 30 },
   { name: "organization", port: 8007, delay: 35 },
+  { name: "analytics",    port: 8008, delay: 40 }
 ];
 
 // 1. Start Nginx FIRST so the gateway is up immediately
