@@ -25,8 +25,8 @@ TTL_HISTORY    = 60    # 1 min  — per-wallet, invalidated on redeem
 def _key_catalog(active_only: bool, page: int, size: int) -> str:
     return f"rewards:catalog:{active_only}:{page}:{size}"
 
-def _key_categories(active_only: bool) -> str:
-    return f"rewards:categories:{active_only}"
+def _key_categories(is_active: Optional[bool]) -> str:
+    return f"rewards:categories:{is_active}"
 
 def _key_history(wallet_id: Optional[str], page: int, size: int) -> str:
     wid = wallet_id or "all"
@@ -139,19 +139,20 @@ class RewardService:
         await invalidate_categories()
         return new_category
 
-    async def get_categories(self, active_only: bool = True):
+    async def get_categories(self, is_active: Optional[bool] = None):
         """
         Returns categories, using Redis cache when available.
-        active_only=True  → only is_active=True rows (default, used by most callers)
-        active_only=False → all rows (admin view)
+        is_active=True  → only active rows
+        is_active=False → only inactive rows
+        is_active=None  → all rows (default, admin view)
         """
-        key = _key_categories(active_only)
+        key = _key_categories(is_active)
         cached = await cache_get(key)
         if cached is not None:
             logger.debug("cache HIT %s", key)
             return cached  # plain list of dicts — Pydantic validation happens in router
 
-        where_clause = {"is_active": True} if active_only else {}
+        where_clause = {"is_active": is_active} if is_active is not None else {}
         result = await self.db.reward_categories.find_many(where=where_clause)
         serialised = [r.model_dump() for r in result]
         await cache_set(key, serialised, ttl=TTL_CATEGORIES)
