@@ -1,4 +1,5 @@
 import uvicorn
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -79,7 +80,7 @@ app = FastAPI(
 
 
 # Grab the env var, default to localhost for local dev fallback
-cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS","http://localhost:8005","http://localhost:8001", "http://localhost:8003")
+cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS","http://localhost:8005,http://localhost:8001,http://localhost:8003")
 # Split by comma and strip whitespace to create a clean list
 allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
 
