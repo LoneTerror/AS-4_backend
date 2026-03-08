@@ -192,7 +192,7 @@ pipeline {
                         waitUntil {
                             script {
                                 // Pinging the auth service through the Nginx gateway
-                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://192.168.116.137:8000/auth/health || true", returnStdout: true).trim()
+                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://192.168.116.137:8000/v1/auth/health || true", returnStdout: true).trim()
                                 if (r != "200") {
                                     echo "Still waiting for Auth Service... HTTP Code: ${r}"
                                 }
