@@ -14,9 +14,9 @@ from src.common.cache import cache_get, cache_set, invalidate_pattern
 # ─────────────────────────────────────────────────────────────────────────────
 # TTLs (seconds)
 # ─────────────────────────────────────────────────────────────────────────────
-TTL_CATALOG    = 600   # 10 min — almost never changes
-TTL_CATEGORIES = 600   # 10 min — rarely changes
-TTL_HISTORY    = 60    # 1 min  — per-wallet, invalidated on redeem
+TTL_CATALOG    = 600   
+TTL_CATEGORIES = 600   
+TTL_HISTORY    = 60    
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache-key helpers
