@@ -60,7 +60,7 @@ RUN addgroup --system appgroup && adduser --system --group appuser
 COPY --from=builder --chown=appuser:appgroup /app /app
 
 # CRITICAL FIX: Explicitly create the .pm2 directory and grant ownership
-RUN mkdir -p /app/.pm2 && chown -R appuser:appgroup /app/.pm2
+RUN mkdir -p /app/.pm2 /app/logs && chown -R appuser:appgroup /app/.pm2 /app/logs
 
 # Now switch to the non-root user
 USER appuser

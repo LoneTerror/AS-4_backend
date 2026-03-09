@@ -238,13 +238,16 @@ pipeline {
                 string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL')
             ]) {
                 sh """
-                curl -X POST -H 'Authorization: Bearer ${SLACK_TOKEN}' \
-                -H 'Content-type: application/json' \
-                --data '{
-                    "channel":"${SLACK_CHANNEL}",
-                    "text":"✅ *Success*: Build #${env.BUILD_NUMBER} of rnr-backend deployed to AWS successfully.\\n🔍 <${env.BUILD_URL}|View Jenkins Logs> | 📊 <https://${env.TARGET_EC2_HOST}/jaeger/|View Live Traces in Jaeger>"
-                }' \
-                https://slack.com/api/chat.postMessage
+                # Notice the escaped \\$ for secrets. Bash evaluates these securely!
+                curl -s -X POST https://slack.com/api/chat.postMessage \\
+                -H "Authorization: Bearer \$SLACK_TOKEN" \\
+                -H "Content-type: application/json" \\
+                -d @- <<EOF
+                {
+                    "channel": "\$SLACK_CHANNEL",
+                    "text": "✅ *Success*: Build #${env.BUILD_NUMBER} of rnr-backend deployed to AWS successfully.\\n🔍 <${env.BUILD_URL}|View Jenkins Logs> | 📊 <https://${env.TARGET_EC2_HOST}/jaeger/|View Live Traces in Jaeger>"
+                }
+                EOF
                 """
             }
         }
@@ -254,13 +257,15 @@ pipeline {
                 string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL')
             ]) {
                 sh """
-                curl -X POST -H 'Authorization: Bearer ${SLACK_TOKEN}' \
-                -H 'Content-type: application/json' \
-                --data '{
-                    "channel":"${SLACK_CHANNEL}",
-                    "text":"❌ *Failure*: Build #${env.BUILD_NUMBER} of rnr-backend failed.\\n🔍 <${env.BUILD_URL}|Check Jenkins Logs immediately>"
-                }' \
-                https://slack.com/api/chat.postMessage
+                curl -s -X POST https://slack.com/api/chat.postMessage \\
+                -H "Authorization: Bearer \$SLACK_TOKEN" \\
+                -H "Content-type: application/json" \\
+                -d @- <<EOF
+                {
+                    "channel": "\$SLACK_CHANNEL",
+                    "text": "❌ *Failure*: Build #${env.BUILD_NUMBER} of rnr-backend failed.\\n🔍 <${env.BUILD_URL}|Check Jenkins Logs immediately>"
+                }
+                EOF
                 """
             }
         }
