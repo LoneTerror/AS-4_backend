@@ -78,6 +78,7 @@ pipeline {
                                 string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
                                 string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_BOT_TOKEN'),
                                 string(credentialsId: 'rr-backend-cors-origins', variable: 'FRONTEND_CORS_ORIGINS'),
+                                string(credentialsId: 'rr-backend-frontend-url', variable: 'FRONTEND_URL'),
                                 string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_DEFAULT_CHANNEL_ID'),
                                 ]) {
                                     try {
@@ -99,7 +100,7 @@ pipeline {
                                         -e SMTP_FROM_EMAIL="${SMTP_FROM_EMAIL}"\
                                         -e SMTP_USE_TLS="true" \
                                         -e SMTP_USE_SSL="false" \
-                                        -e FRONTEND_URL="https://localhost:3000" \
+                                        -e FRONTEND_URL="${FRONTEND_URL}" \
                                         -e FRONTEND_CORS_ORIGINS="${FRONTEND_CORS_ORIGINS}" \
                                         -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
                                         ${IMAGE}:${TAG}
