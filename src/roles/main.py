@@ -6,11 +6,22 @@ from contextlib import asynccontextmanager
 from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.prisma.client import db
 from src.roles.router import router
+from src.common.route_registry import register_app_routes
+
+ROLE_OVERRIDES = {
+    "GET:/v1/roles":                ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/roles/employees":      ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/roles":               ["SUPER_ADMIN"],
+    "POST:/v1/roles/assign":        ["SUPER_ADMIN"],
+    "POST:/v1/roles/revoke":        ["SUPER_ADMIN"],
+    "GET:/v1/route-permissions":    ["SUPER_ADMIN"],
+    "POST:/v1/route-permissions":   ["SUPER_ADMIN"],
+    "PATCH:/v1/route-permissions":  ["SUPER_ADMIN"],
+}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # -------- STARTUP --------
     print("Roles Service: Connecting to Database...")
     await db.connect()
     print("Roles Service: 🟢 Database Connected")
@@ -19,9 +30,14 @@ async def lifespan(app: FastAPI):
     await connect_redis()
     print("Roles Service: 🟢 Redis Connected")
 
+    await register_app_routes(
+        app,
+        default_roles=["SUPER_ADMIN"],
+        role_overrides=ROLE_OVERRIDES,
+    )
+
     yield
 
-    # -------- SHUTDOWN --------
     print("Roles Service: Disconnecting Redis...")
     await disconnect_redis()
     print("Roles Service: 🔴 Redis Disconnected")

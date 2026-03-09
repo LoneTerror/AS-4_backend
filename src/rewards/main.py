@@ -13,6 +13,20 @@ from src.common.middleware import (
 )
 from . import router as rewards_router
 from src.core.logger import logger
+from src.common.route_registry import register_app_routes
+
+ROLE_OVERRIDES = {
+    "GET:/v1/rewards/catalog":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/rewards/categories":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/rewards/history":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/rewards/history/me":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/rewards/redeem":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/rewards/catalog":                     ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/rewards/catalog/{catalog_id}":       ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/rewards/catalog/{catalog_id}/stock": ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/rewards/categories":                  ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/rewards/categories/{category_id}":   ["SUPER_ADMIN", "HR_ADMIN"],
+}
 
 
 @asynccontextmanager
@@ -26,6 +40,12 @@ async def lifespan(app: FastAPI):
         logger.info("Rewards Service: 🔴 Redis Connected")
     except Exception as e:
         logger.warning("Rewards Service: Redis unavailable (%s) — notifications will not be queued in real-time", e)
+
+    await register_app_routes(
+        app,
+        default_roles=["SUPER_ADMIN", "HR_ADMIN"],
+        role_overrides=ROLE_OVERRIDES,
+    )
 
     yield
 
@@ -46,6 +66,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
 @app.get("/health", tags=["System"])
 async def health_check():
     logger.debug("Health check endpoint pinged.")
@@ -55,6 +76,7 @@ async def health_check():
         "version": "1.0.0",
         "database": "Connected" if db.is_connected() else "Disconnected",
     }
+
 
 app.add_middleware(
     CORSMiddleware,

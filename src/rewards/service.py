@@ -9,14 +9,15 @@ from . import schemas
 from src.core.logger import logger
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
-from src.common.cache import cache_get, cache_set, invalidate_pattern
+from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TTLs (seconds)
 # ─────────────────────────────────────────────────────────────────────────────
-TTL_CATALOG    = 600   
-TTL_CATEGORIES = 600   
-TTL_HISTORY    = 60    
+TTL_CATALOG    = 600
+TTL_CATEGORIES = 600
+TTL_HISTORY    = 60
+TTL_WALLET_ID  = 3600   # wallet_id for an employee never changes — 1 hr is safe
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache-key helpers
@@ -31,6 +32,9 @@ def _key_categories(is_active: Optional[bool]) -> str:
 def _key_history(wallet_id: Optional[str], page: int, size: int) -> str:
     wid = wallet_id or "all"
     return f"rewards:history:{wid}:{page}:{size}"
+
+def _key_wallet_id(employee_id: str) -> str:
+    return f"rewards:wallet_id:{employee_id}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -140,17 +144,11 @@ class RewardService:
         return new_category
 
     async def get_categories(self, is_active: Optional[bool] = None):
-        """
-        Returns categories, using Redis cache when available.
-        is_active=True  → only active rows
-        is_active=False → only inactive rows
-        is_active=None  → all rows (default, admin view)
-        """
         key = _key_categories(is_active)
         cached = await cache_get(key)
         if cached is not None:
             logger.debug("cache HIT %s", key)
-            return cached  # plain list of dicts — Pydantic validation happens in router
+            return cached
 
         where_clause = {"is_active": is_active} if is_active is not None else {}
         result = await self.db.reward_categories.find_many(where=where_clause)
@@ -384,7 +382,6 @@ class RewardService:
         if not existing_item:
             raise HTTPException(status_code=404, detail="Reward item not found")
 
-        # Resolve final min / default / max (provided value or fall back to existing)
         new_min     = request.min_points     if request.min_points     is not None else existing_item.min_points
         new_max     = request.max_points     if request.max_points     is not None else existing_item.max_points
         new_default = request.default_points if request.default_points is not None else existing_item.default_points
@@ -405,7 +402,6 @@ class RewardService:
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields provided for update")
 
-        # Validate category change if requested
         new_category = None
         if "category_id" in update_data:
             new_cat_id = str(update_data["category_id"])
@@ -422,7 +418,6 @@ class RewardService:
                 )
             update_data["category_id"] = new_cat_id
 
-        # Prevent reactivating a reward whose parent category is inactive
         if update_data.get("is_active") is True:
             check_cat_id = update_data.get("category_id", existing_item.category_id)
             cat_to_check = new_category if new_category else await self.db.reward_categories.find_unique(
@@ -434,7 +429,6 @@ class RewardService:
                     detail="Cannot reactivate this reward because its parent category is currently inactive."
                 )
 
-        # Guard: reject no-op updates
         has_changes = any(
             getattr(existing_item, k, None) != v
             for k, v in update_data.items()
@@ -576,6 +570,8 @@ class RewardService:
             # Post-commit: invalidate caches & notify
             await invalidate_catalog()
             await invalidate_history(str(request.wallet_id))
+            # ── NEW: bust wallet cache so balance is immediately fresh ──
+            await cache_delete(f"wallets:employee:{wallet.employee_id}")
             from src.analytics.service import invalidate_leaderboard
             await invalidate_leaderboard()
 
@@ -652,5 +648,19 @@ class RewardService:
         return {**result, "data": history}
 
     async def get_wallet_id_for_user(self, user_id: str) -> Optional[str]:
+        """
+        Look up the wallet_id for an employee.
+        Cached with a long TTL — wallet_id is immutable once created.
+        This is called on every /history/me request so it must be free.
+        """
+        key = _key_wallet_id(user_id)
+        cached = await cache_get(key)
+        if cached is not None:
+            return cached
+
         wallet = await self.db.wallets.find_first(where={"employee_id": user_id})
-        return wallet.wallet_id if wallet else None
+        if not wallet:
+            return None
+
+        await cache_set(key, wallet.wallet_id, ttl=TTL_WALLET_ID)
+        return wallet.wallet_id

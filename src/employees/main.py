@@ -1,4 +1,3 @@
-# src/employees/main.py
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -17,18 +16,32 @@ from src.notifications.worker import email_worker_loop, celebration_worker_loop
 from src.notifications.redis_client import connect_redis, disconnect_redis, get_redis
 from src.notifications.service import NotificationService
 from src.webhooks.router import router as webhooks_router
+from src.common.route_registry import register_app_routes
 
 logger = logging.getLogger(__name__)
+
+ROLE_OVERRIDES = {
+    "GET:/v1/employees":                            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/employees/{employee_id}":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/employees":                           ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/employees/{employee_id}":              ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/employees/{employee_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/notifications":                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/notifications/unread-count":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/notifications/{notification_id}/read": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/notifications/read-all":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/notifications":                       ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/notifications/announcements":         ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/webhooks/hris":                       ["SUPER_ADMIN"],
+}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Database ───────────────────────────────────────────────────────────
     print("Employee Service: Connecting to Database...")
     await connect_with_retry()
     print("Employee Service: 🟢 Database Connected")
 
-    # ── Redis ──────────────────────────────────────────────────────────────
     try:
         r = await connect_redis()
         print("Employee Service: 🔴 Redis Connected")
@@ -39,11 +52,9 @@ async def lifespan(app: FastAPI):
         )
         r = None
 
-    # ── Email ──────────────────────────────────────────────────────────────
     smtp_config = SMTPConfig.from_env()
     email_sender = EmailSender(smtp_config)
 
-    # ── Slack (optional) ───────────────────────────────────────────────────
     slack_sender: SlackSender | None = None
     try:
         slack_config = SlackConfig.from_env()
@@ -52,12 +63,8 @@ async def lifespan(app: FastAPI):
     except KeyError as e:
         logger.warning("Slack disabled — missing env var: %s. Continuing without Slack.", e)
 
-    # ── Inject Redis into NotificationService (used by routers) ───────────
-    # The module-level _notif in employees/service.py doesn't have Redis context,
-    # so we store the redis client on app.state for router-level DI if needed.
     app.state.redis = r
 
-    # ── Workers ────────────────────────────────────────────────────────────
     if r is not None:
         worker_task = asyncio.create_task(
             email_worker_loop(db, email_sender, r, slack_sender),
@@ -70,15 +77,18 @@ async def lifespan(app: FastAPI):
         print("Employee Service: 📧 Email worker started (Redis queue mode)")
         print("Employee Service: 🎉 Celebration worker started")
     else:
-        # Redis unavailable — workers still start but use DB recovery only
-        from src.notifications.worker import _recover_pending
         logger.warning("Workers not started — Redis unavailable. Notifications will queue in DB.")
         worker_task = None
         celebration_task = None
 
+    await register_app_routes(
+        app,
+        default_roles=["SUPER_ADMIN", "HR_ADMIN"],
+        role_overrides=ROLE_OVERRIDES,
+    )
+
     yield
 
-    # ── Shutdown ───────────────────────────────────────────────────────────
     for task in (worker_task, celebration_task):
         if task is None:
             continue
@@ -114,9 +124,9 @@ app.add_middleware(
 )
 
 API_PREFIX = "/v1"
-app.include_router(emp_router, prefix=API_PREFIX + "/employees", tags=["Employees"])
+app.include_router(emp_router,           prefix=API_PREFIX + "/employees",  tags=["Employees"])
 app.include_router(notifications_router, tags=["Notifications"])
-app.include_router(webhooks_router, tags=["Webhooks"])
+app.include_router(webhooks_router,      tags=["Webhooks"])
 
 
 @app.get("/health", tags=["System"])

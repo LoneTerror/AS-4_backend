@@ -13,6 +13,15 @@ from src.common.middleware import (
     validation_exception_handler,
     generic_exception_handler
 )
+from src.common.route_registry import register_app_routes
+
+ROLE_OVERRIDES = {
+    "GET:/v1/dashboard/leaderboard":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/dashboard/recent-reviews":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/dashboard/teams":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/dashboard/teams/{department_id}":   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/dashboard/platform-stats":          ["SUPER_ADMIN", "HR_ADMIN"],
+}
 
 
 @asynccontextmanager
@@ -25,6 +34,12 @@ async def lifespan(app: FastAPI):
         print("Analytics Service: 🟢 Redis Connected")
     except Exception as e:
         print(f"Analytics Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+
+    await register_app_routes(
+        app,
+        default_roles=["SUPER_ADMIN", "HR_ADMIN"],
+        role_overrides=ROLE_OVERRIDES,
+    )
 
     yield
 
@@ -44,9 +59,11 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
 @app.get("/health", tags=["System"])
 async def health_check():
     return {"status": "healthy", "service": "Analytics Service"}
+
 
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(Exception, generic_exception_handler)
