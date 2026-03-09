@@ -145,13 +145,6 @@ pipeline {
             steps {
                 script {
                     sshagent(credentials: ['ec2-ssh-key']) {
-                        env.LIVE_EC2_IP = sh(
-                            script: "ssh -o StrictHostKeyChecking=no ubuntu@${TARGET_EC2_HOST} 'curl -s http://169.254.169.254/latest/meta-data/public-ipv4'",
-                            returnStdout: true
-                        ).trim()
-                        
-                        echo "📡 Target AWS Instance IP detected as: ${env.LIVE_EC2_IP}"
-
                         withCredentials([
                             string(credentialsId: 'rr-backend-db-url', variable: 'DATABASE_URL'),
                             string(credentialsId: 'rr-backend-redis-url',variable: 'REDIS_URL'),
@@ -249,14 +242,13 @@ pipeline {
                 -H 'Content-type: application/json' \
                 --data '{
                     "channel":"${SLACK_CHANNEL}",
-                    "text":"✅ *Success*: Build #${env.BUILD_NUMBER} of rnr-backend deployed to AWS successfully.\\n🔍 <${env.BUILD_URL}|View Jenkins Logs> | 📊 <http://${env.LIVE_EC2_IP}:16686|View Live Traces in Jaeger>"
+                    "text":"✅ *Success*: Build #${env.BUILD_NUMBER} of rnr-backend deployed to AWS successfully.\\n🔍 <${env.BUILD_URL}|View Jenkins Logs> | 📊 <https://${env.TARGET_EC2_HOST}/jaeger/|View Live Traces in Jaeger>"
                 }' \
                 https://slack.com/api/chat.postMessage
                 """
             }
         }
         failure {
-            // Rollback or cleanup logic for EC2 could go here
             withCredentials([
                 string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'),
                 string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL')
