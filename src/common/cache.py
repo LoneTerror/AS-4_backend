@@ -2,8 +2,8 @@
 src/common/cache.py
 ────────────────────
 Two-layer cache:
-  L1 — in-process Python dict  (0ms, process-local, short TTL)
-  L2 — Redis                   (~1ms local / ~55ms remote, longer TTL)
+  L1 — in-process Python dict  (0ms, process-local)
+  L2 — Redis                   (~1ms local / ~55ms remote)
 
 Read path:
   1. Check L1 → return immediately on hit (zero Redis round-trip)
@@ -11,15 +11,29 @@ Read path:
   3. Return None on full miss (caller queries DB)
 
 Write path:
-  1. Write Redis (setex)
-  2. Populate L1 with a shorter TTL
+  1. Write Redis (setex) with the chosen TTL tier
+  2. Populate L1 with the matching L1 tier TTL
+
+TTL TIERS — use these constants everywhere, in both cache files:
+  ┌───────────┬────────────┬───────────┬──────────────────────────────────────┐
+  │ Tier      │ L2 (Redis) │ L1 (mem)  │ Use for                              │
+  ├───────────┼────────────┼───────────┼──────────────────────────────────────┤
+  │ VOLATILE  │    60 s    │   30 s    │ wallet balance, unread counts        │
+  │ SHORT     │   300 s    │   60 s    │ employee records, active lists       │
+  │ MEDIUM    │  3600 s    │  300 s    │ dept, desig, roles, permissions      │
+  │ PERMANENT │ 86400 s    │ 3600 s    │ Slack UIDs, status codes             │
+  └───────────┴────────────┴───────────┴──────────────────────────────────────┘
+
+L1 is kept much shorter than L2 because L1 cannot be invalidated
+across processes — it must auto-expire quickly so stale data does not
+linger after a write in another service instance.
+
+Explicit cache_delete() / invalidate_pattern() on every write is still
+the primary freshness guarantee. TTL is only the safety net.
 
 Invalidate:
   cache_delete()       → removes exact key from both layers
   invalidate_pattern() → L1 prefix wipe + Redis scan_iter (non-blocking)
-
-Everything else is unchanged from the original implementation —
-same function signatures, same error handling, same import path.
 """
 
 import json
@@ -32,41 +46,25 @@ from src.common.local_cache import lc_get, lc_set, lc_delete, lc_delete_prefix
 logger = logging.getLogger(__name__)
 
 
-# ── L1 TTL strategy ───────────────────────────────────────────────────────────
-# L1 TTL is a fraction of L2 TTL so the local cache auto-refreshes
-# from Redis periodically, keeping multi-process deployments consistent.
-
-def _l1_ttl(l2_ttl: int) -> int:
-    """
-    Return an appropriate L1 TTL given the Redis TTL.
-
-    L2 TTL       L1 TTL   Rationale
-    ─────────    ───────  ─────────────────────────────────────────
-    ≤ 30s          5s     Very volatile — wallet balances etc.
-    ≤ 120s        15s     Volatile — personal history
-    ≤ 600s        30s     Semi-static — paginated lists
-    ≤ 3600s       60s     Static-ish — roles, permissions, org data
-    > 3600s      120s     Near-permanent — Slack UIDs, dept lookups
-    """
-    if l2_ttl <= 30:
-        return 5
-    if l2_ttl <= 120:
-        return 15
-    if l2_ttl <= 600:
-        return 30
-    if l2_ttl <= 3600:
-        return 60
-    return 120
+# ── TTL tiers — import and use these everywhere ───────────────────────────────
+#                             L2 (Redis)    L1 (in-process)
+TTL_VOLATILE  = 60   ;  L1_VOLATILE  = 30    # wallet balance, unread counts
+TTL_SHORT     = 300  ;  L1_SHORT     = 60    # employee records, active lists
+TTL_MEDIUM    = 3600 ;  L1_MEDIUM    = 300   # dept, desig, roles, permissions
+TTL_PERMANENT = 86400;  L1_PERMANENT = 3600  # Slack UIDs, status codes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Public API  (same signatures as before — drop-in replacement)
+# Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def cache_get(key: str) -> Optional[Any]:
+async def cache_get(key: str, l1_ttl: int = L1_SHORT) -> Optional[Any]:
     """
     L1 → L2 read.
     Returns deserialised value, or None on full miss / error.
+
+    l1_ttl: how long to keep the value in L1 when back-filling from Redis.
+            Pass the matching L1_* constant for the data type (default: L1_SHORT).
     """
     # ── L1 ──────────────────────────────────────────────────────────────────
     hit = lc_get(key)
@@ -80,18 +78,21 @@ async def cache_get(key: str) -> Optional[Any]:
         if raw is None:
             return None
         value = json.loads(raw)
-        # Back-fill L1 — use a medium TTL since we don't know the original L2 TTL here
-        lc_set(key, value, ttl=30)
+        lc_set(key, value, ttl=l1_ttl)
         return value
     except Exception as exc:
         logger.warning("cache_get(%s) failed: %s", key, exc)
         return None
 
 
-async def cache_set(key: str, value: Any, ttl: int = 60) -> bool:
+async def cache_set(key: str, value: Any, ttl: int = TTL_SHORT, l1_ttl: int = L1_SHORT) -> bool:
     """
     Write to Redis (L2) then populate L1.
-    ttl is the Redis expiry in seconds.
+
+    ttl:    Redis expiry in seconds   — use a TTL_* constant.
+    l1_ttl: L1 expiry in seconds      — use the matching L1_* constant.
+    Default tier: SHORT (TTL_SHORT / L1_SHORT).
+
     Returns True on success, False on Redis error (L1 is still populated).
     """
     serialised = json.dumps(value, default=str)
@@ -106,7 +107,7 @@ async def cache_set(key: str, value: Any, ttl: int = 60) -> bool:
         logger.warning("cache_set(%s) failed: %s", key, exc)
 
     # ── L1 — always populate even if Redis failed ────────────────────────────
-    lc_set(key, value, ttl=_l1_ttl(ttl))
+    lc_set(key, value, ttl=l1_ttl)
     return ok
 
 
@@ -138,8 +139,7 @@ async def invalidate_pattern(pattern: str) -> int:
     L1: strips the trailing '*' and does a prefix wipe (instant).
     L2: uses scan_iter() — non-blocking, safe for production.
 
-    Returns the number of Redis keys deleted.
-    Errors are swallowed.
+    Returns the number of Redis keys deleted. Errors are swallowed.
 
     Example patterns:
         "dashboard:team:*"

@@ -5,7 +5,11 @@ from fastapi import HTTPException, status
 
 from src.prisma.client import db
 from src.common.dependencies import CurrentUser
-from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
+from src.common.cache import (
+    cache_get, cache_set, cache_delete, invalidate_pattern,
+    TTL_VOLATILE, L1_VOLATILE,
+    TTL_MEDIUM,   L1_MEDIUM,
+)
 from src.recognition.schemas import (
     ReviewCreateRequest,
     ReviewUpdateRequest,
@@ -28,26 +32,29 @@ def _get_notif() -> NotificationService:
 
 _ROLE_PRIORITY = ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]
 
-# ── Cache keys & TTLs ─────────────────────────────────────────────────────────
-TTL_CATEGORIES = 600  # 10 min
-TTL_REVIEWS    = 60   # 1 min — per user+page
+# ── Cache keys ────────────────────────────────────────────────────────────────
+# Reviews   → VOLATILE  (TTL_VOLATILE  / L1_VOLATILE  =  60s / 30s)
+#             Reviews change often — new ones created, updated, wallets credited.
+# Categories → MEDIUM   (TTL_MEDIUM    / L1_MEDIUM    = 3600s / 300s)
+#             Categories rarely change — only HR_ADMIN can create/update them.
 
 def _key_reviews(user_id: str, page: int, limit: int) -> str:
     return f"recognition:reviews:{user_id}:{page}:{limit}"
 
 def _key_categories(page: int, limit: int, active_only: bool) -> str:
-    return f"recognition:categories:{page}:{limit}:{active_only}"
+    return f"recognition:categories:{page}:{limit}:{int(active_only)}"
 
 async def invalidate_reviews(user_id: str):
     await invalidate_pattern(f"recognition:reviews:{user_id}:*")
 
 async def invalidate_categories():
     await invalidate_pattern("recognition:categories:*")
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERS  (unchanged from original)
+# HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_review_dict(review, tags: list) -> dict:
@@ -161,12 +168,13 @@ async def _get_team_member_count(department_id: str | None) -> int:
 class RecognitionService:
 
     # =========================================================
-    # LIST REVIEWS  — cached per user+page+limit
+    # LIST REVIEWS  — VOLATILE tier (60s / 30s)
     # =========================================================
     @staticmethod
     async def list_reviews(page: int, limit: int, current_user: CurrentUser):
         key    = _key_reviews(current_user.id, page, limit)
-        cached = await cache_get(key)
+        cached = await cache_get(key, l1_ttl=L1_VOLATILE)
+        logger.debug("cache reviews key=%s %s", key, "HIT" if cached is not None else "MISS")
         if cached is not None:
             return cached
 
@@ -203,11 +211,11 @@ class RecognitionService:
             },
         }
 
-        await cache_set(key, result, ttl=TTL_REVIEWS)
+        await cache_set(key, result, ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
         return result
 
     # =========================================================
-    # GET REVIEW  (unchanged — access-control sensitive, not cached)
+    # GET REVIEW  (access-control sensitive — not cached)
     # =========================================================
     @staticmethod
     async def get_review(review_id: str, current_user: CurrentUser):
@@ -228,12 +236,13 @@ class RecognitionService:
         return _build_review_dict(review, getattr(review, "review_category_tags", []))
 
     # =========================================================
-    # LIST REVIEW CATEGORIES  — cached
+    # LIST REVIEW CATEGORIES  — MEDIUM tier (3600s / 300s)
     # =========================================================
     @staticmethod
     async def list_review_categories(page: int, limit: int, active_only: bool = True):
         key    = _key_categories(page, limit, active_only)
-        cached = await cache_get(key)
+        cached = await cache_get(key, l1_ttl=L1_MEDIUM)
+        logger.debug("cache categories key=%s %s", key, "HIT" if cached is not None else "MISS")
         if cached is not None:
             return cached
 
@@ -261,7 +270,7 @@ class RecognitionService:
             },
         }
 
-        await cache_set(key, result, ttl=TTL_CATEGORIES)
+        await cache_set(key, result, ttl=TTL_MEDIUM, l1_ttl=L1_MEDIUM)
         return result
 
     # =========================================================
