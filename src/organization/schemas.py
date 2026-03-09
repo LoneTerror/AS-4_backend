@@ -172,64 +172,6 @@ class UpdateDesignationRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────
-# 5.4 Roles Schemas
-# ─────────────────────────────────────────────
-
-class RoleResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    role_id: UUID
-    role_name: str
-    role_code: str
-    description: Optional[str] = None
-    reviewer_weight: Decimal
-    created_at: datetime
-
-
-class RoleDetailResponse(RoleResponse):
-    updated_at: Optional[datetime] = None
-
-
-class CreateRoleRequest(BaseModel):
-    role_name: str = Field(..., max_length=100)
-    role_code: str = Field(..., max_length=50)
-    description: Optional[str] = None
-    reviewer_weight: Optional[Decimal] = Field(default=Decimal("1.0000"), gt=0)
-
-    @field_validator("role_code")
-    @classmethod
-    def uppercase_code(cls, v: str) -> str:
-        return v.upper()
-
-
-class UpdateRoleRequest(BaseModel):
-    role_name: Optional[str] = Field(None, max_length=100)
-    description: Optional[str] = None
-    reviewer_weight: Optional[Decimal] = Field(None, gt=0)
-
-
-class AssignRoleRequest(BaseModel):
-    employee_id: UUID
-
-
-class AssignRoleResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    employee_role_id: UUID
-    employee_id: UUID
-    role_id: UUID
-    role_code: str
-    assigned_at: datetime
-    assigned_by: UUID
-    is_active: bool
-
-
-class RevokeRoleResponse(BaseModel):
-    message: str
-    employee_id: UUID
-    role_id: UUID
-    revoked_at: datetime
-
-
-# ─────────────────────────────────────────────
 # 5.5 Status Master Schemas
 # ─────────────────────────────────────────────
 

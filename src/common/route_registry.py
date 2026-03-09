@@ -74,7 +74,9 @@ _SYSTEM_ACTOR = None
 
 # How long to wait for the entire registration before giving up.
 # Service will still start — registration failure is non-fatal.
-_REGISTRATION_TIMEOUT_SECONDS = 30
+# Increased from 30s to 120s — all 8 services start simultaneously and
+# hammer the DB at once; the previous 30s timeout was too tight.
+_REGISTRATION_TIMEOUT_SECONDS = 120
 
 
 def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
@@ -103,9 +105,9 @@ async def _do_register(
     """Inner registration logic — runs inside an asyncio timeout guard."""
     from src.prisma.client import db
 
-    # Small random jitter (0–2s) so all 8 services don't hammer the DB
-    # at exactly the same millisecond on startup.
-    jitter = random.uniform(0, 2)
+    # Random jitter so all 8 services don't hammer the DB simultaneously.
+    # Increased from 0–2s to 0–10s to spread the load across services.
+    jitter = random.uniform(0, 10)
     await asyncio.sleep(jitter)
 
     # 1. Load all roles from DB into a code→id map
@@ -138,6 +140,12 @@ async def _do_register(
 
     now = datetime.now(timezone.utc)
 
+    # Categorise every (route_key, role_id) pair:
+    #   to_insert     — brand-new rows  → single create_many call (1 round-trip)
+    #   to_reactivate — inactive rows   → individual updates (need row id)
+    to_insert: list[dict] = []
+    to_reactivate: list = []
+
     for method, path in routes:
         route_key = f"{method}:{path}"
         roles_for_route = role_overrides.get(route_key, default_roles)
@@ -153,55 +161,49 @@ async def _do_register(
 
             pair = (route_key, role_id)
 
-            try:
-                if pair in existing_active:
-                    skipped += 1
-                    continue
+            if pair in existing_active:
+                skipped += 1
+            elif pair in existing_inactive:
+                to_reactivate.append(existing_inactive[pair])
+            else:
+                to_insert.append({
+                    "route_key":  route_key,
+                    "role_id":    role_id,
+                    "is_active":  True,
+                    "created_by": _SYSTEM_ACTOR,
+                    "updated_by": _SYSTEM_ACTOR,
+                    "updated_at": now,
+                })
 
-                if pair in existing_inactive:
-                    row = existing_inactive[pair]
-                    await db.route_permissions.update(
-                        where={"id": row.id},
-                        data={
-                            "is_active":  True,
-                            "updated_by": _SYSTEM_ACTOR,
-                            "updated_at": now,
-                        },
-                    )
-                    reactivated += 1
-                    logger.debug(
-                        "route_registry: re-activated %s → %s", route_key, role_code
-                    )
-                    continue
+    # ── Batch insert all new rows in ONE round-trip ───────────────────────────
+    if to_insert:
+        try:
+            result = await db.route_permissions.create_many(
+                data=to_insert,
+                skip_duplicates=True,  # safe against concurrent service startups
+            )
+            inserted = result.count if hasattr(result, "count") else len(to_insert)
+            logger.debug("route_registry: batch-inserted %d rows", inserted)
+        except Exception as insert_err:
+            errors += len(to_insert)
+            logger.warning("route_registry: batch insert failed: %s", insert_err)
 
-                # New row — tolerate a duplicate from a parallel service startup
-                try:
-                    await db.route_permissions.create(data={
-                        "route_key":  route_key,
-                        "role_id":    role_id,
-                        "is_active":  True,
-                        "created_by": _SYSTEM_ACTOR,
-                        "updated_by": _SYSTEM_ACTOR,
-                        "updated_at": now,
-                    })
-                    inserted += 1
-                    logger.debug(
-                        "route_registry: registered %s → %s", route_key, role_code
-                    )
-                except Exception as insert_err:
-                    # Unique constraint violation from concurrent startup — safe to skip.
-                    skipped += 1
-                    logger.debug(
-                        "route_registry: concurrent insert skipped %s → %s: %s",
-                        route_key, role_code, insert_err,
-                    )
-
-            except Exception as err:
-                errors += 1
-                logger.warning(
-                    "route_registry: unexpected error for %s → %s: %s",
-                    route_key, role_code, err,
-                )
+    # ── Reactivate previously-deactivated rows (need per-row id) ─────────────
+    for row in to_reactivate:
+        try:
+            await db.route_permissions.update(
+                where={"id": row.id},
+                data={
+                    "is_active":  True,
+                    "updated_by": _SYSTEM_ACTOR,
+                    "updated_at": now,
+                },
+            )
+            reactivated += 1
+            logger.debug("route_registry: re-activated %s", row.route_key)
+        except Exception as err:
+            errors += 1
+            logger.warning("route_registry: reactivation failed for %s: %s", row.route_key, err)
 
     # Invalidate the permissions cache so middleware picks up new routes immediately
     try:

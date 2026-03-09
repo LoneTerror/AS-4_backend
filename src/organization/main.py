@@ -3,33 +3,47 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
-from datetime import datetime
 
 from src.prisma.client import db, connect_with_retry
+from src.notifications.redis_client import connect_redis, disconnect_redis
+from src.common.dependencies import close_auth_client
 from src.organization.router import (
     departments_router,
     designations_router,
     department_types_router,
-    roles_router,
     statuses_router,
     audit_logs_router,
     seasonal_multipliers_router,
 )
-from src.notifications.redis_client import connect_redis, disconnect_redis
-from src.common.dependencies import close_auth_client
-from src.organization.router import departments_router, designations_router, department_types_router
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    "GET:/v1/org/departments":                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/org/departments/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/org/department-types":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/org/designations":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/org/designations/{designation_id}":  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/org/departments":                   ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/org/departments/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/org/designations":                  ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/org/designations/{designation_id}":  ["SUPER_ADMIN", "HR_ADMIN"],
+    # ── Departments ───────────────────────────────────────────────────────────
+    "GET:/v1/org/departments":                              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/org/departments/{department_id}":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/org/departments":                             ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/org/departments/{department_id}":              ["SUPER_ADMIN", "HR_ADMIN"],
+    # ── Department Types ──────────────────────────────────────────────────────
+    "GET:/v1/org/department-types":                         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    # ── Designations ─────────────────────────────────────────────────────────
+    "GET:/v1/org/designations":                             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/org/designations/{designation_id}":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/org/designations":                            ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/org/designations/{designation_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
+    # ── Statuses ──────────────────────────────────────────────────────────────
+    "GET:/v1/org/statuses":                                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/org/statuses/{status_id}":                     ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/org/statuses":                                ["SUPER_ADMIN"],
+    "PUT:/v1/org/statuses/{status_id}":                     ["SUPER_ADMIN"],
+    # ── Seasonal Multipliers ──────────────────────────────────────────────────
+    "GET:/v1/org/seasonal-multipliers":                     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/org/seasonal-multipliers/active":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/org/seasonal-multipliers":                    ["SUPER_ADMIN"],
+    "PUT:/v1/org/seasonal-multipliers/{mult_id}":           ["SUPER_ADMIN"],
+    "DELETE:/v1/org/seasonal-multipliers/{mult_id}":        ["SUPER_ADMIN"],
+    # ── Audit Logs ────────────────────────────────────────────────────────────
+    "GET:/v1/org/audit-logs":                               ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/org/audit-logs/{audit_id}":                    ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 
@@ -80,23 +94,16 @@ app.add_middleware(
 
 @app.get("/health", tags=["System"])
 async def health_check():
-    return {
-        "status": "healthy",
-        "service": "Organization Service",
-        "version": "1.0.0",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "dependencies": {"database": "connected"},
-    }
+    return {"status": "healthy", "service": "Organization Service"}
 
 
 API_PREFIX = "/v1"
-app.include_router(departments_router,      prefix=API_PREFIX + "/org/departments",      tags=["Departments"])
-app.include_router(designations_router,     prefix=API_PREFIX + "/org/designations",     tags=["Designations"])
-app.include_router(department_types_router, prefix=API_PREFIX + "/org/department-types", tags=["Department Types"])
-app.include_router(roles_router, prefix=API_PREFIX + "/org/roles", tags=["Roles"])
-app.include_router(statuses_router, prefix=API_PREFIX + "/org/statuses", tags=["Status Master"])
-app.include_router(audit_logs_router, prefix=API_PREFIX + "/org/audit-logs", tags=["Audit Logs"])
+app.include_router(departments_router,          prefix=API_PREFIX + "/org/departments",          tags=["Departments"])
+app.include_router(designations_router,         prefix=API_PREFIX + "/org/designations",         tags=["Designations"])
+app.include_router(department_types_router,     prefix=API_PREFIX + "/org/department-types",     tags=["Department Types"])
+app.include_router(statuses_router,             prefix=API_PREFIX + "/org/statuses",             tags=["Statuses"])
 app.include_router(seasonal_multipliers_router, prefix=API_PREFIX + "/org/seasonal-multipliers", tags=["Seasonal Multipliers"])
+app.include_router(audit_logs_router,           prefix=API_PREFIX + "/org/audit-logs",           tags=["Audit Logs"])
 
 
 def custom_openapi():

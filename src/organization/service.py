@@ -30,6 +30,7 @@ def _key_dept(dept_id: str)                        -> str: return f"org:departme
 def _key_desigs(page, limit, is_active)            -> str:
     return f"org:designations:{page}:{limit}:{is_active}"
 def _key_desig(desig_id: str)                      -> str: return f"org:designation:{desig_id}"
+def _key_mult(mult_id: str)                        -> str: return f"org:seasonal_multiplier:{mult_id}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,6 +65,10 @@ async def list_departments(
 
     where: dict = {}
     and_conditions = []
+
+    # BUG FIX 1: is_active filter was never applied
+    if is_active is not None:
+        and_conditions.append({"is_active": is_active})
 
     if search:
         and_conditions.append({
@@ -200,7 +205,6 @@ async def create_department(
         include={"department_types": True}
     )
 
-    # Invalidate list caches so the new department appears
     await invalidate_departments()
 
     dept_type_resp = None
@@ -250,7 +254,6 @@ async def update_department(
         include={"department_types": True}
     )
 
-    # Invalidate this dept's detail cache + all list pages
     await cache_delete(_key_dept(department_id))
     await invalidate_pattern("org:departments:*")
 
@@ -309,11 +312,18 @@ async def list_designations(
     if cached is not None:
         return schemas.DesignationListResponse(**cached)
 
-    total = await db.designations.count()
+    where: dict = {}
+
+    # BUG FIX 2: is_active filter was never applied
+    if is_active is not None:
+        where["is_active"] = is_active
+
+    total = await db.designations.count(where=where)
     total_pages = math.ceil(total / limit) if total else 1
     skip = (page - 1) * limit
 
     designations = await db.designations.find_many(
+        where=where,
         skip=skip,
         take=limit,
         order={"level": "asc"}
@@ -427,8 +437,9 @@ async def update_designation(
     if not existing:
         raise HTTPException(status_code=404, detail="Designation not found")
 
+    # BUG FIX 3: description was incorrectly excluded, preventing it from ever being updated
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items()
-                   if k not in ("is_active", "description")}
+                   if k not in ("is_active",)}
 
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
@@ -441,150 +452,11 @@ async def update_designation(
         data=update_data
     )
 
+    # Invalidate this designation's detail cache after update
+    await cache_delete(_key_desig(designation_id))
+    await invalidate_pattern("org:designations:*")
+
     return await get_designation_detail(designation_id)
-
-# ══════════════════════════════════════════════
-#  5.4 ROLES SERVICE
-# ══════════════════════════════════════════════
-
-async def list_roles() -> list[schemas.RoleResponse]:
-    roles = await db.roles.find_many(order={"role_name": "asc"})
-    return [
-        schemas.RoleResponse(
-            role_id=r.role_id,
-            role_name=r.role_name,
-            role_code=r.role_code,
-            description=r.description,
-            reviewer_weight=r.reviewer_weight,
-            created_at=r.created_at,
-        )
-        for r in roles
-    ]
-
-
-async def get_role(role_id: str) -> schemas.RoleDetailResponse:
-    role = await db.roles.find_unique(where={"role_id": role_id})
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-    return schemas.RoleDetailResponse(
-        role_id=role.role_id,
-        role_name=role.role_name,
-        role_code=role.role_code,
-        description=role.description,
-        reviewer_weight=role.reviewer_weight,
-        created_at=role.created_at,
-        updated_at=role.updated_at,
-    )
-
-
-async def create_role(data: schemas.CreateRoleRequest, created_by_id: str) -> schemas.RoleDetailResponse:
-    existing = await db.roles.find_first(
-        where={"OR": [{"role_name": data.role_name}, {"role_code": data.role_code}]}
-    )
-    if existing:
-        raise HTTPException(status_code=409, detail="CONFLICT – role_code or role_name already exists")
-
-    now = datetime.now()
-    new_role = await db.roles.create(
-        data={
-            "role_name": data.role_name,
-            "role_code": data.role_code,
-            "description": data.description,
-            "reviewer_weight": str(data.reviewer_weight) if data.reviewer_weight else "1.0000",
-            "created_by": created_by_id,
-            "updated_by": created_by_id,
-            "updated_at": now,
-        }
-    )
-    return schemas.RoleDetailResponse(
-        role_id=new_role.role_id,
-        role_name=new_role.role_name,
-        role_code=new_role.role_code,
-        description=new_role.description,
-        reviewer_weight=new_role.reviewer_weight,
-        created_at=new_role.created_at,
-        updated_at=new_role.updated_at,
-    )
-
-
-async def update_role(role_id: str, data: schemas.UpdateRoleRequest, updated_by_id: str) -> schemas.RoleDetailResponse:
-    existing = await db.roles.find_unique(where={"role_id": role_id})
-    if not existing:
-        raise HTTPException(status_code=404, detail="Role not found")
-
-    update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
-    if "reviewer_weight" in update_data:
-        update_data["reviewer_weight"] = str(update_data["reviewer_weight"])
-    update_data["updated_by"] = updated_by_id
-    update_data["updated_at"] = datetime.now()
-
-    updated = await db.roles.update(where={"role_id": role_id}, data=update_data)
-    return schemas.RoleDetailResponse(
-        role_id=updated.role_id,
-        role_name=updated.role_name,
-        role_code=updated.role_code,
-        description=updated.description,
-        reviewer_weight=updated.reviewer_weight,
-        created_at=updated.created_at,
-        updated_at=updated.updated_at,
-    )
-
-
-async def assign_role(role_id: str, data: schemas.AssignRoleRequest, assigned_by_id: str) -> schemas.AssignRoleResponse:
-    role = await db.roles.find_unique(where={"role_id": role_id})
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-
-    emp = await db.employees.find_unique(where={"employee_id": str(data.employee_id)})
-    if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
-
-    existing = await db.employee_roles.find_first(
-        where={"employee_id": str(data.employee_id), "role_id": role_id, "is_active": True}
-    )
-    if existing:
-        raise HTTPException(status_code=409, detail="CONFLICT – Employee already has this role")
-
-    now = datetime.now()
-    new_er = await db.employee_roles.create(
-        data={
-            "employee_id": str(data.employee_id),
-            "role_id": role_id,
-            "assigned_by": assigned_by_id,
-            "created_by": assigned_by_id,
-            "updated_by": assigned_by_id,
-            "updated_at": now,
-        }
-    )
-    return schemas.AssignRoleResponse(
-        employee_role_id=new_er.employee_role_id,
-        employee_id=new_er.employee_id,
-        role_id=new_er.role_id,
-        role_code=role.role_code,
-        assigned_at=new_er.assigned_at,
-        assigned_by=new_er.assigned_by,
-        is_active=new_er.is_active,
-    )
-
-
-async def revoke_role(role_id: str, employee_id: str, revoked_by_id: str) -> schemas.RevokeRoleResponse:
-    er = await db.employee_roles.find_first(
-        where={"employee_id": employee_id, "role_id": role_id, "is_active": True}
-    )
-    if not er:
-        raise HTTPException(status_code=404, detail="Active role assignment not found")
-
-    now = datetime.now()
-    await db.employee_roles.update(
-        where={"employee_role_id": er.employee_role_id},
-        data={"is_active": False, "revoked_at": now, "revoked_by": revoked_by_id, "updated_by": revoked_by_id, "updated_at": now},
-    )
-    return schemas.RevokeRoleResponse(
-        message="Role revoked successfully.",
-        employee_id=UUID(employee_id),
-        role_id=UUID(role_id),
-        revoked_at=now,
-    )
 
 
 # ══════════════════════════════════════════════
@@ -873,8 +745,7 @@ async def delete_seasonal_multiplier(mult_id: str) -> None:
         )
 
     await db.seasonal_multipliers.delete(where={"seasonal_multiplier_id": mult_id})
-    # Bust this specific detail + all list pages
-    await cache_delete(_key_desig(designation_id))
-    await invalidate_pattern("org:designations:*")
 
-    return await get_designation_detail(designation_id)
+    # BUG FIX 4: was incorrectly using designation cache keys instead of seasonal multiplier keys
+    await cache_delete(_key_mult(mult_id))
+    await invalidate_pattern("org:seasonal_multiplier*")
