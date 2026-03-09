@@ -54,7 +54,7 @@ pipeline {
             }
         }
 
-        3. Parallelize Container Scan and DAST
+        // 3. Parallelize Container Scan and DAST
         stage('Dynamic Analysis') {
             parallel {
                 stage('Container Scan - Trivy') {
