@@ -4,7 +4,7 @@ pipeline {
     environment {
         IMAGE = "mrmonster786/rnr-backend"
         TAG = "${env.BUILD_NUMBER}"
-        TARGET_EC2_HOST="https://test.aabhar.top"
+        TARGET_EC2_HOST="test.aabhar.top"
     }
 
     options {
