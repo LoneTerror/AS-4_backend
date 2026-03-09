@@ -4,6 +4,8 @@ const commonEnv = {
   PRISMA_HOME: "/app/.prisma",
   PRISMA_PY_BINARIES_PATH: "/app/prisma_binaries",
   PRISMA_BINARY_CACHE_DIR: "/app/.cache",
+  // 1. Force PM2 and Python to keep ANSI color codes in the Docker stream
+  FORCE_COLOR: "1" 
 };
 
 // Define your microservices and their specific initial startup delay (in seconds)
@@ -28,6 +30,9 @@ const apps = [
     autorestart: true,
     watch: false,
     kill_timeout: 5000,
+    // 2. Stop PM2 from writing duplicate logs to the container's virtual disk
+    out_file: "/dev/null",   
+    error_file: "/dev/null"  
   }
 ];
 
@@ -45,6 +50,11 @@ const pythonApps = pythonServices.map((svc) => ({
   min_uptime: 5000,       // Consider it "online" if it survives for 5 seconds
   kill_timeout: 5000,
   restart_delay: 5000,    // If the app crashes, wait 5 seconds before restarting
+  
+  // 3. Bypass disk logging so Dozzle gets the pure stdout stream from PM2-runtime
+  out_file: "/dev/null",   
+  error_file: "/dev/null", 
+  
   env: commonEnv,
 }));
 
