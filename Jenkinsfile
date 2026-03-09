@@ -147,6 +147,7 @@ pipeline {
                     sshagent(credentials: ['ec2-ssh-key']) {
                         withCredentials([
                             string(credentialsId: 'rr-backend-db-url', variable: 'DATABASE_URL'),
+                            string(credentialsId: 'rr-backend-algorithm', variable: 'ALGORITHM'),
                             string(credentialsId: 'rr-backend-redis-url',variable: 'REDIS_URL'),
                             string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
                             string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
@@ -172,6 +173,7 @@ pipeline {
                                 --add-host host.docker.internal:host-gateway \\
                                 -p 8000:8000 \\
                                 -e DATABASE_URL='${DATABASE_URL}' \\
+                                -e ALGORITHM='${ALGORITHM}'\\
                                 -e REDIS_URL='${REDIS_URL}' \\
                                 -e SECRET_KEY='${SECRET_KEY}' \\
                                 -e AUTH_SERVICE_URL='${AUTH_SERVICE_URL}' \\
