@@ -188,6 +188,7 @@ pipeline {
                                 -e ACCESS_TOKEN_EXPIRE_MINUTES='30' \\
                                 -e OTEL_SERVICE_NAME='rnr-backend' \\
                                 -e OTEL_EXPORTER_OTLP_ENDPOINT='http://172.17.0.1:4317' \\
+                                -e OTEL_EXPORTER_OTLP_INSECURE='true' \\
                                 -e FRONTEND_CORS_ORIGINS='${FRONTEND_CORS_ORIGINS}' \\
                                 ${IMAGE}:${TAG}
 
