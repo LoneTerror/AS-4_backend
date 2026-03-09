@@ -4,7 +4,7 @@ from prisma.errors import UniqueViolationError
 from src.prisma.client import db
 from datetime import datetime, timezone
 from src.common.dependencies import CurrentUser
-from src.common.cache import cache_get, cache_set
+from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
 
@@ -20,9 +20,15 @@ def _get_notif() -> NotificationService:
         r = None
     return NotificationService(db, redis=r)
 
-# ── Cache key — transaction_types is seed data, never changes ────────────────
+# ── Cache keys ────────────────────────────────────────────────────────────────
 _KEY_TXN_TYPES = "wallet:transaction_types"
-TTL_TXN_TYPES  = 3600  # 1 hr
+TTL_TXN_TYPES  = 3600   # 1 hr  — seed data, never changes
+TTL_WALLET     = 30     # 30s   — balance changes on every transaction
+                        #         short TTL keeps it feeling live
+
+def _wallet_key(employee_id: str) -> str:
+    return f"wallets:employee:{employee_id}"
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 WNF = "Wallet not found"
@@ -136,6 +142,9 @@ async def create_transaction(data, current_user: CurrentUser):
                     status_code=409,
                     detail="Wallet was updated by another transaction."
                 )
+
+        # ── Invalidate wallet cache after successful commit ────────────────
+        await cache_delete(_wallet_key(wallet.employee_id))
 
         try:
             direction = "credited to" if txn_type.is_credit else "debited from"
@@ -278,13 +287,24 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
 
 
 async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
+    """
+    Returns the full wallet object for an employee.
+    Cached per employee_id with a short TTL — busted on any transaction.
+    """
     if not is_admin(current_user) and employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
+
+    key = _wallet_key(employee_id)
+    cached = await cache_get(key)
+    if cached is not None:
+        return cached
 
     wallet = await db.wallets.find_unique(where={"employee_id": employee_id})
     if not wallet:
         raise HTTPException(status_code=404, detail=WNF)
 
+    data = wallet.model_dump()
+    await cache_set(key, data, ttl=TTL_WALLET)
     return wallet
 
 
@@ -470,6 +490,9 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                     detail="Wallet updated concurrently — please retry"
                 )
 
+        # ── Invalidate wallet cache after successful commit ────────────────
+        await cache_delete(_wallet_key(employee_id))
+
         try:
             stars = "⭐" * review.rating
             await _get_notif().create_notification(
@@ -605,6 +628,9 @@ async def adjust_wallet_for_review_update(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Wallet updated concurrently — please retry",
                 )
+
+        # ── Invalidate wallet cache after successful commit ────────────────
+        await cache_delete(_wallet_key(employee_id))
 
         try:
             emoji = "💰" if int_delta > 0 else "📉"

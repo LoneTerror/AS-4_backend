@@ -29,6 +29,19 @@ from src.common.middleware import (
     validation_exception_handler,
     generic_exception_handler,
 )
+from src.common.route_registry import register_app_routes
+
+ROLE_OVERRIDES = {
+    "GET:/v1/reviews":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/reviews/{id}":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/reviews":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/reviews/{id}":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/review-categories":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/review-categories":       ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/review-categories/{id}":   ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/digest":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/digest/send":             ["SUPER_ADMIN", "HR_ADMIN"],
+}
 
 # ==========================================
 # OpenTelemetry Configuration
@@ -63,9 +76,20 @@ async def lifespan(app: FastAPI):
     sender = EmailSender(SMTPConfig.from_env())
     digest_task = asyncio.create_task(digest_worker_loop(db, sender))
 
+    await register_app_routes(
+        app,
+        default_roles=["SUPER_ADMIN", "HR_ADMIN"],
+        role_overrides=ROLE_OVERRIDES,
+    )
+
     yield
 
     digest_task.cancel()
+    try:
+        await digest_task
+    except asyncio.CancelledError:
+        pass
+
     await close_auth_client()
     await disconnect_redis()
     await db.disconnect()
@@ -81,9 +105,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
 @app.get("/health", tags=["System"])
 async def health_check():
     return {"status": "healthy", "service": "Recognition Service"}
+
 
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(Exception, generic_exception_handler)
@@ -104,7 +130,7 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
-app.include_router(recognition_router, prefix="/v1", tags=["Reviews"])
+app.include_router(recognition_router,       prefix="/v1", tags=["Reviews"])
 app.include_router(review_categories_router, prefix="/v1", tags=["Review Categories"])
 app.include_router(digest_router)
 

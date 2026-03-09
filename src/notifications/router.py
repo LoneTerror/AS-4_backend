@@ -107,16 +107,28 @@ async def send_announcement(
     current_user: CurrentUser = Depends(get_current_user),
     svc: NotificationService = Depends(get_notification_service),
 ):
-    if payload.employee_ids:
-        recipient_ids = [str(eid) for eid in payload.employee_ids]
-    elif payload.department_ids:
-        recipient_ids = await svc.get_active_employee_ids_by_department(payload.department_ids)
-        if not recipient_ids:
-            raise HTTPException(status_code=404, detail="No active employees found in the specified department(s).")
-    else:
+    if not payload.employee_ids and not payload.department_ids:
+        # No targeting — broadcast to all active employees
         recipient_ids = await svc.get_all_active_employee_ids()
         if not recipient_ids:
             raise HTTPException(status_code=404, detail="No active employees found.")
+    else:
+        # Resolve each source independently, then merge (union, no duplicates)
+        id_set: set[str] = set()
+
+        if payload.department_ids:
+            dept_ids = await svc.get_active_employee_ids_by_department(payload.department_ids)
+            if not dept_ids:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No active employees found in the specified department(s).",
+                )
+            id_set.update(dept_ids)
+
+        if payload.employee_ids:
+            id_set.update(str(eid) for eid in payload.employee_ids)
+
+        recipient_ids = list(id_set)
 
     await svc.create_bulk_notifications(
         employee_ids=recipient_ids,

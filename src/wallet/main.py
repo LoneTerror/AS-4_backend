@@ -24,6 +24,18 @@ from src.common.middleware import (
     validation_exception_handler,
     generic_exception_handler
 )
+from src.common.route_registry import register_app_routes
+
+ROLE_OVERRIDES = {
+    "GET:/v1/wallets/employees/{employee_id}":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/{wallet_id}/balance":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/{wallet_id}/points-summary": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/transactions":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/transactions/{transaction_id}":      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/transactions/types":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/transactions":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
+    "POST:/v1/wallets/credit-from-review":        ["SUPER_ADMIN", "HR_ADMIN"],
+}
 
 # ==========================================
 # OpenTelemetry Configuration
@@ -55,6 +67,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Wallet Service: ⚠️  Redis unavailable ({e}) — caching disabled")
 
+    await register_app_routes(
+        app,
+        default_roles=["SUPER_ADMIN", "HR_ADMIN"],
+        role_overrides=ROLE_OVERRIDES,
+    )
+
     yield
 
     await close_auth_client()
@@ -73,9 +91,11 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
 @app.get("/health", tags=["System"])
 async def health_check():
     return {"status": "healthy", "service": "Wallet Service"}
+
 
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(Exception, generic_exception_handler)

@@ -78,3 +78,13 @@ report.json
 .coverage
 coverage-organization.xml
 coverage.xml
+
+check_auth_cache.py
+check_redis_jitter.py
+diagnose_latency.py
+fast.py
+find_the_floor.py
+test_cache.py
+test_queue.py
+test_redis.py
+test_response_times.py

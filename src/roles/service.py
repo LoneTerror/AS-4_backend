@@ -20,12 +20,21 @@ _KEY_EMP_ROLES   = "roles:employees"
 _KEY_PERMISSIONS = "roles:route_permissions"
 
 TTL_ROLES       = 3600  # 1 hr  — almost static
-TTL_EMP_ROLES   = 120   # 2 min — changes on assign/revoke
+TTL_EMP_ROLES   = 600   # 10 min — was 2 min; explicit invalidation on assign/revoke covers freshness
 TTL_PERMISSIONS = 3600  # 1 hr  — almost static
 
-async def invalidate_roles():          await cache_delete(_KEY_ROLES)
-async def invalidate_employee_roles(): await cache_delete(_KEY_EMP_ROLES)
-async def invalidate_permissions():    await cache_delete(_KEY_PERMISSIONS)
+
+async def invalidate_roles():
+    await cache_delete(_KEY_ROLES)
+
+
+async def invalidate_employee_roles():
+    await cache_delete(_KEY_EMP_ROLES)
+
+
+async def invalidate_permissions():
+    await cache_delete(_KEY_PERMISSIONS)
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -35,8 +44,9 @@ async def list_roles():
         return cached
 
     rows = await db.roles.find_many(order=[{"role_name": "asc"}])
-    await cache_set(_KEY_ROLES, [r.model_dump() for r in rows], ttl=TTL_ROLES)
-    return rows
+    serialized = [r.model_dump() for r in rows]
+    await cache_set(_KEY_ROLES, serialized, ttl=TTL_ROLES)
+    return serialized
 
 
 async def create_role(body: CreateRoleRequest, current_user: CurrentUser):

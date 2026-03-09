@@ -28,6 +28,19 @@ from src.organization.router import (
 from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.common.dependencies import close_auth_client
 from src.organization.router import departments_router, designations_router, department_types_router
+from src.common.route_registry import register_app_routes
+
+ROLE_OVERRIDES = {
+    "GET:/v1/org/departments":                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/org/departments/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/org/department-types":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/org/designations":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/org/designations/{designation_id}":  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/org/departments":                   ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/org/departments/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/org/designations":                  ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/org/designations/{designation_id}":  ["SUPER_ADMIN", "HR_ADMIN"],
+}
 
 # ==========================================
 # OpenTelemetry Configuration
@@ -59,6 +72,12 @@ async def lifespan(app: FastAPI):
         print("Organization Service: 🟢 Redis Connected")
     except Exception as e:
         print(f"Organization Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+
+    await register_app_routes(
+        app,
+        default_roles=["SUPER_ADMIN", "HR_ADMIN"],
+        role_overrides=ROLE_OVERRIDES,
+    )
 
     yield
 
@@ -93,6 +112,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/health", tags=["System"])
 async def health_check():
     return {
@@ -103,14 +123,16 @@ async def health_check():
         "dependencies": {"database": "connected"},
     }
 
+
 API_PREFIX = "/v1"
-app.include_router(departments_router,    prefix=API_PREFIX + "/org/departments",     tags=["Departments"])
-app.include_router(designations_router,   prefix=API_PREFIX + "/org/designations",    tags=["Designations"])
+app.include_router(departments_router,      prefix=API_PREFIX + "/org/departments",      tags=["Departments"])
+app.include_router(designations_router,     prefix=API_PREFIX + "/org/designations",     tags=["Designations"])
 app.include_router(department_types_router, prefix=API_PREFIX + "/org/department-types", tags=["Department Types"])
 app.include_router(roles_router, prefix=API_PREFIX + "/org/roles", tags=["Roles"])
 app.include_router(statuses_router, prefix=API_PREFIX + "/org/statuses", tags=["Status Master"])
 app.include_router(audit_logs_router, prefix=API_PREFIX + "/org/audit-logs", tags=["Audit Logs"])
 app.include_router(seasonal_multipliers_router, prefix=API_PREFIX + "/org/seasonal-multipliers", tags=["Seasonal Multipliers"])
+
 
 def custom_openapi():
     if app.openapi_schema:
@@ -125,6 +147,7 @@ def custom_openapi():
                 operation["security"] = [{"BearerAuth": []}]
     app.openapi_schema = schema
     return schema
+
 
 app.openapi = custom_openapi
 
