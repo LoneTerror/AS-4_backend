@@ -92,8 +92,7 @@ async def health_check():
     return {"status": "healthy", "service": "Auth Service"}
 
 
-API_PREFIX = "/v1"
-app.include_router(auth_router, prefix=API_PREFIX, tags=["Auth"])
+app.include_router(auth_router, tags=["Auth"])
 
 def custom_openapi():
     if app.openapi_schema:
@@ -119,7 +118,7 @@ app.openapi = custom_openapi
 # Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
-    excluded_urls="health,v1/docs,v1/openapi.json"
+    excluded_urls="health,/docs,/openapi.json"
 )
 # ==========================================
 

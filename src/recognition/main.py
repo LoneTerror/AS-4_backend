@@ -99,9 +99,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recognition Service",
     version="1.0.0",
-    openapi_url="/v1/openapi.json",
-    docs_url="/v1/docs",
-    redoc_url="/v1/redoc",
+    openapi_url="/openapi.json",
+    root_path="/v1/recognitions",
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
 )
 
@@ -130,8 +131,8 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
-app.include_router(recognition_router,       prefix="/v1", tags=["Reviews"])
-app.include_router(review_categories_router, prefix="/v1", tags=["Review Categories"])
+app.include_router(recognition_router,       prefix="/reviews", tags=["Reviews"])
+app.include_router(review_categories_router, prefix="/review-categories", tags=["Review Categories"])
 app.include_router(digest_router)
 
 
@@ -141,7 +142,7 @@ app.include_router(digest_router)
 # Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
-    excluded_urls="health,v1/docs,v1/openapi.json,v1/redoc"
+    excluded_urls="health,docs,openapi.json,redoc"
 )
 # ==========================================
 

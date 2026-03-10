@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        logger.info("Rewards Service: 🔴 Redis Connected")
+        logger.info("Rewards Service: 🟢 Redis Connected")
     except Exception as e:
         logger.warning("Rewards Service: Redis unavailable (%s) — notifications will not be queued in real-time", e)
 
@@ -133,6 +133,6 @@ app.include_router(rewards_router.router)
 # Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
-    excluded_urls="health,v1/docs,v1/openapi.json,v1/redoc"
+    excluded_urls="health,/docs,/openapi.json,/redoc"
 )
 # ==========================================

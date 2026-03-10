@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
+import os
 
 # --- OpenTelemetry Imports ---
 from opentelemetry import trace
@@ -50,6 +51,11 @@ provider.add_span_processor(processor)
 trace.set_tracer_provider(provider)
 # ==========================================
 
+# Grab the env var, default to localhost for local dev fallback
+cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS")
+# Split by comma and strip whitespace to create a clean list
+allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -80,9 +86,10 @@ app = FastAPI(
     title="Analytics Service",
     description="Dashboard summary and analytics endpoints",
     version="1.0.0",
-    openapi_url="/v1/openapi.json",
-    docs_url="/v1/docs",
-    redoc_url="/v1/redoc",
+    root_path="/v1/analytics",
+    openapi_url="/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan
 )
 
@@ -99,14 +106,14 @@ app.add_exception_handler(HTTPException, http_exception_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=allowed_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
     expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
-app.include_router(analytics_router, prefix="/v1/dashboard", tags=["Dashboard"])
+app.include_router(analytics_router, prefix="/dashboard", tags=["Dashboard"])
 
 # ==========================================
 # Instrument FastAPI
@@ -114,7 +121,7 @@ app.include_router(analytics_router, prefix="/v1/dashboard", tags=["Dashboard"])
 # Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
-    excluded_urls="health,v1/docs,v1/openapi.json,v1/redoc"
+    excluded_urls="health,/docs,/openapi.json,/redoc"
 )
 # ==========================================
 

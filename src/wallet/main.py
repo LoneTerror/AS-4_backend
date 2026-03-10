@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Wallet Service",
     version="1.0.0",
-    root_path="/v1/wallet", 
+    root_path="/v1/wallets", 
     openapi_url="/openapi.json", 
     docs_url="/docs",
     redoc_url="/redoc",
@@ -116,7 +116,7 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
-app.include_router(wallet_router, prefix="/v1")
+app.include_router(wallet_router)
 
 
 # ==========================================
@@ -125,6 +125,6 @@ app.include_router(wallet_router, prefix="/v1")
 # Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
-    excluded_urls="health,v1/docs,v1/openapi.json,v1/redoc"
+    excluded_urls="health,docs,openapi.json,redoc"
 )
 # ==========================================

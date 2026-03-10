@@ -20,7 +20,6 @@ from src.organization.router import (
     departments_router,
     designations_router,
     department_types_router,
-    roles_router,
     statuses_router,
     audit_logs_router,
     seasonal_multipliers_router,
@@ -92,8 +91,8 @@ app = FastAPI(
     title="Organization Service",
     description="Microservice for handling company structure: Departments and Designations",
     version="1.0.0",
-    root_path="/v1/org", 
-    openapi_url="/openapi.json", # Moved to root
+    root_path="/v1/organizations", 
+    openapi_url="/openapi.json", 
     docs_url="/docs",
     lifespan=lifespan
 )
@@ -124,14 +123,12 @@ async def health_check():
     }
 
 
-API_PREFIX = "/v1"
-app.include_router(departments_router,      prefix=API_PREFIX + "/org/departments",      tags=["Departments"])
-app.include_router(designations_router,     prefix=API_PREFIX + "/org/designations",     tags=["Designations"])
-app.include_router(department_types_router, prefix=API_PREFIX + "/org/department-types", tags=["Department Types"])
-app.include_router(roles_router, prefix=API_PREFIX + "/org/roles", tags=["Roles"])
-app.include_router(statuses_router, prefix=API_PREFIX + "/org/statuses", tags=["Status Master"])
-app.include_router(audit_logs_router, prefix=API_PREFIX + "/org/audit-logs", tags=["Audit Logs"])
-app.include_router(seasonal_multipliers_router, prefix=API_PREFIX + "/org/seasonal-multipliers", tags=["Seasonal Multipliers"])
+app.include_router(departments_router,      prefix="/departments",          tags=["Departments"])
+app.include_router(designations_router,     prefix="/designations",         tags=["Designations"])
+app.include_router(department_types_router, prefix="/department-types",     tags=["Department Types"])
+app.include_router(statuses_router,         prefix="/statuses",             tags=["Status Master"])
+app.include_router(audit_logs_router,       prefix="/audit-logs",           tags=["Audit Logs"])
+app.include_router(seasonal_multipliers_router, prefix="/seasonal-multipliers", tags=["Seasonal Multipliers"])
 
 
 def custom_openapi():
@@ -157,7 +154,7 @@ app.openapi = custom_openapi
 # Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
-    excluded_urls="health,v1/docs,v1/openapi.json"
+    excluded_urls="health,/docs,/openapi.json"
 )
 # ==========================================
 

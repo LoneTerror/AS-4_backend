@@ -32,7 +32,7 @@ def get_redis(request: Request):
 
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/v1/webhooks", tags=["Webhooks"])
+router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 WEBHOOK_SECRET = os.environ.get("AGLORITHM", "")
 

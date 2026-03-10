@@ -10,7 +10,6 @@ from src.common.dependencies import check_route_permission, CurrentUser
 departments_router = APIRouter()
 designations_router = APIRouter()
 department_types_router = APIRouter()
-roles_router = APIRouter()
 statuses_router = APIRouter()
 audit_logs_router = APIRouter()
 seasonal_multipliers_router = APIRouter()
@@ -113,61 +112,6 @@ async def get_all_department_types(
 ):
     """Retrieve all department types for frontend dropdowns."""
     return await service.list_department_types()
-
-# ══════════════════════════════════════════════
-#  5.4 ROLES ROUTES
-# ══════════════════════════════════════════════
-
-@roles_router.get("", response_model=list[schemas.RoleResponse])
-async def list_roles(current_user: CurrentUser = Depends(check_route_permission)):
-    """Returns all system roles with reviewer weights."""
-    return await service.list_roles()
-
-
-@roles_router.get("/{role_id}", response_model=schemas.RoleDetailResponse)
-async def get_role(role_id: str, current_user: CurrentUser = Depends(check_route_permission)):
-    """Full detail of a single role."""
-    return await service.get_role(role_id)
-
-
-@roles_router.post("", response_model=schemas.RoleDetailResponse, status_code=201)
-async def create_role(
-    payload: schemas.CreateRoleRequest,
-    current_user: CurrentUser = Depends(check_route_permission),
-):
-    """Creates a new system role. SUPER_ADMIN only."""
-    return await service.create_role(payload, current_user.id)
-
-
-@roles_router.put("/{role_id}", response_model=schemas.RoleDetailResponse)
-async def update_role(
-    role_id: str,
-    payload: schemas.UpdateRoleRequest,
-    current_user: CurrentUser = Depends(check_route_permission),
-):
-    """Updates a role. SUPER_ADMIN only."""
-    return await service.update_role(role_id, payload, current_user.id)
-
-
-@roles_router.post("/{role_id}/assign", response_model=schemas.AssignRoleResponse, status_code=201)
-async def assign_role(
-    role_id: str,
-    payload: schemas.AssignRoleRequest,
-    current_user: CurrentUser = Depends(check_route_permission),
-):
-    """Assigns a role to an employee."""
-    return await service.assign_role(role_id, payload, current_user.id)
-
-
-@roles_router.delete("/{role_id}/assign/{employee_id}", response_model=schemas.RevokeRoleResponse)
-async def revoke_role(
-    role_id: str,
-    employee_id: str,
-    current_user: CurrentUser = Depends(check_route_permission),
-):
-    """Revokes a role from an employee."""
-    return await service.revoke_role(role_id, employee_id, current_user.id)
-
 
 # ══════════════════════════════════════════════
 #  5.5 STATUS MASTER ROUTES

@@ -115,7 +115,7 @@ async def health():
 # Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
-    excluded_urls="health,v1/docs,v1/openapi.json"
+    excluded_urls="health,/docs,/openapi.json"
 )
 # ==========================================
 

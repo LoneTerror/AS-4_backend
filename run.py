@@ -25,10 +25,10 @@ services = [
     ("auth",         "src.auth.main:app",           8001),
     ("roles",    "src.roles.main:app",              8002),
     ("employees",    "src.employees.main:app",      8003),
-    ("wallet",       "src.wallet.main:app",         8004),
-    ("recognition",  "src.recognition.main:app",    8005),
+    ("wallets",       "src.wallet.main:app",         8004),
+    ("recognitions",  "src.recognition.main:app",    8005),
     ("rewards",      "src.rewards.main:app",        8006),
-    ("organization", "src.organization.main:app",   8007),
+    ("organizations", "src.organization.main:app",   8007),
     ("analytics",    "src.analytics.main:app",      8008),
     
 ]
@@ -69,7 +69,7 @@ for name, app, port in services:
 
 print("\nAll services launched.\n")
 for name, _, port in processes:
-    print("  {:<15} -> http://localhost:{}/v1/docs".format(name, port))
+    print("  {:<15} -> http://localhost:{}/v1/{}/docs".format(name, port, name))
 
 try:
     while True:

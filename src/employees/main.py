@@ -155,11 +155,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-API_PREFIX = "/v1"
-app.include_router(emp_router, prefix=API_PREFIX, tags=["Employees"])
+app.include_router(emp_router, tags=["Employees"])
 app.include_router(notifications_router, tags=["Notifications"])
 app.include_router(webhooks_router,      tags=["Webhooks"])
-
 
 @app.get("/health", tags=["System"])
 async def health_check():
@@ -208,7 +206,7 @@ app.openapi = custom_openapi
 # Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
-    excluded_urls="health,v1/docs,v1/openapi.json"
+    excluded_urls="health,/docs,/openapi.json"
 )
 # ==========================================
 
