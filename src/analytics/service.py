@@ -37,27 +37,32 @@ from src.analytics.schemas import (
     TeamReport,
     TeamSummary,
 )
-from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
+from src.common.cache import (
+    cache_get, cache_set, cache_delete, invalidate_pattern,
+    TTL_VOLATILE,  L1_VOLATILE,  # recent reviews, platform stats →  60s /  30s
+    TTL_SHORT,     L1_SHORT,     # leaderboard, team reports     → 300s /  60s
+)
 
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TTLs (seconds)
+# TTL mapping
 # ─────────────────────────────────────────────────────────────────────────────
-TTL_TEAMS        = 300   # 5 min  — heavy aggregation, changes rarely
-TTL_PLATFORM     = 120   # 2 min  — counters, ok to be slightly stale
-TTL_LEADERBOARD  = 300   # 5 min  — points rarely change mid-session
-TTL_REVIEWS      = 60    # 1 min  — per-user, invalidated on new review
+# recent reviews  → VOLATILE  (60s / 30s)   — per-user, invalidated on new review
+# platform stats  → VOLATILE  (60s / 30s)   — per-user counters, ok to be slightly stale
+# leaderboard     → SHORT     (300s / 60s)  — points rarely change mid-session
+# team reports    → SHORT     (300s / 60s)  — heavy aggregation, changes rarely
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache-key helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _key_reviews(employee_id: str)   -> str: return f"dashboard:reviews:{employee_id}"
-def _key_leaderboard()               -> str: return "dashboard:leaderboard"
-def _key_platform(employee_id: str)  -> str: return f"dashboard:platform:{employee_id}"
-def _key_teams()                     -> str: return "dashboard:teams"
-def _key_team(dept_id: str)          -> str: return f"dashboard:team:{dept_id}"
+def _key_reviews(employee_id: str)  -> str: return f"dashboard:reviews:{employee_id}"
+def _key_leaderboard()              -> str: return "dashboard:leaderboard"
+def _key_platform(employee_id: str) -> str: return f"dashboard:platform:{employee_id}"
+def _key_teams()                    -> str: return "dashboard:teams"
+def _key_team(dept_id: str)         -> str: return f"dashboard:team:{dept_id}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,14 +85,14 @@ async def invalidate_teams() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Recent reviews
+# Recent reviews  — VOLATILE (60s / 30s)
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_recent_reviews_list(employee_id: str) -> List[RecentReview]:
-    key = _key_reviews(employee_id)
-    cached = await cache_get(key)
+    key    = _key_reviews(employee_id)
+    cached = await cache_get(key, l1_ttl=L1_VOLATILE)
+    logger.debug("cache reviews key=%s %s", key, "HIT" if cached is not None else "MISS")
     if cached is not None:
-        logger.debug("cache HIT %s", key)
         return [RecentReview(**r) for r in cached]
 
     raw = await get_recent_reviews(employee_id, limit=5)
@@ -102,19 +107,19 @@ async def get_recent_reviews_list(employee_id: str) -> List[RecentReview]:
             review_at=r.review_at,
         ))
 
-    await cache_set(key, [o.model_dump() for o in out], ttl=TTL_REVIEWS)
+    await cache_set(key, [o.model_dump() for o in out], ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
     return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Leaderboard
+# Leaderboard  — SHORT (300s / 60s)
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_leaderboard_list() -> List[LeaderboardEntry]:
-    key = _key_leaderboard()
-    cached = await cache_get(key)
+    key    = _key_leaderboard()
+    cached = await cache_get(key, l1_ttl=L1_SHORT)
+    logger.debug("cache leaderboard key=%s %s", key, "HIT" if cached is not None else "MISS")
     if cached is not None:
-        logger.debug("cache HIT %s", key)
         return [LeaderboardEntry(**e) for e in cached]
 
     raw = await get_leaderboard(limit=10)
@@ -130,19 +135,19 @@ async def get_leaderboard_list() -> List[LeaderboardEntry]:
             total_earned_points=w.total_earned_points,
         ))
 
-    await cache_set(key, [o.model_dump() for o in out], ttl=TTL_LEADERBOARD)
+    await cache_set(key, [o.model_dump() for o in out], ttl=TTL_SHORT, l1_ttl=L1_SHORT)
     return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Platform stats
+# Platform stats  — VOLATILE (60s / 30s)
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_platform_stats(employee_id: str) -> PlatformStats:
-    key = _key_platform(employee_id)
-    cached = await cache_get(key)
+    key    = _key_platform(employee_id)
+    cached = await cache_get(key, l1_ttl=L1_VOLATILE)
+    logger.debug("cache platform key=%s %s", key, "HIT" if cached is not None else "MISS")
     if cached is not None:
-        logger.debug("cache HIT %s", key)
         return PlatformStats(**cached)
 
     (
@@ -165,18 +170,18 @@ async def get_platform_stats(employee_id: str) -> PlatformStats:
     )
 
     result = PlatformStats(
-        total_points    =MetricWithGrowth(value=user_points,    this_month=pts_this,     last_month=pts_last),
-        rewards_redeemed=MetricWithGrowth(value=rewards_total,  this_month=rewards_this, last_month=rewards_last),
-        reviews_received=MetricWithGrowth(value=reviews_total,  this_month=reviews_this, last_month=reviews_last),
-        active_users    =MetricWithGrowth(value=active_now,     this_month=active_now,   last_month=active_last),
+        total_points    =MetricWithGrowth(value=user_points,   this_month=pts_this,     last_month=pts_last),
+        rewards_redeemed=MetricWithGrowth(value=rewards_total, this_month=rewards_this, last_month=rewards_last),
+        reviews_received=MetricWithGrowth(value=reviews_total, this_month=reviews_this, last_month=reviews_last),
+        active_users    =MetricWithGrowth(value=active_now,    this_month=active_now,   last_month=active_last),
     )
 
-    await cache_set(key, result.model_dump(), ttl=TTL_PLATFORM)
+    await cache_set(key, result.model_dump(), ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
     return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Admin — Team Reports
+# Admin — Team Reports  — SHORT (300s / 60s)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_scores(members_raw: list) -> list:
@@ -235,17 +240,17 @@ async def _dept_members(dept) -> list:
     if not employees:
         return []
     credit_type_ids = await get_credit_type_ids()
-    members_raw = await asyncio.gather(
+    members_raw     = await asyncio.gather(
         *[_build_member(emp, credit_type_ids) for emp in employees]
     )
     return _compute_scores(list(members_raw))
 
 
 async def get_teams_summary() -> List[TeamSummary]:
-    key = _key_teams()
-    cached = await cache_get(key)
+    key    = _key_teams()
+    cached = await cache_get(key, l1_ttl=L1_SHORT)
+    logger.debug("cache teams key=%s %s", key, "HIT" if cached is not None else "MISS")
     if cached is not None:
-        logger.debug("cache HIT %s", key)
         return [TeamSummary(**s) for s in cached]
 
     departments = await get_all_departments()
@@ -276,15 +281,15 @@ async def get_teams_summary() -> List[TeamSummary]:
             )
         )
 
-    await cache_set(key, [s.model_dump() for s in summaries], ttl=TTL_TEAMS)
+    await cache_set(key, [s.model_dump() for s in summaries], ttl=TTL_SHORT, l1_ttl=L1_SHORT)
     return summaries
 
 
 async def get_team_report(department_id: str) -> TeamReport | None:
-    key = _key_team(department_id)
-    cached = await cache_get(key)
+    key    = _key_team(department_id)
+    cached = await cache_get(key, l1_ttl=L1_SHORT)
+    logger.debug("cache team key=%s %s", key, "HIT" if cached is not None else "MISS")
     if cached is not None:
-        logger.debug("cache HIT %s", key)
         return TeamReport(**cached)
 
     dept = await get_department_by_id(department_id)
@@ -307,7 +312,7 @@ async def get_team_report(department_id: str) -> TeamReport | None:
     else:
         scored.sort(key=lambda m: m["performance_score"], reverse=True)
         members = [TeamMemberReport(**m) for m in scored]
-        report = TeamReport(
+        report  = TeamReport(
             department_id=dept.department_id,
             department_name=dept.department_name,
             total_members=len(members),
@@ -320,5 +325,5 @@ async def get_team_report(department_id: str) -> TeamReport | None:
             members=members,
         )
 
-    await cache_set(key, report.model_dump(), ttl=TTL_TEAMS)
+    await cache_set(key, report.model_dump(), ttl=TTL_SHORT, l1_ttl=L1_SHORT)
     return report

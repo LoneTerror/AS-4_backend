@@ -12,8 +12,8 @@ What's seeded (matches schema.prisma exactly):
     department_types       — TECH, MGMT  (with created_by / updated_by)
     departments            — ENG, HR     (with created_by / updated_by)
     designations           — SYS_ADMIN, ENG_MGR, SR_DEV  (with created_by / updated_by)
-    points_config          — BASE_POINTS_PER_STAR, MAX_POINTS_PER_REVIEW
-    review_categories      — OWNERSHIP, INNOVATION, COLLABORATION, LEADERSHIP
+    review_categories      — OWNERSHIP, INNOVATION, COLLABORATION, LEADERSHIP,
+                             POOR_COMMUNICATION, MISSED_DEADLINES, LACK_OF_INITIATIVE
     seasonal_multipliers   — Q1–Q4
     employees              — admin, jane, john, arijit, shubrajit, prasun (all DOBs = today)
     wallets                — one per employee
@@ -24,7 +24,7 @@ What's seeded (matches schema.prisma exactly):
     reward_history         — sample redemption for john
     reviews                — sample review jane→john with category tags
     audit_log              — sample audit entries
-    route_permissions      — all routes seeded with allowed roles
+    NOTE: route_permissions are now automatically handled by the system.
 """
 import os
 from pathlib import Path
@@ -93,11 +93,16 @@ GIFT_CARD_CAT_ID   = "cc0e8400-e29b-41d4-a716-446655440001"
 MERCHANDISE_CAT_ID = "cc0e8400-e29b-41d4-a716-446655440002"
 EXPERIENCE_CAT_ID  = "cc0e8400-e29b-41d4-a716-446655440003"
 
-# Review categories
+# Review categories — positive
 RC_OWNERSHIP_ID      = "dd0e8400-e29b-41d4-a716-446655440001"
 RC_INNOVATION_ID     = "dd0e8400-e29b-41d4-a716-446655440002"
 RC_COLLAB_ID         = "dd0e8400-e29b-41d4-a716-446655440003"
 RC_LEADERSHIP_ID     = "dd0e8400-e29b-41d4-a716-446655440004"
+
+# Review categories — negative
+RC_POOR_COMM_ID      = "dd0e8400-e29b-41d4-a716-446655440005"
+RC_MISSED_DL_ID      = "dd0e8400-e29b-41d4-a716-446655440006"
+RC_NO_INITIATIVE_ID  = "dd0e8400-e29b-41d4-a716-446655440007"
 
 # Points config
 PC_BASE_ID = "ee0e8400-e29b-41d4-a716-446655440001"
@@ -141,7 +146,6 @@ async def clean_db():
                 reward_categories,
                 transaction_types,
                 review_categories,
-                points_config,
                 seasonal_multipliers,
                 designations,
                 departments,
@@ -169,7 +173,6 @@ async def clean_db():
             ("reward_categories",     db.reward_categories),
             ("transaction_types",     db.transaction_types),
             ("review_categories",     db.review_categories),
-            ("points_config",         db.points_config),
             ("seasonal_multipliers",  db.seasonal_multipliers),
             ("designations",          db.designations),
             ("departments",           db.departments),
@@ -317,41 +320,28 @@ async def seed_designations():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# POINTS CONFIG
-# ─────────────────────────────────────────────────────────────────────────────
-async def seed_points_config():
-    print("⚙️  Seeding points_config...")
-    configs = [
-        (PC_BASE_ID, "BASE_POINTS_PER_STAR",  "2.200000",  "Base points awarded per star in a review rating",          date(2024, 1, 1)),
-        (PC_MAX_ID,  "MAX_POINTS_PER_REVIEW",  "50.000000", "Maximum points that can be awarded from a single review",  date(2024, 1, 1)),
-    ]
-    for config_id, key, value, desc, eff_from in configs:
-        await db.points_config.create(data={
-            "config_id":      config_id,
-            "config_key":     key,
-            "config_value":   value,
-            "description":    desc,
-            "effective_from": datetime.combine(eff_from, datetime.min.time()),
-            "created_by":     ADMIN_ID,
-            "updated_by":     ADMIN_ID,
-            "updated_at":     NOW,
-        })
-        print(f"   ✅ {key}  = {value}")
-    print()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # REVIEW CATEGORIES
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_review_categories():
     print("🏷️  Seeding review_categories...")
-    cats = [
+
+    # Positive categories (multiplier > 1.0) — boost points
+    positive_cats = [
         (RC_OWNERSHIP_ID,  "OWNERSHIP",     "Ownership",     "1.2000", "Taking responsibility and driving results"),
         (RC_INNOVATION_ID, "INNOVATION",    "Innovation",    "1.3000", "Creative thinking and problem solving"),
         (RC_COLLAB_ID,     "COLLABORATION", "Collaboration", "1.1000", "Teamwork and cross-functional cooperation"),
         (RC_LEADERSHIP_ID, "LEADERSHIP",    "Leadership",    "1.4000", "Inspiring and guiding others"),
     ]
-    for cat_id, code, name, multiplier, desc in cats:
+
+    # Negative categories (multiplier < 1.0) — reduce points awarded
+    negative_cats = [
+        (RC_POOR_COMM_ID,     "POOR_COMMUNICATION",  "Poor Communication",  "0.7000", "Consistent failure to communicate clearly with team members"),
+        (RC_MISSED_DL_ID,     "MISSED_DEADLINES",    "Missed Deadlines",    "0.6000", "Repeated failure to deliver work on agreed timelines"),
+        (RC_NO_INITIATIVE_ID, "LACK_OF_INITIATIVE",  "Lack of Initiative",  "0.8000", "Rarely takes proactive steps without explicit direction"),
+    ]
+
+    print("   ── Positive (multiplier > 1.0) ──")
+    for cat_id, code, name, multiplier, desc in positive_cats:
         await db.review_categories.create(data={
             "category_id":   cat_id,
             "category_code": code,
@@ -363,7 +353,22 @@ async def seed_review_categories():
             "updated_by":    ADMIN_ID,
             "updated_at":    NOW,
         })
-        print(f"   ✅ {code:15s}  multiplier={multiplier}")
+        print(f"   ✅ {code:20s}  multiplier={multiplier}  ✨")
+
+    print("   ── Negative (multiplier < 1.0) ──")
+    for cat_id, code, name, multiplier, desc in negative_cats:
+        await db.review_categories.create(data={
+            "category_id":   cat_id,
+            "category_code": code,
+            "category_name": name,
+            "multiplier":    multiplier,
+            "description":   desc,
+            "is_active":     True,
+            "created_by":    ADMIN_ID,
+            "updated_by":    ADMIN_ID,
+            "updated_at":    NOW,
+        })
+        print(f"   ✅ {code:20s}  multiplier={multiplier}  ⚠️")
     print()
 
 
@@ -732,135 +737,6 @@ async def backfill_audit_fields():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ROUTE PERMISSIONS
-# ─────────────────────────────────────────────────────────────────────────────
-async def seed_route_permissions():
-    print("🔒 Seeding route_permissions...")
-    roles = await db.roles.find_many()
-    role_map = {r.role_code: r.role_id for r in roles}
-
-    # CORRECTED ROUTE_PERMISSIONS block for seed.py
-    # Replace the entire ROUTE_PERMISSIONS list in seed_route_permissions() with this.
-    #
-    # Key fixes vs original seed:
-    #   /v1/departments      → /v1/org/departments
-    #   /v1/designations     → /v1/org/designations
-    #   /v1/department-types → /v1/org/department-types
-    #   /v1/recent-reviews   → /v1/dashboard/recent-reviews
-    #   /v1/leaderboard      → /v1/dashboard/leaderboard
-    #   /v1/platform-stats   → /v1/dashboard/platform-stats
-    #   DELETE:/v1/route-permissions → PATCH:/v1/route-permissions
-    #   /v1/digest           → on recognition service (8005), not a separate service
-    #   /v1/notifications    → on employees service (8003)
-
-    ROUTE_PERMISSIONS = [
-
-        # ── Auth (8001, mounted at /v1/auth) ──────────────────────────────────────
-        ("POST:/v1/auth/refresh",                             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE", "AUDITOR"]),
-        ("POST:/v1/auth/signup",                              ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("POST:/v1/auth/bulk-import",                         ["SUPER_ADMIN", "HR_ADMIN"]),
-
-        # ── Employees (8003, mounted at /v1/employees) ────────────────────────────
-        ("GET:/v1/employees",                                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-        ("POST:/v1/employees",                                ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("GET:/v1/employees/{employee_id}",                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-        ("PUT:/v1/employees/{employee_id}",                   ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("PATCH:/v1/employees/{employee_id}",                 ["SUPER_ADMIN", "HR_ADMIN"]),
-
-        # ── Notifications (8003, mounted at /v1/notifications) ────────────────────
-        ("GET:/v1/notifications",                             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("GET:/v1/notifications/unread-count",                ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("PUT:/v1/notifications/read-all",                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("PUT:/v1/notifications/{notification_id}/read",      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("POST:/v1/notifications",                            ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("POST:/v1/notifications/announcements",              ["SUPER_ADMIN", "HR_ADMIN"]),
-
-        # ── Wallets (8004, /v1/wallets/...) ──────────────────────────────────────
-        ("GET:/v1/wallets/employees/{employee_id}",           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("GET:/v1/wallets/{wallet_id}/balance",               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("GET:/v1/wallets/{wallet_id}/points-summary",        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("POST:/v1/wallets/credit-from-review",               ["SUPER_ADMIN", "HR_ADMIN"]),
-
-        # ── Transactions (8004, /v1/transactions/...) ─────────────────────────────
-        ("POST:/v1/transactions",                             ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("GET:/v1/transactions",                              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("GET:/v1/transactions/types",                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("GET:/v1/transactions/{transaction_id}",             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-
-        # ── Reviews (8005, /v1/reviews/...) ──────────────────────────────────────
-        ("GET:/v1/reviews",                                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("POST:/v1/reviews",                                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-        ("GET:/v1/reviews/{id}",                              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("PUT:/v1/reviews/{id}",                              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-
-        # ── Review Categories (8005, /v1/review-categories/...) ──────────────────
-        ("GET:/v1/review-categories",                         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("POST:/v1/review-categories",                        ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("PUT:/v1/review-categories/{id}",                    ["SUPER_ADMIN", "HR_ADMIN"]),
-
-        # ── Weekly Digest (8005, /v1/digest/...) ─────────────────────────────────
-        ("GET:/v1/digest",                                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-        ("POST:/v1/digest/send",                              ["SUPER_ADMIN", "HR_ADMIN"]),
-
-        # ── Rewards (8006, /v1/rewards/...) ──────────────────────────────────────
-        ("GET:/v1/rewards/catalog",                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("POST:/v1/rewards/catalog",                          ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("PATCH:/v1/rewards/catalog/{catalog_id}",            ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("PATCH:/v1/rewards/catalog/{catalog_id}/stock",      ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("GET:/v1/rewards/categories",                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("POST:/v1/rewards/categories",                       ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("PATCH:/v1/rewards/categories/{category_id}",        ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("POST:/v1/rewards/redeem",                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("GET:/v1/rewards/history/me",                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("GET:/v1/rewards/history",                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-
-        # ── Organization — CORRECT prefix is /v1/org (8007) ──────────────────────
-        ("GET:/v1/org/departments",                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("POST:/v1/org/departments",                          ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("GET:/v1/org/departments/{department_id}",           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-        ("PUT:/v1/org/departments/{department_id}",           ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("GET:/v1/org/designations",                          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-        ("POST:/v1/org/designations",                         ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("GET:/v1/org/designations/{designation_id}",         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-        ("PUT:/v1/org/designations/{designation_id}",         ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("GET:/v1/org/department-types",                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]),
-
-        # ── Analytics — CORRECT prefix is /v1/dashboard (8008) ───────────────────
-        ("GET:/v1/dashboard/recent-reviews",                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-        ("GET:/v1/dashboard/leaderboard",                     ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"]),
-        ("GET:/v1/dashboard/platform-stats",                  ["SUPER_ADMIN", "HR_ADMIN"]),
-
-        # ── Roles (8002, /v1/roles/...) ───────────────────────────────────────────
-        ("GET:/v1/roles",                                     ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("POST:/v1/roles",                                    ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("GET:/v1/roles/employees",                           ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("POST:/v1/roles/assign",                             ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("POST:/v1/roles/revoke",                             ["SUPER_ADMIN", "HR_ADMIN"]),
-
-        # ── Route Permissions (8002) — PATCH not DELETE ───────────────────────────
-        ("GET:/v1/route-permissions",                         ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("POST:/v1/route-permissions",                        ["SUPER_ADMIN", "HR_ADMIN"]),
-        ("PATCH:/v1/route-permissions",                       ["SUPER_ADMIN", "HR_ADMIN"]),
-    ]
-
-    inserted = 0
-    for route_key, role_codes in ROUTE_PERMISSIONS:
-        for role_code in role_codes:
-            rid = role_map.get(role_code)
-            if not rid:
-                print(f"   ⚠  Role '{role_code}' not in DB — skipping {route_key}")
-                continue
-            await db.route_permissions.create(data={
-                "route_key":  route_key,
-                "role_id":    rid,
-                "created_by": ADMIN_ID,
-            })
-            inserted += 1
-
-    print(f"   ✅ {inserted} route-role pairs seeded\n")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 async def main():
@@ -881,13 +757,11 @@ async def main():
         await seed_employees_admin_only()
         await seed_employees_rest()
         await backfill_audit_fields()
-        await seed_points_config()
         await seed_review_categories()
         await seed_seasonal_multipliers()
         await seed_employee_roles()
         await seed_reward_categories()
         await seed_reward_catalog()
-        await seed_route_permissions()
         await seed_reviews()
         await seed_transactions()
         await seed_reward_history()
@@ -910,7 +784,12 @@ async def main():
         print()
         print(f"   🎂 All DOBs = {TODAY} (today) → birthday notifications will fire!")
         print()
-
+        print("⚠️  IMPORTANT — Route Permissions:")
+        print("   route_permissions table is now EMPTY (cleared by seed).")
+        print("   Routes are auto-registered by register_app_routes() on")
+        print("   service startup. Simply (re)start all microservices and")
+        print("   the table will be populated automatically.")
+        print()
 
     except Exception as e:
         print(f"\n❌ Seed failed: {e}")

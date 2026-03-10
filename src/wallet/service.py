@@ -4,13 +4,17 @@ from prisma.errors import UniqueViolationError
 from src.prisma.client import db
 from datetime import datetime, timezone
 from src.common.dependencies import CurrentUser
-from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
+from src.common.cache import (
+    cache_get, cache_set, cache_delete, invalidate_pattern,
+    TTL_VOLATILE,  L1_VOLATILE,   # wallet balance  →   60s /  30s  (changes on every txn)
+    TTL_PERMANENT, L1_PERMANENT,  # txn types       → 86400s / 3600s (seed data, never changes)
+)
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
-
 from src.recognition.points_engine import calculate_points
 
 logger = logging.getLogger(__name__)
+
 
 def _get_notif() -> NotificationService:
     try:
@@ -20,11 +24,12 @@ def _get_notif() -> NotificationService:
         r = None
     return NotificationService(db, redis=r)
 
+
 # ── Cache keys ────────────────────────────────────────────────────────────────
+# txn types  → PERMANENT (86400s / 3600s) — seed data, never changes at runtime
+# wallet     → VOLATILE  (60s / 30s)      — busted on every write; TTL is safety net only
+
 _KEY_TXN_TYPES = "wallet:transaction_types"
-TTL_TXN_TYPES  = 3600   # 1 hr  — seed data, never changes
-TTL_WALLET     = 30     # 30s   — balance changes on every transaction
-                        #         short TTL keeps it feeling live
 
 def _wallet_key(employee_id: str) -> str:
     return f"wallets:employee:{employee_id}"
@@ -40,12 +45,13 @@ def is_admin(user: CurrentUser) -> bool:
 
 
 async def get_transaction_types(current_user: CurrentUser):
-    cached = await cache_get(_KEY_TXN_TYPES)
+    cached = await cache_get(_KEY_TXN_TYPES, l1_ttl=L1_PERMANENT)
+    logger.debug("cache txn_types key=%s %s", _KEY_TXN_TYPES, "HIT" if cached is not None else "MISS")
     if cached is not None:
         return cached
 
     types = await db.transaction_types.find_many()
-    data = [
+    data  = [
         {
             "type_id":   str(t.type_id),
             "code":      t.type_code,
@@ -54,7 +60,7 @@ async def get_transaction_types(current_user: CurrentUser):
         }
         for t in types
     ]
-    await cache_set(_KEY_TXN_TYPES, data, ttl=TTL_TXN_TYPES)
+    await cache_set(_KEY_TXN_TYPES, data, ttl=TTL_PERMANENT, l1_ttl=L1_PERMANENT)
     return data
 
 
@@ -62,7 +68,7 @@ async def create_transaction(data, current_user: CurrentUser):
     if not is_admin(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions to create transactions"
+            detail="Insufficient permissions to create transactions",
         )
 
     wallet_id   = str(data.wallet_id)
@@ -73,7 +79,7 @@ async def create_transaction(data, current_user: CurrentUser):
     if amount <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Amount must be greater than zero"
+            detail="Amount must be greater than zero",
         )
 
     wallet = await db.wallets.find_unique(where={"wallet_id": wallet_id})
@@ -84,13 +90,11 @@ async def create_transaction(data, current_user: CurrentUser):
     if not txn_type:
         raise HTTPException(status_code=404, detail="Transaction type not found")
 
-    success_status = await db.status_master.find_first(
-        where={"status_code": "APPROVED"}
-    )
+    success_status = await db.status_master.find_first(where={"status_code": "APPROVED"})
     if not success_status:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="APPROVED status not found in status_master. Run seed_transaction_types.py"
+            detail="APPROVED status not found in status_master. Run seed_transaction_types.py",
         )
 
     status_id = success_status.status_id
@@ -134,17 +138,18 @@ async def create_transaction(data, current_user: CurrentUser):
                     "total_earned_points": new_total,
                     "version":             wallet.version + 1,
                     "updated_by":          created_by,
-                }
+                },
             )
 
             if result == 0:
                 raise HTTPException(
                     status_code=409,
-                    detail="Wallet was updated by another transaction."
+                    detail="Wallet was updated by another transaction.",
                 )
 
         # ── Invalidate wallet cache after successful commit ────────────────
         await cache_delete(_wallet_key(wallet.employee_id))
+        logger.debug("cache busted wallet key=%s", _wallet_key(wallet.employee_id))
 
         try:
             direction = "credited to" if txn_type.is_credit else "debited from"
@@ -168,14 +173,14 @@ async def create_transaction(data, current_user: CurrentUser):
 
         final_txn = await db.transactions.find_unique(
             where={"transaction_id": new_txn.transaction_id},
-            include={"status_master": True, "transaction_types": True}
+            include={"status_master": True, "transaction_types": True},
         )
         return final_txn
 
     except UniqueViolationError:
         raise HTTPException(
             status_code=409,
-            detail="Transaction with this reference number already exists"
+            detail="Transaction with this reference number already exists",
         )
 
 
@@ -228,9 +233,9 @@ async def get_transactions(
     formatted = []
     for txn in transactions:
         formatted.append({
-            "transaction_id":   txn.transaction_id,
-            "wallet_id":        txn.wallet_id,
-            "amount":           txn.amount,
+            "transaction_id": txn.transaction_id,
+            "wallet_id":      txn.wallet_id,
+            "amount":         txn.amount,
             "status": {
                 "status_id": str(txn.status_master.status_id),
                 "code":      txn.status_master.status_code,
@@ -289,13 +294,14 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
 async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
     """
     Returns the full wallet object for an employee.
-    Cached per employee_id with a short TTL — busted on any transaction.
+    VOLATILE tier — busted on every transaction; TTL is safety net only.
     """
     if not is_admin(current_user) and employee_id != current_user.id:
         raise HTTPException(status_code=403, detail=AD)
 
-    key = _wallet_key(employee_id)
-    cached = await cache_get(key)
+    key    = _wallet_key(employee_id)
+    cached = await cache_get(key, l1_ttl=L1_VOLATILE)
+    logger.debug("cache wallet key=%s %s", key, "HIT" if cached is not None else "MISS")
     if cached is not None:
         return cached
 
@@ -304,7 +310,7 @@ async def get_wallet_by_employee(employee_id: str, current_user: CurrentUser):
         raise HTTPException(status_code=404, detail=WNF)
 
     data = wallet.model_dump()
-    await cache_set(key, data, ttl=TTL_WALLET)
+    await cache_set(key, data, ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
     return wallet
 
 
@@ -362,11 +368,8 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     created_by  = review.created_by
 
     if review.raw_points is not None:
-        points = max(1, round(review.raw_points))
-        breakdown = {
-            "source":     "stored",
-            "raw_points": review.raw_points,
-        }
+        points    = max(1, round(review.raw_points))
+        breakdown = {"source": "stored", "raw_points": review.raw_points}
     else:
         logger.warning(
             "review %s has no raw_points — recalculating from source tables", review_id
@@ -384,9 +387,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
         )
         if reviewer and reviewer.employee_roles:
             active_role_codes = [
-                er.roles.role_code
-                for er in reviewer.employee_roles
-                if er.roles
+                er.roles.role_code for er in reviewer.employee_roles if er.roles
             ]
             for role_code in _ROLE_PRIORITY:
                 if role_code in active_role_codes:
@@ -410,12 +411,9 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
             order={"effective_from": "desc"},
         )
         seasonal_multiplier = float(seasonal_row.multiplier) if seasonal_row else 1.0
+        category_codes      = ",".join(t.category_code_snapshot for t in tags) if tags else "UNKNOWN"
 
-        category_codes = ",".join(
-            t.category_code_snapshot for t in tags
-        ) if tags else "UNKNOWN"
-
-        pts = calculate_points(
+        pts       = calculate_points(
             rating                    = review.rating,
             total_category_multiplier = total_category_multiplier,
             reviewer_weight           = reviewer_weight,
@@ -436,24 +434,21 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     if not txn_type:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="CREDIT transaction type missing. Run seed_transaction_types.py"
+            detail="CREDIT transaction type missing. Run seed_transaction_types.py",
         )
 
     status_record = await db.status_master.find_first(where={"status_code": "APPROVED"})
     if not status_record:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="APPROVED status not found in status_master."
+            detail="APPROVED status not found in status_master.",
         )
 
-    reference     = f"REVIEW-{review_id}"
-    new_available = wallet.available_points    + points
-    new_total     = wallet.total_earned_points + points
-
     tags           = getattr(review, "review_category_tags", []) or []
-    category_label = (
-        ",".join(t.category_code_snapshot for t in tags) if tags else "REVIEW"
-    )
+    category_label = ",".join(t.category_code_snapshot for t in tags) if tags else "REVIEW"
+    reference      = f"REVIEW-{review_id}"
+    new_available  = wallet.available_points    + points
+    new_total      = wallet.total_earned_points + points
 
     try:
         async with db.tx() as txn:
@@ -463,14 +458,12 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                     "amount":              points,
                     "transaction_type_id": txn_type.type_id,
                     "status_id":           status_record.status_id,
-                    "description":         (
-                        f"{review.rating}★ {category_label} review → {points} pts"
-                    ),
-                    "reference_number": reference,
-                    "created_by":       created_by,
-                    "updated_by":       created_by,
-                    "created_at":       datetime.now(timezone.utc),
-                    "updated_at":       datetime.now(timezone.utc),
+                    "description":         f"{review.rating}★ {category_label} review → {points} pts",
+                    "reference_number":    reference,
+                    "created_by":          created_by,
+                    "updated_by":          created_by,
+                    "created_at":          datetime.now(timezone.utc),
+                    "updated_at":          datetime.now(timezone.utc),
                 }
             )
 
@@ -481,17 +474,18 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                     "total_earned_points": new_total,
                     "version":             wallet.version + 1,
                     "updated_by":          created_by,
-                }
+                },
             )
 
             if result == 0:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="Wallet updated concurrently — please retry"
+                    detail="Wallet updated concurrently — please retry",
                 )
 
         # ── Invalidate wallet cache after successful commit ────────────────
         await cache_delete(_wallet_key(employee_id))
+        logger.debug("cache busted wallet key=%s", _wallet_key(employee_id))
 
         try:
             stars = "⭐" * review.rating
@@ -529,7 +523,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     except UniqueViolationError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Points already credited for this review"
+            detail="Points already credited for this review",
         )
 
 
@@ -542,8 +536,11 @@ async def adjust_wallet_for_review_update(
     int_delta = round(delta_points)
 
     if int_delta == 0:
-        return {"message": "No wallet adjustment needed (delta rounds to zero)",
-                "credited_points": 0, "new_balance": None}
+        return {
+            "message":         "No wallet adjustment needed (delta rounds to zero)",
+            "credited_points": 0,
+            "new_balance":     None,
+        }
 
     review = await db.reviews.find_unique(where={"review_id": review_id})
     if not review:
@@ -583,10 +580,9 @@ async def adjust_wallet_for_review_update(
             detail="APPROVED status not found in status_master.",
         )
 
-    abs_delta     = abs(int_delta)
-    new_available = wallet.available_points + int_delta
-    new_total     = wallet.total_earned_points + (int_delta if int_delta > 0 else 0)
-
+    abs_delta      = abs(int_delta)
+    new_available  = wallet.available_points    + int_delta
+    new_total      = wallet.total_earned_points + (int_delta if int_delta > 0 else 0)
     now            = datetime.now(timezone.utc)
     reference      = f"REVIEW-UPDATE-{review_id}-{now.strftime('%Y%m%dT%H%M%S')}"
     direction_word = "adjusted +" if int_delta > 0 else "adjusted "
@@ -631,6 +627,7 @@ async def adjust_wallet_for_review_update(
 
         # ── Invalidate wallet cache after successful commit ────────────────
         await cache_delete(_wallet_key(employee_id))
+        logger.debug("cache busted wallet key=%s", _wallet_key(employee_id))
 
         try:
             emoji = "💰" if int_delta > 0 else "📉"

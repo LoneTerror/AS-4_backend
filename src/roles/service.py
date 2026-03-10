@@ -5,7 +5,12 @@ from fastapi import HTTPException
 
 from src.prisma.client import db
 from src.common.dependencies import CurrentUser
-from src.common.cache import cache_get, cache_set, cache_delete, invalidate_pattern
+from src.common.cache import (
+    cache_get, cache_set, cache_delete, invalidate_pattern,
+    TTL_VOLATILE, L1_VOLATILE,   # employee roles  →   60s /  30s  (changes on assign/revoke)
+    TTL_MEDIUM,   L1_MEDIUM,     # roles list      → 3600s / 300s  (almost static)
+    TTL_PERMANENT, L1_PERMANENT, # route perms     → 86400s / 3600s (auto-registered, rarely changed)
+)
 from src.roles.schemas import (
     CreateRoleRequest,
     AssignRoleRequest,
@@ -14,23 +19,21 @@ from src.roles.schemas import (
     DeleteRoutePermissionRequest,
 )
 
-# ── Cache keys & TTLs ─────────────────────────────────────────────────────────
+import logging
+logger = logging.getLogger(__name__)
+
+# ── Cache keys ────────────────────────────────────────────────────────────────
+# Single keys (not paginated) — invalidated explicitly on every write.
 _KEY_ROLES       = "roles:list"
 _KEY_EMP_ROLES   = "roles:employees"
 _KEY_PERMISSIONS = "roles:route_permissions"
-
-TTL_ROLES       = 3600  # 1 hr  — almost static
-TTL_EMP_ROLES   = 600   # 10 min — was 2 min; explicit invalidation on assign/revoke covers freshness
-TTL_PERMISSIONS = 3600  # 1 hr  — almost static
 
 
 async def invalidate_roles():
     await cache_delete(_KEY_ROLES)
 
-
 async def invalidate_employee_roles():
     await cache_delete(_KEY_EMP_ROLES)
-
 
 async def invalidate_permissions():
     await cache_delete(_KEY_PERMISSIONS)
@@ -39,13 +42,14 @@ async def invalidate_permissions():
 
 
 async def list_roles():
-    cached = await cache_get(_KEY_ROLES)
+    cached = await cache_get(_KEY_ROLES, l1_ttl=L1_MEDIUM)
+    logger.debug("cache roles key=%s %s", _KEY_ROLES, "HIT" if cached is not None else "MISS")
     if cached is not None:
         return cached
 
-    rows = await db.roles.find_many(order=[{"role_name": "asc"}])
+    rows       = await db.roles.find_many(order=[{"role_name": "asc"}])
     serialized = [r.model_dump() for r in rows]
-    await cache_set(_KEY_ROLES, serialized, ttl=TTL_ROLES)
+    await cache_set(_KEY_ROLES, serialized, ttl=TTL_MEDIUM, l1_ttl=L1_MEDIUM)
     return serialized
 
 
@@ -67,7 +71,10 @@ async def create_role(body: CreateRoleRequest, current_user: CurrentUser):
 
 
 async def list_employee_roles():
-    cached = await cache_get(_KEY_EMP_ROLES)
+    # VOLATILE — assign/revoke happens regularly and explicit invalidation
+    # covers freshness, but TTL acts as the safety net between writes.
+    cached = await cache_get(_KEY_EMP_ROLES, l1_ttl=L1_VOLATILE)
+    logger.debug("cache emp_roles key=%s %s", _KEY_EMP_ROLES, "HIT" if cached is not None else "MISS")
     if cached is not None:
         return cached
 
@@ -98,7 +105,7 @@ async def list_employee_roles():
         }
         for r in records
     ]
-    await cache_set(_KEY_EMP_ROLES, data, ttl=TTL_EMP_ROLES)
+    await cache_set(_KEY_EMP_ROLES, data, ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
     return data
 
 
@@ -143,7 +150,11 @@ async def revoke_role(body: RevokeRoleRequest, current_user: CurrentUser):
 
 
 async def list_route_permissions():
-    cached = await cache_get(_KEY_PERMISSIONS)
+    # PERMANENT — route_permissions are auto-registered on startup and only
+    # changed via the admin UI. Cache for 24h; explicit invalidation on every
+    # add/remove covers real-time updates.
+    cached = await cache_get(_KEY_PERMISSIONS, l1_ttl=L1_PERMANENT)
+    logger.debug("cache permissions key=%s %s", _KEY_PERMISSIONS, "HIT" if cached is not None else "MISS")
     if cached is not None:
         return cached
 
@@ -163,7 +174,7 @@ async def list_route_permissions():
             "role_name": row.roles.role_name,
         })
     data = list(grouped.values())
-    await cache_set(_KEY_PERMISSIONS, data, ttl=TTL_PERMISSIONS)
+    await cache_set(_KEY_PERMISSIONS, data, ttl=TTL_PERMANENT, l1_ttl=L1_PERMANENT)
     return data
 
 
