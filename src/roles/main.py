@@ -24,11 +24,10 @@ ROLE_OVERRIDES = {
     "POST:/v1/roles":               ["SUPER_ADMIN"],
     "POST:/v1/roles/assign":        ["SUPER_ADMIN"],
     "POST:/v1/roles/revoke":        ["SUPER_ADMIN"],
-    "GET:/v1/route-permissions":    ["SUPER_ADMIN"],
-    "POST:/v1/route-permissions":   ["SUPER_ADMIN"],
-    "PATCH:/v1/route-permissions":  ["SUPER_ADMIN"],
+    "GET:/v1/roles/route-permissions":    ["SUPER_ADMIN"],
+    "POST:/v1/roles/route-permissions":   ["SUPER_ADMIN"],
+    "PATCH:/v1/roles/route-permissions":  ["SUPER_ADMIN"],
 }
-
 
 # ==========================================
 # OpenTelemetry Configuration

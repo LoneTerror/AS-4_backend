@@ -30,10 +30,10 @@ ROLE_OVERRIDES = {
     "GET:/v1/wallets/employees/{employee_id}":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     "GET:/v1/wallets/{wallet_id}/balance":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     "GET:/v1/wallets/{wallet_id}/points-summary": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/transactions":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/transactions/{transaction_id}":      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/transactions/types":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/transactions":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
+    "GET:/v1/wallets/transactions":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/transactions/{transaction_id}": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/transactions/types":         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/wallets/transactions":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
     "POST:/v1/wallets/credit-from-review":        ["SUPER_ADMIN", "HR_ADMIN"],
 }
 

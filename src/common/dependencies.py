@@ -85,11 +85,18 @@ async def get_current_user(
     cache_key  = f"auth:token:{token_hash}"
 
     try:
-        # Wrap cache_get so a frozen Redis doesn't block the request forever
         import asyncio
         cached = await asyncio.wait_for(cache_get(cache_key), timeout=2.0)
         if cached is not None:
-            return CurrentUser(**cached)
+            # FIX: Validate cached user_id before returning — a previously
+            # cached None/invalid value must not be surfaced to callers.
+            cached_id = cached.get("id")
+            if not cached_id or not isinstance(cached_id, str) or cached_id.lower() == "null":
+                # Evict the poisoned cache entry and fall through to re-auth
+                from src.common.cache import cache_delete
+                await cache_delete(cache_key)
+            else:
+                return CurrentUser(**cached)
     except Exception as cache_err:
         from src.core.logger import logger
         logger.debug(f"[{request_id}] Cache lookup skipped/failed: {cache_err}")
@@ -105,13 +112,26 @@ async def get_current_user(
         )
 
         if response.status_code != 200 or not response.json().get("valid"):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                                detail="Invalid or expired authentication token")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired authentication token",
+            )
 
         data = response.json()
+
+        # FIX: Validate user_id from auth service response before use.
+        # A missing or null user_id would become the string "null" when passed
+        # to Prisma UUID fields, causing a DataError and a 500 response.
+        user_id = data.get("user_id")
+        if not user_id or not isinstance(user_id, str) or user_id.lower() == "null":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token payload: missing or null user_id",
+            )
+
         roles = [r.upper() for r in data.get("roles", [])]
         user  = CurrentUser(
-            id=data["user_id"],
+            id=user_id,
             email=data.get("email", ""),
             roles=roles,
             department_id=data.get("department_id"),
@@ -121,46 +141,61 @@ async def get_current_user(
         try:
             await cache_set(cache_key, user.model_dump(), ttl=_AUTH_CACHE_TTL)
         except Exception:
-            pass # Ignore caching errors if Redis is down
+            pass  # Ignore caching errors if Redis is down
 
         return user
 
     except httpx.RequestError as e:
         # 2. FALLBACK: Auth Service is unreachable (Redis timeout, container crash, etc.)
         from src.core.logger import logger
-        logger.warning(f"[{request_id}] Auth service unreachable, falling back to local JWT validation. ({e})")
-        
+        logger.warning(
+            f"[{request_id}] Auth service unreachable, falling back to local JWT validation. ({e})"
+        )
+
         try:
             # Mathematically verify the token signature using python-jose
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            
-            # Extract user ID (handling both 'user_id' and standard 'sub' claims)
+
+            # FIX: Extract and validate user_id from JWT payload.
+            # Both 'user_id' and standard 'sub' claims are supported.
             user_id = payload.get("user_id") or payload.get("sub")
-            if not user_id:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+            if not user_id or not isinstance(user_id, str) or user_id.lower() == "null":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token payload: missing or null user_id",
+                )
 
             roles = [r.upper() for r in payload.get("roles", [])]
             fallback_user = CurrentUser(
-                id=str(user_id), 
+                id=str(user_id),
                 email=payload.get("email", ""),
                 roles=roles,
-                department_id=payload.get("department_id")
+                department_id=payload.get("department_id"),
             )
             return fallback_user
-            
+
         except ExpiredSignatureError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has expired",
+            )
         except JWTError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token signature")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token signature",
+            )
         except HTTPException:
             raise
         except Exception as fallback_err:
-            logger.error(f"[{request_id}] Fallback validation failed: {fallback_err}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-                detail="Authentication service unavailable"
+            logger.error(
+                f"[{request_id}] Fallback validation failed: {fallback_err}",
+                exc_info=True,
             )
-        
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service unavailable",
+            )
+
 
 async def check_route_permission(
     request:      Request,
@@ -189,9 +224,6 @@ async def check_route_permission(
     route_key = f"{request.method}:{path_template}"
 
     # ── Cache lookup — keyed per route_key ───────────────────────────────────
-    # Stores a list of allowed role_codes for each route.
-    # TTL matches MEDIUM tier (L2: 3600s / L1: 300s) — same tier used by
-    # route_registry when it invalidates "roles:route_permissions" on startup.
     from src.common.cache import TTL_MEDIUM, L1_MEDIUM
     perm_cache_key = f"roles:route_permissions:{route_key}"
     cached_roles: list[str] | None = await cache_get(perm_cache_key, l1_ttl=L1_MEDIUM)
@@ -229,4 +261,4 @@ async def check_route_permission(
 
 
 def get_db() -> Prisma:
-    return db
+    return db   

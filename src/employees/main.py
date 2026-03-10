@@ -48,18 +48,18 @@ provider.add_span_processor(processor)
 trace.set_tracer_provider(provider)
 # ==========================================
 ROLE_OVERRIDES = {
-    "GET:/v1/employees":                            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/employees/{employee_id}":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/employees":                           ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/employees/{employee_id}":              ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/v1/employees/{employee_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/notifications":                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/notifications/unread-count":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "PUT:/v1/notifications/{notification_id}/read": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "PUT:/v1/notifications/read-all":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/notifications":                       ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/notifications/announcements":         ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/webhooks/hris":                       ["SUPER_ADMIN"],
+    "GET:/v1/employees/list":                                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/employees/{employee_id}":                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/employees/create":                                 ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/employees/{employee_id}":                           ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/employees/{employee_id}":                         ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/employees/notifications":                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/employees/notifications/unread-count":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/employees/notifications/{notification_id}/read":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/employees/notifications/read-all":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/employees/notifications":                          ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/employees/notifications/announcements":            ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/employees/webhooks/hris":                          ["SUPER_ADMIN"],
 }
 
 
@@ -155,9 +155,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(emp_router, tags=["Employees"])
 app.include_router(notifications_router, tags=["Notifications"])
 app.include_router(webhooks_router,      tags=["Webhooks"])
+app.include_router(emp_router,           tags=["Employees"])
 
 @app.get("/health", tags=["System"])
 async def health_check():
