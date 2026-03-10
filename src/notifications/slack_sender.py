@@ -62,9 +62,14 @@ class SlackSender:
         to the caller to log and skip.
         """
         blocks = _build_notification_blocks(title=title, message=message, type_=type_)
+        _FALLBACK = {
+            "REVIEW": "📋 You have been reviewed.",
+            "REWARD": "🏅 You have received a reward.",
+        }
+        fallback_text = _FALLBACK.get(type_) or f"{_TYPE_EMOJI.get(type_, '🔔')} {title}"
         await self._client.chat_postMessage(
-            channel=slack_user_id,   # Slack opens a DM when channel = user ID
-            text=f"{_TYPE_EMOJI.get(type_, '🔔')} {title}",
+            channel=slack_user_id,   
+            text=fallback_text,
             blocks=blocks,
         )
         logger.info("Slack DM sent to user %s | title=%r", slack_user_id, title)
@@ -119,7 +124,6 @@ class SlackSender:
             message=message,
             celebration_type=celebration_type,
         )
-        # Always post to the default channel — never a DM
         channel = self._cfg.default_channel_id
         await self._client.chat_postMessage(channel=channel, text=title, blocks=blocks)
         logger.info(
@@ -140,10 +144,19 @@ _TYPE_EMOJI: dict[str, str] = {
 
 def _build_notification_blocks(*, title: str, message: str, type_: str) -> list[dict]:
     emoji = _TYPE_EMOJI.get(type_, "🔔")
+    _TEASER: dict[str, str] = {
+        "REVIEW": "You have been reviewed. Open your account to see more details.",
+        "REWARD": "You have received a reward. Open your account to see more details.",
+    }
+    if type_ in _TEASER:
+        body_text = f"*{emoji}  {_TEASER[type_]}*"
+    else:
+        body_text = f"*{emoji}  {title}*\n{message}"
+
     return [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*{emoji}  {title}*\n{message}"},
+            "text": {"type": "mrkdwn", "text": body_text},
         },
         {"type": "divider"},
         {

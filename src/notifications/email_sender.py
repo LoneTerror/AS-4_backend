@@ -1,5 +1,5 @@
 """
-Lightweight async SMTP mailer — Abhaar brand edition.
+Lightweight async SMTP mailer — Aabhar brand edition.
 
 Reads config from environment variables — never hard-code credentials.
 Uses aiosmtplib so the event loop is never blocked.
@@ -18,7 +18,7 @@ import aiosmtplib
 logger = logging.getLogger(__name__)
 
 
-# ── Brand palette (extracted from Abhaar logo) ────────────────────────────────
+# ── Brand palette (extracted from Aabhar logo) ────────────────────────────────
 _BRAND = {
     "gradient_start": "#2D1B69",
     "gradient_mid":   "#7B2FBE",
@@ -107,7 +107,7 @@ class EmailSender:
     def _build_message(self, *, to_email, subject, body_html, body_text) -> MIMEMultipart:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = f"Abhaar <{self._cfg.from_email}>"
+        msg["From"]    = f"Aabhar <{self._cfg.from_email}>"
         msg["To"]      = to_email
         msg.attach(MIMEText(body_text, "plain", "utf-8"))
         msg.attach(MIMEText(body_html, "html",  "utf-8"))
@@ -169,7 +169,7 @@ def _email_shell(*, preheader: str, header_html: str, body_html: str) -> str:
                      padding:22px 40px;">
             <span style="font-size:24px;font-weight:700;letter-spacing:.5px;
                          color:#fff;font-family:'Segoe UI',Arial,sans-serif;">
-              Abh<span style="color:#F9A8D4;">aa</span>r
+              <span style="color:#F9A8D4;">Aa</span>bhar
             </span>
           </td>
         </tr>
@@ -184,12 +184,12 @@ def _email_shell(*, preheader: str, header_html: str, body_html: str) -> str:
             <p style="margin:0 0 4px;font-size:12px;color:{b['text_muted']};
                       font-family:'Segoe UI',Arial,sans-serif;">
               This is an automated message from
-              <strong style="color:{b['violet']};">Abhaar</strong>.
+              <strong style="color:{b['violet']};">Aabhar</strong>.
               Please do not reply.
             </p>
             <p style="margin:0;font-size:11px;color:{b['text_muted']};
                       font-family:'Segoe UI',Arial,sans-serif;">
-              &copy; Abhaar &mdash; Employee Recognition Platform
+              &copy; Aabhar &mdash; Employee Recognition Platform
             </p>
           </td>
         </tr>
@@ -208,6 +208,18 @@ def build_notification_html(*, title: str, message: str, type_: str) -> str:
     accent = _TYPE_ACCENT.get(type_, b["violet"])
     label  = _TYPE_LABEL.get(type_, type_.title())
 
+    # REVIEW notifications are private — never expose review content in email.
+    # Show a teaser only; full details are available inside the app.
+    if type_ == "REVIEW":
+        display_title   = "You have been reviewed"
+        display_message = (
+            "A new performance review has been submitted for you. "
+            "Open your Aabhar account to see more details."
+        )
+    else:
+        display_title   = title
+        display_message = message
+
     header_html = f"""
       <tr>
         <td style="padding:30px 40px 20px;border-bottom:1px solid {b['border']};">
@@ -219,7 +231,7 @@ def build_notification_html(*, title: str, message: str, type_: str) -> str:
           </span>
           <h1 style="margin:14px 0 0;font-size:21px;font-weight:700;line-height:1.35;
                      color:{b['text_primary']};font-family:'Segoe UI',Arial,sans-serif;">
-            {title}
+            {display_title}
           </h1>
         </td>
       </tr>"""
@@ -229,22 +241,14 @@ def build_notification_html(*, title: str, message: str, type_: str) -> str:
         <td class="pad" style="padding:26px 40px 36px;">
           <p style="margin:0;font-size:15px;line-height:1.75;
                     color:{b['text_secondary']};font-family:'Segoe UI',Arial,sans-serif;">
-            {message}
+            {display_message}
           </p>
-          <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
-            <tr>
-              <td width="56" height="3" style="border-radius:2px;
-                   background:linear-gradient(90deg,{b['gradient_start']},{b['gradient_end']});">
-                &nbsp;
-              </td>
-              <td height="3" style="background:{b['border']};"></td>
-            </tr>
-          </table>
+
         </td>
       </tr>"""
 
     return _email_shell(
-        preheader=f"{label}: {title}",
+        preheader=f"{label}: {display_title}",
         header_html=header_html,
         body_html=body_html,
     )
@@ -269,7 +273,7 @@ def build_celebration_html(
             headline   = "Wishing You a Wonderful Birthday"
             salutation = f"Dear {employee_name},"
             body_copy  = (
-                "On behalf of everyone at Abhaar, we want to take a moment to celebrate you today. "
+                "On behalf of everyone at Aabhar, we want to take a moment to celebrate you today. "
                 "Your presence, dedication, and the energy you bring to this team are truly valued. "
                 "We hope this year brings you joy, meaningful growth, and everything you deserve. "
                 "Happy Birthday."
@@ -298,7 +302,7 @@ def build_celebration_html(
             headline   = f"Congratulations on {ordinal} Year{'s' if (years or 0) != 1 else ''}"
             salutation = f"Dear {employee_name},"
             body_copy  = (
-                f"Today marks {yr_word} since you joined Abhaar — and what a journey it has been. "
+                f"Today marks {yr_word} since you joined Aabhar — and what a journey it has been. "
                 "Your commitment, consistency, and the standard you set for yourself "
                 "do not go unnoticed. "
                 "Thank you for the work you bring every day. Here's to the milestones still ahead."
@@ -310,7 +314,7 @@ def build_celebration_html(
             salutation = "A note for the team,"
             body_copy  = (
                 f"<strong>{employee_name}</strong> is marking their "
-                f"<strong>{ordinal} anniversary</strong> with Abhaar today. "
+                f"<strong>{ordinal} anniversary</strong> with Aabhar today. "
                 "Their contribution is a cornerstone of what we build together. "
                 "Take a moment to acknowledge this milestone — "
                 "recognition from peers is one of the most meaningful forms there is."
@@ -364,15 +368,7 @@ def build_celebration_html(
             {body_copy}
           </p>
           {cta_html}
-          <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
-            <tr>
-              <td width="56" height="3" style="border-radius:2px;
-                   background:linear-gradient(90deg,{b['gradient_start']},{b['gradient_end']});">
-                &nbsp;
-              </td>
-              <td height="3" style="background:{b['border']};"></td>
-            </tr>
-          </table>
+
         </td>
       </tr>"""
 

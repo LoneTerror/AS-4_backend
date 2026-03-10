@@ -112,22 +112,18 @@ async def cache_set(key: str, value: Any, ttl: int = TTL_SHORT, l1_ttl: int = L1
 
 
 async def cache_delete(*keys: str) -> None:
-    """
-    Delete one or more exact keys from both layers.
-    Errors are swallowed.
-    """
     if not keys:
         return
 
-    # ── L1 ──────────────────────────────────────────────────────────────────
     for key in keys:
         lc_delete(key)
 
-    # ── L2 (Redis) ──────────────────────────────────────────────────────────
     try:
         r = get_redis()
         await r.delete(*keys)
         logger.debug("cache_delete: removed keys=%s", keys)
+    except RuntimeError:
+        logger.debug("cache_delete%s skipped — Redis not ready yet", keys)
     except Exception as exc:
         logger.warning("cache_delete%s failed: %s", keys, exc)
 
