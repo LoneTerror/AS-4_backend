@@ -3,9 +3,19 @@ import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+
+# --- OpenTelemetry Imports ---
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+# -----------------------------
 
 from src.prisma.client import db, connect_with_retry
 from src.employees.router import router as emp_router
@@ -20,6 +30,23 @@ from src.common.route_registry import register_app_routes
 
 logger = logging.getLogger(__name__)
 
+# ==========================================
+# OpenTelemetry Configuration
+# ==========================================
+# 1. Identify the service in Jaeger
+resource = Resource.create({"service.name": "rnr-employees"})
+provider = TracerProvider(resource=resource)
+
+# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
+otlp_exporter = OTLPSpanExporter()
+
+# 3. Process traces in batches in the background
+processor = BatchSpanProcessor(otlp_exporter)
+provider.add_span_processor(processor)
+
+# 4. Register globally
+trace.set_tracer_provider(provider)
+# ==========================================
 ROLE_OVERRIDES = {
     "GET:/v1/employees":                            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     "GET:/v1/employees/{employee_id}":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
@@ -109,25 +136,28 @@ app = FastAPI(
     title="Employee Service",
     description="Microservice for handling employee profiles, hierarchy, and search",
     version="1.0.0",
-    root_path="/employees",
-    docs_url="/v1/docs",
-    openapi_url="/v1/openapi.json",
+    root_path="/v1/employees", 
+    openapi_url="/openapi.json", # Moved to root
+    docs_url="/docs",
     lifespan=lifespan,
 )
 
+# Grab the env var, default to localhost for local dev fallback
+cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS", "http://localhost:8005,http://localhost:8001")
+# Split by comma and strip whitespace to create a clean list
+allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8001", "http://localhost:8005"],
+    allow_origins=allowed_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-API_PREFIX = "/v1"
-app.include_router(emp_router,           prefix=API_PREFIX + "/employees",  tags=["Employees"])
+app.include_router(emp_router, tags=["Employees"])
 app.include_router(notifications_router, tags=["Notifications"])
 app.include_router(webhooks_router,      tags=["Webhooks"])
-
 
 @app.get("/health", tags=["System"])
 async def health_check():
@@ -168,6 +198,18 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
+
+
+# ==========================================
+# Instrument FastAPI
+# ==========================================
+# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
+FastAPIInstrumentor.instrument_app(
+    app,
+    excluded_urls="health,/docs,/openapi.json"
+)
+# ==========================================
+
 
 if __name__ == "__main__":
     uvicorn.run("src.employees.main:app", host="0.0.0.0", port=8003, reload=True)

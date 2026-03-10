@@ -16,7 +16,7 @@ from .schemas import (
 )
 from .service import NotificationService
 
-router = APIRouter(prefix="/v1/notifications", tags=["Notifications"])
+router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
 
 def get_db() -> Prisma:

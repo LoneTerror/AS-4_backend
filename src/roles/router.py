@@ -17,14 +17,14 @@ router = APIRouter(tags=["Role Management"])
 
 # ── Roles ─────────────────────────────────────────────────────────────────────
 
-@router.get("/v1/roles")
+@router.get("/list")
 async def list_roles(
     current_user: CurrentUser = Depends(check_route_permission)
 ):
     return await service.list_roles()
 
 
-@router.post("/v1/roles", status_code=201)
+@router.post("/create", status_code=201)
 async def create_role(
     body: CreateRoleRequest,
     current_user: CurrentUser = Depends(check_route_permission)
@@ -34,14 +34,14 @@ async def create_role(
 
 # ── Employee ↔ Role ───────────────────────────────────────────────────────────
 
-@router.get("/v1/roles/employees")
+@router.get("/employees")
 async def list_employee_roles(
     current_user: CurrentUser = Depends(check_route_permission)
 ):
     return await service.list_employee_roles()
 
 
-@router.post("/v1/roles/assign", status_code=201)
+@router.post("/assign", status_code=201)
 async def assign_role(
     body: AssignRoleRequest,
     current_user: CurrentUser = Depends(check_route_permission)
@@ -49,7 +49,7 @@ async def assign_role(
     return await service.assign_role(body, current_user)
 
 
-@router.post("/v1/roles/revoke")
+@router.post("/revoke")
 async def revoke_role(
     body: RevokeRoleRequest,
     current_user: CurrentUser = Depends(check_route_permission)
@@ -59,14 +59,14 @@ async def revoke_role(
 
 # ── Route permissions ─────────────────────────────────────────────────────────
 
-@router.get("/v1/route-permissions")
+@router.get("/route-permissions")
 async def list_route_permissions(
     current_user: CurrentUser = Depends(check_route_permission)
 ):
     return await service.list_route_permissions()
 
 
-@router.post("/v1/route-permissions", status_code=201)
+@router.post("/route-permissions", status_code=201)
 async def add_route_permission(
     body: SetRoutePermissionRequest,
     current_user: CurrentUser = Depends(check_route_permission)
@@ -74,7 +74,7 @@ async def add_route_permission(
     return await service.add_route_permission(body, current_user)
 
 
-@router.patch("/v1/route-permissions")
+@router.patch("/route-permissions")
 async def remove_route_permission(
     body: DeleteRoutePermissionRequest,
     current_user: CurrentUser = Depends(check_route_permission)

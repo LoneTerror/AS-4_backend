@@ -113,7 +113,6 @@ async def get_all_department_types(
     """Retrieve all department types for frontend dropdowns."""
     return await service.list_department_types()
 
-
 # ══════════════════════════════════════════════
 #  5.5 STATUS MASTER ROUTES
 # ══════════════════════════════════════════════

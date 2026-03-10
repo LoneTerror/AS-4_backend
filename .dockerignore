@@ -1,9 +1,33 @@
-# .dockerignore
+# Fixed typo (was **/ .npm/)
+**/.npm/
 .npm/
-**/ .npm/
 node_modules/
+
+# Python caching
 venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Git
 .git/
-*.json
-*.html
+.gitignore
+
+# Tests (If they aren't needed in production runtime)
 tests/
+.pytest_cache/
+
+# Prisma local cache and binaries (crucial so host binaries don't overwrite container binaries)
+.prisma/
+.cache/
+prisma_binaries/
+
+# Environment variables
+.env
+.env.*
+
+# Careful with *.json!
+# If you have *.json here, things like "ecosystem.config.json" (if you rename it) 
+# or custom config JSON files for your python app will be ignored. 
+# Only ignore it if you are 100% sure you don't need ANY JSON files in the container.

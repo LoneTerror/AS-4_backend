@@ -10,9 +10,13 @@ from fastapi.routing import APIRoute
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from prisma import Prisma
+from jose import jwt, JWTError, ExpiredSignatureError
 
 from src.prisma.client import db
 from src.common.cache import cache_get, cache_set
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
 
 security = HTTPBearer(auto_error=False)
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
@@ -74,19 +78,25 @@ async def get_current_user(
         )
 
     token      = credentials.credentials
-    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
     # ── Cache lookup ──────────────────────────────────────────────────────────
-    # Key is a SHA-256 hash of the raw token — never store the token itself.
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     cache_key  = f"auth:token:{token_hash}"
 
-    cached = await cache_get(cache_key)
-    if cached is not None:
-        return CurrentUser(**cached)
+    try:
+        # Wrap cache_get so a frozen Redis doesn't block the request forever
+        import asyncio
+        cached = await asyncio.wait_for(cache_get(cache_key), timeout=2.0)
+        if cached is not None:
+            return CurrentUser(**cached)
+    except Exception as cache_err:
+        from src.core.logger import logger
+        logger.debug(f"[{request_id}] Cache lookup skipped/failed: {cache_err}")
     # ─────────────────────────────────────────────────────────────────────────
 
     try:
+        # 1. PRIMARY: Try calling the Auth Service API
         client   = get_auth_client()
         response = await client.post(
             AUTH_SERVICE_URL,
@@ -94,15 +104,11 @@ async def get_current_user(
             headers={"X-Request-ID": request_id},
         )
 
-        if response.status_code != 200:
+        if response.status_code != 200 or not response.json().get("valid"):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                                 detail="Invalid or expired authentication token")
 
         data = response.json()
-        if not data.get("valid"):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                                detail="Invalid or expired authentication token")
-
         roles = [r.upper() for r in data.get("roles", [])]
         user  = CurrentUser(
             id=data["user_id"],
@@ -111,15 +117,50 @@ async def get_current_user(
             department_id=data.get("department_id"),
         )
 
-        # Cache the validated result — only reached on cache miss
-        await cache_set(cache_key, user.model_dump(), ttl=_AUTH_CACHE_TTL)
+        # Cache the validated result
+        try:
+            await cache_set(cache_key, user.model_dump(), ttl=_AUTH_CACHE_TTL)
+        except Exception:
+            pass # Ignore caching errors if Redis is down
 
         return user
 
-    except httpx.RequestError:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail="Authentication service unavailable")
+    except httpx.RequestError as e:
+        # 2. FALLBACK: Auth Service is unreachable (Redis timeout, container crash, etc.)
+        from src.core.logger import logger
+        logger.warning(f"[{request_id}] Auth service unreachable, falling back to local JWT validation. ({e})")
+        
+        try:
+            # Mathematically verify the token signature using python-jose
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            
+            # Extract user ID (handling both 'user_id' and standard 'sub' claims)
+            user_id = payload.get("user_id") or payload.get("sub")
+            if not user_id:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
+            roles = [r.upper() for r in payload.get("roles", [])]
+            fallback_user = CurrentUser(
+                id=str(user_id), 
+                email=payload.get("email", ""),
+                roles=roles,
+                department_id=payload.get("department_id")
+            )
+            return fallback_user
+            
+        except ExpiredSignatureError:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
+        except JWTError:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token signature")
+        except HTTPException:
+            raise
+        except Exception as fallback_err:
+            logger.error(f"[{request_id}] Fallback validation failed: {fallback_err}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+                detail="Authentication service unavailable"
+            )
+        
 
 async def check_route_permission(
     request:      Request,

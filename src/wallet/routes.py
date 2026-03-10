@@ -101,7 +101,7 @@ async def get_transaction(
 
 
 # Wallets Router
-wallets_router = APIRouter(prefix="/wallets", tags=["Wallets"])
+wallets_router = APIRouter(tags=["Wallets"])
 
 
 @wallets_router.get("/employees/{employee_id}")

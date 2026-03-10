@@ -11,7 +11,7 @@ from src.notifications.email_sender import EmailSender, SMTPConfig
 from .schemas import DigestEmailRequest, DigestResponse, WeeklyDigestData
 from .service import DigestService
 
-router = APIRouter(prefix="/v1/digest", tags=["Weekly Digest"])
+router = APIRouter(prefix="/digest", tags=["Weekly Digest"])
 
 
 # ── Dependency factories ───────────────────────────────────────────────────────

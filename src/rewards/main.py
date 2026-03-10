@@ -1,7 +1,18 @@
+import os
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
+
+# --- OpenTelemetry Imports ---
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+# -----------------------------
 
 from src.prisma.client import db, connect_with_retry
 from src.notifications.redis_client import connect_redis, disconnect_redis
@@ -28,6 +39,24 @@ ROLE_OVERRIDES = {
     "PATCH:/v1/rewards/categories/{category_id}":   ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
+# ==========================================
+# OpenTelemetry Configuration
+# ==========================================
+# 1. Identify the service in Jaeger
+resource = Resource.create({"service.name": "rnr-rewards"})
+provider = TracerProvider(resource=resource)
+
+# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
+otlp_exporter = OTLPSpanExporter()
+
+# 3. Process traces in batches in the background
+processor = BatchSpanProcessor(otlp_exporter)
+provider.add_span_processor(processor)
+
+# 4. Register globally
+trace.set_tracer_provider(provider)
+# ==========================================
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -37,7 +66,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        logger.info("Rewards Service: 🔴 Redis Connected")
+        logger.info("Rewards Service: 🟢 Redis Connected")
     except Exception as e:
         logger.warning("Rewards Service: Redis unavailable (%s) — notifications will not be queued in real-time", e)
 
@@ -59,10 +88,10 @@ app = FastAPI(
     title="Reward Microservice",
     description="API for managing the reward catalog and point redemptions.",
     version="1.0.0",
-    root_path="/rewards",
-    openapi_url="/v1/openapi.json",
-    docs_url="/v1/docs",
-    redoc_url="/v1/redoc",
+    root_path="/v1/rewards", 
+    openapi_url="/openapi.json", 
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
 )
 
@@ -77,10 +106,14 @@ async def health_check():
         "database": "Connected" if db.is_connected() else "Disconnected",
     }
 
+# Grab the env var, default to localhost for local dev fallback
+cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS")
+# Split by comma and strip whitespace to create a clean list
+allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=allowed_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
@@ -93,3 +126,13 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
 
 app.include_router(rewards_router.router)
+
+# ==========================================
+# Instrument FastAPI
+# ==========================================
+# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
+FastAPIInstrumentor.instrument_app(
+    app,
+    excluded_urls="health,/docs,/openapi.json,/redoc"
+)
+# ==========================================

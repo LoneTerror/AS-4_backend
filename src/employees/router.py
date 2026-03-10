@@ -9,7 +9,7 @@ from src.common.dependencies import check_route_permission, CurrentUser
 router = APIRouter()
 
 
-@router.get("", response_model=schemas.EmployeeListResponse)
+@router.get("/list", response_model=schemas.EmployeeListResponse)
 async def get_employees(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
@@ -39,7 +39,7 @@ async def get_employee_by_id(
     return await service.get_employee_detail(employee_id)
 
 
-@router.post("", response_model=schemas.EmployeeCreatedResponse, status_code=201)
+@router.post("/create", response_model=schemas.EmployeeCreatedResponse, status_code=201)
 async def create_employee(
     payload: schemas.CreateEmployeeRequest,
     current_user: CurrentUser = Depends(check_route_permission),
