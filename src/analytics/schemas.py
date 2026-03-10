@@ -174,3 +174,85 @@ class TeamSummary(BaseModel):
     avg_performance_score: float
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ══════════════════════════════════════════════════════════════
+#  Admin — Participation Overview schemas
+# ══════════════════════════════════════════════════════════════
+
+class ParticipationSlice(BaseModel):
+    name: str
+    value: float  # percentage of total active employees
+
+
+class ParticipationStats(BaseModel):
+    total_employees: int
+    active_participants: int
+    non_participants: int
+    participation_rate: float
+    avg_reviews_per_employee: float
+    avg_reviews_last_month: float
+
+
+class DepartmentParticipation(BaseModel):
+    department_id: str
+    name: str
+    rate: float   # participation % within this department
+    active: int   # employees who gave or received at least one review
+    total: int    # total active employees in department
+
+
+class ParticipationOverview(BaseModel):
+    pie: List[ParticipationSlice]
+    stats: ParticipationStats
+    by_department: List[DepartmentParticipation]
+
+
+# ══════════════════════════════════════════════════════════════
+#  Admin — Recognition Trend schemas
+# ══════════════════════════════════════════════════════════════
+
+class TrendPoint(BaseModel):
+    label: str
+    given: int     # distinct reviewers in this bucket
+    received: int  # total reviews in this bucket
+
+
+class RecognitionTrend(BaseModel):
+    data: List[TrendPoint]
+
+
+# ══════════════════════════════════════════════════════════════
+#  Admin — Recognition Overview schemas
+# ══════════════════════════════════════════════════════════════
+
+class UserRecognition(BaseModel):
+    employee_id: str
+    username: str
+    department: str
+    given: int     # reviews this employee gave
+    received: int  # reviews this employee received
+
+
+class TeamRecognition(BaseModel):
+    department_id: str
+    name: str
+    given: int     # total reviews given by team members
+    received: int  # total reviews received by team members
+    members: int   # headcount
+
+
+class PaginatedUserRecognition(BaseModel):
+    items: List[UserRecognition]
+    total: int
+    page: int
+    limit: int
+    pages: int
+
+
+class PaginatedTeamRecognition(BaseModel):
+    items: List[TeamRecognition]
+    total: int
+    page: int
+    limit: int
+    pages: int
