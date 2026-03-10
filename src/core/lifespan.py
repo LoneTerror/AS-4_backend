@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from prisma import Prisma
 
 from src.notifications.email_sender import EmailSender, SMTPConfig
+from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.notifications.slack_sender import SlackSender, SlackConfig
 from src.notifications.worker import email_worker_loop, celebration_worker_loop
 
@@ -26,6 +27,10 @@ async def lifespan(app: FastAPI):
     await db.connect()
     logger.info("Prisma connected.")
 
+    redis = await connect_redis()
+    app.state.redis = redis
+    logger.info("Redis connected.")
+
     smtp_config = SMTPConfig.from_env()
     email_sender = EmailSender(smtp_config)
 
@@ -39,11 +44,11 @@ async def lifespan(app: FastAPI):
         logger.warning("Slack disabled — missing env var: %s", e)
 
     worker_task = asyncio.create_task(
-        email_worker_loop(db, email_sender, slack_sender),
+        email_worker_loop(db, email_sender, redis, slack_sender),
         name="email_notification_worker",
     )
     celebration_task = asyncio.create_task(
-        celebration_worker_loop(db, email_sender, slack_sender),
+        celebration_worker_loop(db, email_sender, redis, slack_sender),
         name="celebration_notification_worker",
     )
     logger.info("Email worker task created.")
@@ -60,6 +65,7 @@ async def lifespan(app: FastAPI):
             pass
 
     logger.info("Workers stopped.")
+    await disconnect_redis()
     await db.disconnect()
     logger.info("Prisma disconnected.")
 
