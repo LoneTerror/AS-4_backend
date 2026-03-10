@@ -30,19 +30,40 @@ services = [
 
 skip = {'/health','/v1/docs','/v1/redoc','/v1/openapi.json','/openapi.json','/docs','/redoc'}
 
+total_routes = 0
+
 for name, module_path, app_attr in services:
     try:
         mod = importlib.import_module(module_path)
         app = getattr(mod, app_attr)
+
         print(f'\n# -- {name}')
+
         routes = []
         for route in app.routes:
-            if not isinstance(route, APIRoute): continue
-            if route.path in skip: continue
-            if any(route.path.startswith(s) for s in ['/docs','/redoc','/openapi']): continue
+            if not isinstance(route, APIRoute):
+                continue
+            if route.path in skip:
+                continue
+            if any(route.path.startswith(s) for s in ['/docs','/redoc','/openapi']):
+                continue
+
             for method in sorted(route.methods or []):
                 routes.append(f'  {method:<7} {route.path}')
-        for r in sorted(routes):
+
+        routes = sorted(routes)
+
+        for r in routes:
             print(r)
+
+        service_count = len(routes)
+        total_routes += service_count
+
+        print(f'  -> Total routes in {name}: {service_count}')
+
     except Exception as e:
         print(f'  ERROR loading {name}: {e}')
+
+print("\n==============================")
+print(f"TOTAL ROUTES ACROSS SERVICES: {total_routes}")
+print("==============================")

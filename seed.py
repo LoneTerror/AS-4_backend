@@ -40,6 +40,7 @@ if env_file.exists():
         key = key.strip()
         val = val.strip().strip('"').strip("'")
         os.environ.setdefault(key, val)
+
 import asyncio
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -303,19 +304,21 @@ async def seed_departments():
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_designations():
     print("🎖️  Seeding designations...")
-    for desig_id, name, code, level in [
-        (ADMIN_DESIG_ID,  "System Administrator", "SYS_ADMIN", 0),
-        (MGR_DESIG_ID,    "Engineering Manager",  "ENG_MGR",   2),
-        (SR_DEV_DESIG_ID, "Senior Developer",     "SR_DEV",    3),
+    for desig_id, name, code, level, desc in [
+        (ADMIN_DESIG_ID,  "System Administrator", "SYS_ADMIN", 0, "Top-level system administrator with full access"),
+        (MGR_DESIG_ID,    "Engineering Manager",  "ENG_MGR",   2, "Manages engineering teams and technical delivery"),
+        (SR_DEV_DESIG_ID, "Senior Developer",     "SR_DEV",    3, "Senior individual contributor in software development"),
     ]:
         await db.designations.create(data={
             "designation_id":   desig_id,
             "designation_name": name,
             "designation_code": code,
             "level":            level,
+            "description":      desc,
+            "is_active":        True,
             "updated_at":       NOW,
         })
-        print(f"   ✅ {code:12s}  level={level}")
+        print(f"   ✅ {code:12s}  level={level}  is_active=True")
     print()
 
 
@@ -444,16 +447,11 @@ async def seed_employees_rest():
 
     employees = [
         # (id, username, email, desig_id, dept_id, manager_id, dob, doj, avail_pts, redeemed, total, version)
-
-        (JANE_ID,      "jane.smith",         "jane.smith@company.com",       MGR_DESIG_ID,    ENG_DEPT_ID, None,    date(1990, 5, 10), date(2022, 1, 1), 5000, 0,   5000, 1),
-
-        (JOHN_ID,      "john.doe",           "john.doe@company.com",         SR_DEV_DESIG_ID, ENG_DEPT_ID, JANE_ID, date(1995, 8, 15), date(2024, 1,15), 1500, 500, 2000, 5),
-
-        (ARIJIT_ID,    "arijit.banik",       "arijitb017@gmail.com",         SR_DEV_DESIG_ID, ENG_DEPT_ID, JANE_ID, date(2000, 3, 17), date(2024, 3, 1), 2000, 0,   0,    1),
-
-        (SHUBRAJIT_ID, "shubrajit.deb",      "shubrajitdeb180603@gmail.com", SR_DEV_DESIG_ID, ENG_DEPT_ID, JANE_ID, date(2003, 6, 18), date(2024, 3, 1), 2000, 0,   0,    1),
-
-        (PRASUN_ID,    "prasun.chakraborty", "nothingshere21@gmail.com",     SR_DEV_DESIG_ID, ENG_DEPT_ID, JANE_ID, date(1998,11,25), date(2024, 3, 1), 2000, 0,   0,    1),
+        (JANE_ID,      "jane.smith",         "jane.smith@company.com",       MGR_DESIG_ID,    ENG_DEPT_ID, None,    date(1990, 5, 10), date(2022, 1,  1), 5000, 0,   5000, 1),
+        (JOHN_ID,      "john.doe",           "john.doe@company.com",         SR_DEV_DESIG_ID, ENG_DEPT_ID, JANE_ID, date(1995, 8, 15), date(2024, 1, 15), 1500, 500, 2000, 5),
+        (ARIJIT_ID,    "arijit.banik",       "arijitb017@gmail.com",         SR_DEV_DESIG_ID, ENG_DEPT_ID, JANE_ID, date(2000, 3, 17), date(2024, 3,  1), 2000, 0,   0,    1),
+        (SHUBRAJIT_ID, "shubrajit.deb",      "shubrajitdeb180603@gmail.com", SR_DEV_DESIG_ID, ENG_DEPT_ID, JANE_ID, date(2003, 6, 18), date(2024, 3,  1), 2000, 0,   0,    1),
+        (PRASUN_ID,    "prasun.chakraborty", "nothingshere21@gmail.com",     SR_DEV_DESIG_ID, ENG_DEPT_ID, JANE_ID, date(1998, 11,25), date(2024, 3,  1), 2000, 0,   0,    1),
     ]
 
     for (
@@ -473,40 +471,39 @@ async def seed_employees_rest():
 
         await db.employees.create(
             data={
-                "employee_id": emp_id,
-                "username": username,
-                "email": email,
-                "password_hash": hashed,
-                "designation_id": desig_id,
-                "department_id": dept_id,
+                "employee_id":     emp_id,
+                "username":        username,
+                "email":           email,
+                "password_hash":   hashed,
+                "designation_id":  desig_id,
+                "department_id":   dept_id,
                 **({"manager_id": manager_id} if manager_id else {}),
-                "status_id": ACTIVE_STATUS_ID,
+                "status_id":       ACTIVE_STATUS_ID,
                 "date_of_joining": datetime.combine(doj, datetime.min.time()),
-                "date_of_birth": datetime.combine(dob, datetime.min.time()),
-                "created_by": ADMIN_ID,
-                "updated_by": ADMIN_ID,
-                "updated_at": NOW,
+                "date_of_birth":   datetime.combine(dob, datetime.min.time()),
+                "created_by":      ADMIN_ID,
+                "updated_by":      ADMIN_ID,
+                "updated_at":      NOW,
             }
         )
 
         await db.wallets.create(
             data={
-                "employee_id": emp_id,
-                "available_points": avail_pts,
-                "redeemed_points": redeemed_pts,
+                "employee_id":         emp_id,
+                "available_points":    avail_pts,
+                "redeemed_points":     redeemed_pts,
                 "total_earned_points": total_pts,
-                "version": version,
-                "created_by": ADMIN_ID,
-                "updated_by": ADMIN_ID,
-                "updated_at": NOW,
+                "version":             version,
+                "created_by":          ADMIN_ID,
+                "updated_by":          ADMIN_ID,
+                "updated_at":          NOW,
             }
         )
 
-        print(
-            f"   ✅ {username:25s}  dob={dob}  🎂  wallet: {avail_pts} pts"
-        )
+        print(f"   ✅ {username:25s}  dob={dob}  🎂  wallet: {avail_pts} pts")
 
     print()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EMPLOYEE ROLES

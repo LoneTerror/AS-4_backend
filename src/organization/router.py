@@ -218,11 +218,11 @@ async def update_seasonal_multiplier(
     return await service.update_seasonal_multiplier(mult_id, payload, current_user.id)
 
 
-@seasonal_multipliers_router.delete("/{mult_id}", status_code=204)
-async def delete_seasonal_multiplier(
+@seasonal_multipliers_router.patch("/{mult_id}", status_code=204)
+async def patch_seasonal_multiplier(
     mult_id: str,
     current_user: CurrentUser = Depends(check_route_permission),
 ):
     """Deletes a future seasonal multiplier only. SUPER_ADMIN only."""
-    await service.delete_seasonal_multiplier(mult_id)
+    await service.patch_seasonal_multiplier(mult_id)
     return Response(status_code=204)
