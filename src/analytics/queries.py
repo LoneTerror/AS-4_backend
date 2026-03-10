@@ -228,3 +228,49 @@ async def get_reviews_this_month_for_employee(emp) -> int:
 async def get_rewards_redeemed_for_wallet(wallet) -> int:
     """Pass the raw wallet object."""
     return await db.reward_history.count(where={"wallet_id": wallet.wallet_id})
+
+
+# ══════════════════════════════════════════════════════════════
+#  Participation Overview queries
+# ══════════════════════════════════════════════════════════════
+
+async def get_active_employees_with_departments():
+    s = await db.status_master.find_first(where={"status_code": "ACTIVE"})
+    if not s:
+        return []
+    return await db.employees.find_many(
+        where={"status_id": s.status_id},
+        include={"departments_employees_department_idTodepartments": True},
+    )
+
+
+async def get_all_reviewer_ids() -> set:
+    rows = await db.reviews.find_many(distinct=["reviewer_id"])
+    return {r.reviewer_id for r in rows}
+
+
+async def get_all_receiver_ids() -> set:
+    rows = await db.reviews.find_many(distinct=["receiver_id"])
+    return {r.receiver_id for r in rows}
+
+
+async def get_total_review_count() -> int:
+    return await db.reviews.count()
+
+
+async def get_last_month_review_count() -> int:
+    last = _now() - relativedelta(months=1)
+    start, end = _month_range(last)
+    return await db.reviews.count(where={"review_at": {"gte": start, "lt": end}})
+
+
+# ══════════════════════════════════════════════════════════════
+#  Recognition Trend / Overview queries
+# ══════════════════════════════════════════════════════════════
+
+async def get_reviews_in_range(start: datetime, end: datetime | None = None) -> list:
+    """Fetch all reviews between start (inclusive) and end (exclusive)."""
+    where: dict = {"review_at": {"gte": start}}
+    if end:
+        where["review_at"]["lt"] = end
+    return await db.reviews.find_many(where=where)
