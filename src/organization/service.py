@@ -732,7 +732,7 @@ async def update_seasonal_multiplier(
     return _to_mult_response(updated)
 
 
-async def delete_seasonal_multiplier(mult_id: str) -> None:
+async def patch_seasonal_multiplier(mult_id: str) -> None:
     existing = await db.seasonal_multipliers.find_unique(where={"seasonal_multiplier_id": mult_id})
     if not existing:
         raise HTTPException(status_code=404, detail="NOT_FOUND – Multiplier not found")

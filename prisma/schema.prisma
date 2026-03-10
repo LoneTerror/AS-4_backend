@@ -2,8 +2,8 @@ generator client {
   provider                    = "prisma-client-py"
   binaryTargets               = ["native", "debian-openssl-3.0.x"]
   recursive_type_depth        = "5"
-  enable_experimental_decimal = "true"
   interface                   = "asyncio"
+  enable_experimental_decimal = "true"
 }
 
 datasource db {
@@ -72,10 +72,13 @@ model designations {
   created_by                                       String?     @db.Uuid
   updated_at                                       DateTime    @db.Timestamptz(6)
   updated_by                                       String?     @db.Uuid
+  description                                      String?
+  is_active                                        Boolean     @default(true)
   employees_designations_created_byToemployees     employees?  @relation("designations_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
   employees_designations_updated_byToemployees     employees?  @relation("designations_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
   employees_employees_designation_idTodesignations employees[] @relation("employees_designation_idTodesignations")
 
+  @@index([is_active])
   @@index([level])
 }
 
@@ -245,8 +248,8 @@ model review_category_tags {
   reviews                reviews           @relation(fields: [review_id], references: [review_id], onDelete: Cascade)
 
   @@unique([review_id, category_id])
-  @@index([review_id])
   @@index([category_id])
+  @@index([review_id])
 }
 
 model reviews {
@@ -367,6 +370,21 @@ model roles {
   route_permissions                     route_permissions[]
 }
 
+model route_permissions {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  route_key  String    @db.VarChar(200)
+  role_id    String    @db.Uuid
+  is_active  Boolean   @default(true)
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  created_by String?   @db.Uuid
+  updated_at DateTime? @db.Timestamptz(6)
+  updated_by String?   @db.Uuid
+  roles      roles     @relation(fields: [role_id], references: [role_id], onDelete: Cascade, onUpdate: NoAction, map: "fk_route_permissions_role")
+
+  @@unique([route_key, role_id], map: "uq_route_permissions_route_role")
+  @@index([route_key], map: "idx_route_permissions_route_key")
+}
+
 model seasonal_multipliers {
   seasonal_multiplier_id                               String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   quarter                                              Int
@@ -470,19 +488,4 @@ model wallets {
 
   @@index([available_points])
   @@index([total_earned_points])
-}
-
-model route_permissions {
-  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  route_key  String    @db.VarChar(200)
-  role_id    String    @db.Uuid
-  is_active  Boolean   @default(true)
-  created_at DateTime  @default(now()) @db.Timestamptz(6)
-  created_by String?   @db.Uuid
-  updated_at DateTime? @db.Timestamptz(6)
-  updated_by String?   @db.Uuid
-  roles      roles     @relation(fields: [role_id], references: [role_id], onDelete: Cascade, onUpdate: NoAction, map: "fk_route_permissions_role")
-
-  @@unique([route_key, role_id], map: "uq_route_permissions_route_role")
-  @@index([route_key], map: "idx_route_permissions_route_key")
 }

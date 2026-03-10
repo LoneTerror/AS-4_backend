@@ -50,7 +50,7 @@ ROLE_OVERRIDES = {
     "GET:/v1/org/seasonal-multipliers/active":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     "POST:/v1/org/seasonal-multipliers":                    ["SUPER_ADMIN"],
     "PUT:/v1/org/seasonal-multipliers/{mult_id}":           ["SUPER_ADMIN"],
-    "DELETE:/v1/org/seasonal-multipliers/{mult_id}":        ["SUPER_ADMIN"],
+    "PATCH:/v1/org/seasonal-multipliers/{mult_id}":        ["SUPER_ADMIN"],
     # ── Audit Logs ────────────────────────────────────────────────────────────
     "GET:/v1/org/audit-logs":                               ["SUPER_ADMIN", "HR_ADMIN"],
     "GET:/v1/org/audit-logs/{audit_id}":                    ["SUPER_ADMIN", "HR_ADMIN"],
