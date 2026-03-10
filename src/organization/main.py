@@ -29,31 +29,31 @@ from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
     # ── Departments ───────────────────────────────────────────────────────────
-    "GET:/v1/org/departments":                              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/org/departments/{department_id}":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/org/departments":                             ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/org/departments/{department_id}":              ["SUPER_ADMIN", "HR_ADMIN"],
-    # ── Department Types ──────────────────────────────────────────────────────
-    "GET:/v1/org/department-types":                         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    # ── Designations ─────────────────────────────────────────────────────────
-    "GET:/v1/org/designations":                             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/org/designations/{designation_id}":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/org/designations":                            ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/org/designations/{designation_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
-    # ── Statuses ──────────────────────────────────────────────────────────────
-    "GET:/v1/org/statuses":                                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/org/statuses/{status_id}":                     ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/org/statuses":                                ["SUPER_ADMIN"],
-    "PUT:/v1/org/statuses/{status_id}":                     ["SUPER_ADMIN"],
-    # ── Seasonal Multipliers ──────────────────────────────────────────────────
-    "GET:/v1/org/seasonal-multipliers":                     ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/org/seasonal-multipliers/active":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/org/seasonal-multipliers":                    ["SUPER_ADMIN"],
-    "PUT:/v1/org/seasonal-multipliers/{mult_id}":           ["SUPER_ADMIN"],
-    "DELETE:/v1/org/seasonal-multipliers/{mult_id}":        ["SUPER_ADMIN"],
-    # ── Audit Logs ────────────────────────────────────────────────────────────
-    "GET:/v1/org/audit-logs":                               ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/org/audit-logs/{audit_id}":                    ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/organizations/departments":                              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/organizations/departments/{department_id}":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/organizations/departments":                             ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/organizations/departments/{department_id}":              ["SUPER_ADMIN", "HR_ADMIN"],
+    # Department Types
+    "GET:/v1/organizations/department-types":                         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    # Designations
+    "GET:/v1/organizations/designations":                             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/organizations/designations/{designation_id}":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/organizations/designations":                            ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/organizations/designations/{designation_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
+    # Statuses
+    "GET:/v1/organizations/statuses":                                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/organizations/statuses/{status_id}":                     ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/organizations/statuses":                                ["SUPER_ADMIN"],
+    "PUT:/v1/organizations/statuses/{status_id}":                     ["SUPER_ADMIN"],
+    # Seasonal Multipliers
+    "GET:/v1/organizations/seasonal-multipliers":                     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/organizations/seasonal-multipliers/active":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/organizations/seasonal-multipliers":                    ["SUPER_ADMIN"],
+    "PUT:/v1/organizations/seasonal-multipliers/{mult_id}":           ["SUPER_ADMIN"],
+    "DELETE:/v1/organizations/seasonal-multipliers/{mult_id}":        ["SUPER_ADMIN"],
+    # Audit Logs
+    "GET:/v1/organizations/audit-logs":                               ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/organizations/audit-logs/{audit_id}":                    ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 # ==========================================

@@ -32,16 +32,17 @@ from src.common.middleware import (
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    "GET:/v1/reviews":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/reviews/{id}":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/reviews":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "PUT:/v1/reviews/{id}":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/review-categories":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/review-categories":       ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/review-categories/{id}":   ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/digest":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/digest/send":             ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/recognitions/reviews":                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/recognitions/reviews/{id}":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/reviews":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/recognitions/reviews/{id}":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/recognitions/review-categories":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/review-categories":             ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/recognitions/review-categories/{id}":         ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/recognitions/digest":                         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/digest/send":                   ["SUPER_ADMIN", "HR_ADMIN"],
 }
+
 
 # ==========================================
 # OpenTelemetry Configuration
@@ -131,8 +132,8 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
-app.include_router(recognition_router,       prefix="/reviews", tags=["Reviews"])
-app.include_router(review_categories_router, prefix="/review-categories", tags=["Review Categories"])
+app.include_router(recognition_router,       tags=["Reviews"])
+app.include_router(review_categories_router, tags=["Review Categories"])
 app.include_router(digest_router)
 
 

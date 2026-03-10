@@ -2,20 +2,12 @@
 import asyncio
 import logging
 import traceback
-from datetime import datetime, timedelta, timezone
 from typing import List
-
-from dateutil.relativedelta import relativedelta
 
 from src.analytics.queries import (
     get_recent_reviews,
     get_leaderboard,
     get_user_total_points,
-    get_active_employees_with_departments,
-    get_all_reviewer_ids,
-    get_all_receiver_ids,
-    get_total_review_count,
-    get_last_month_review_count,
     get_user_points_earned_this_month,
     get_user_points_earned_last_month,
     get_user_total_rewards_redeemed,
@@ -35,7 +27,6 @@ from src.analytics.queries import (
     get_review_count_for_employee,
     get_reviews_this_month_for_employee,
     get_rewards_redeemed_for_wallet,
-    get_reviews_in_range,
 )
 from src.analytics.schemas import (
     RecentReview,
@@ -45,17 +36,8 @@ from src.analytics.schemas import (
     TeamMemberReport,
     TeamReport,
     TeamSummary,
-    ParticipationSlice,
-    ParticipationStats,
-    DepartmentParticipation,
-    ParticipationOverview,
-    TrendPoint,
-    RecognitionTrend,
-    UserRecognition,
-    TeamRecognition,
-    PaginatedUserRecognition,
-    PaginatedTeamRecognition,
 )
+from datetime import datetime
 from src.common.cache import (
     cache_get, cache_set, cache_delete, invalidate_pattern,
     TTL_VOLATILE,  L1_VOLATILE,  # recent reviews, platform stats →  60s /  30s
@@ -63,15 +45,6 @@ from src.common.cache import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TTL mapping
-# ─────────────────────────────────────────────────────────────────────────────
-# recent reviews  → VOLATILE  (60s / 30s)   — per-user, invalidated on new review
-# platform stats  → VOLATILE  (60s / 30s)   — per-user counters, ok to be slightly stale
-# leaderboard     → SHORT     (300s / 60s)  — points rarely change mid-session
-# team reports    → SHORT     (300s / 60s)  — heavy aggregation, changes rarely
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache-key helpers
@@ -82,72 +55,20 @@ def _key_leaderboard()              -> str: return "dashboard:leaderboard"
 def _key_platform(employee_id: str) -> str: return f"dashboard:platform:{employee_id}"
 def _key_teams()                    -> str: return "dashboard:teams"
 def _key_team(dept_id: str)         -> str: return f"dashboard:team:{dept_id}"
-def _key_participation()            -> str: return "dashboard:participation"
-def _key_recog_trend(range_: str)        -> str: return f"dashboard:recog-trend:{range_}"
-def _key_recog_users(range_: str)        -> str: return f"dashboard:recog-users:{range_}"
-def _key_recog_teams(range_: str)        -> str: return f"dashboard:recog-teams:{range_}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bucketing helpers for Recognition Trend
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _weekly_buckets(now: datetime, n: int = 12) -> list[tuple[datetime, datetime, str]]:
-    """Return n 7-day buckets (oldest first). Label uses mid-week date."""
-    buckets = []
-    for i in range(n, 0, -1):
-        end   = now - timedelta(weeks=i - 1)
-        start = now - timedelta(weeks=i)
-        mid   = start + timedelta(days=3)
-        week_of_month = (mid.day - 1) // 7 + 1
-        label = f"W{week_of_month} {mid.strftime('%b')}"
-        buckets.append((start, end, label))
-    return buckets
-
-
-def _start_for_range(range_: str) -> datetime:
-    now = _now_utc()
-    if range_ == "week":
-        return now - timedelta(days=7)
-    if range_ == "month":
-        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if range_ == "quarter":
-        return now - relativedelta(months=3)
-    # year
-    return now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
-def _monthly_buckets(now: datetime, n: int) -> list[tuple[datetime, datetime, str]]:
-    """Return n calendar-month buckets (oldest first), including the current month."""
-    buckets = []
-    for i in range(n - 1, -1, -1):   # n-1 months ago → 0 (current month)
-        dt    = now - relativedelta(months=i)
-        start = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end   = start + relativedelta(months=1)
-        label = start.strftime("%b")
-        buckets.append((start, end, label))
-    return buckets
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public invalidation helpers  (called by other services after writes)
+# Public invalidation helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def invalidate_reviews(employee_id: str) -> None:
-    """Call after a new review is submitted for *employee_id*."""
     await cache_delete(_key_reviews(employee_id))
     await cache_delete(_key_platform(employee_id))
 
 async def invalidate_leaderboard() -> None:
-    """Call after points are awarded / redeemed."""
     await cache_delete(_key_leaderboard())
 
 async def invalidate_teams() -> None:
-    """Call after department membership changes."""
     await cache_delete(_key_teams())
     await invalidate_pattern("dashboard:team:*")
 
@@ -271,7 +192,13 @@ def _compute_scores(members_raw: list) -> list:
 
 
 async def _build_member(emp, credit_type_ids: list) -> dict:
-    wallet = await get_wallet_for_employee(emp)
+    # Fetch wallet + both review counts in parallel — previously wallet was
+    # fetched first (serial), then reviews. Now all 3 fire simultaneously.
+    wallet, reviews_total, reviews_month = await asyncio.gather(
+        get_wallet_for_employee(emp),
+        get_review_count_for_employee(emp),
+        get_reviews_this_month_for_employee(emp),
+    )
 
     if wallet:
         rewards, pts_month = await asyncio.gather(
@@ -282,11 +209,6 @@ async def _build_member(emp, credit_type_ids: list) -> dict:
         avail_pts = wallet.available_points
     else:
         rewards = pts_month = total_pts = avail_pts = 0
-
-    reviews_total, reviews_month = await asyncio.gather(
-        get_review_count_for_employee(emp),
-        get_reviews_this_month_for_employee(emp),
-    )
 
     desig = getattr(emp, "designations_employees_designation_idTodesignations", None)
 
@@ -303,13 +225,15 @@ async def _build_member(emp, credit_type_ids: list) -> dict:
     }
 
 
-async def _dept_members(dept) -> list:
+async def _dept_members(dept, credit_type_ids: list) -> list:
+    # credit_type_ids passed in — fetched once at caller level, not per dept
     employees = await get_employees_in_department(dept)
     if not employees:
         return []
-    credit_type_ids = await get_credit_type_ids()
-    members_raw = [await _build_member(emp, credit_type_ids) for emp in employees]
-    return _compute_scores(members_raw)
+    members_raw = await asyncio.gather(
+        *[_build_member(emp, credit_type_ids) for emp in employees]
+    )
+    return _compute_scores(list(members_raw))
 
 
 async def get_teams_summary() -> List[TeamSummary]:
@@ -322,18 +246,26 @@ async def get_teams_summary() -> List[TeamSummary]:
     departments = await get_all_departments()
     logger.info("[teams_summary] %d departments", len(departments))
 
-    summaries: List[TeamSummary] = []
-    for dept in departments:
+    async def _safe_dept_members(dept, credit_type_ids):
         try:
-            scored = await _dept_members(dept)
+            scored = await _dept_members(dept, credit_type_ids)
             logger.info("[teams_summary] %s → %d members", dept.department_name, len(scored))
+            return dept, scored
         except Exception:
             logger.error(
                 "[teams_summary] FAILED for dept=%s\n%s",
                 dept.department_name, traceback.format_exc(),
             )
-            scored = []
+            return dept, []
 
+    # All departments computed in parallel — was a sequential for-loop
+    # Fetch credit_type_ids ONCE — not once per department
+    credit_type_ids = await get_credit_type_ids()
+
+    dept_results = await asyncio.gather(*[_safe_dept_members(d, credit_type_ids) for d in departments])
+
+    summaries: List[TeamSummary] = []
+    for dept, scored in dept_results:
         summaries.append(
             TeamSummary(
                 department_id=dept.department_id,
@@ -362,7 +294,8 @@ async def get_team_report(department_id: str) -> TeamReport | None:
     if not dept:
         return None
 
-    scored = await _dept_members(dept)
+    credit_type_ids = await get_credit_type_ids()
+    scored = await _dept_members(dept, credit_type_ids)
 
     if not scored:
         report = TeamReport(
@@ -399,82 +332,80 @@ async def get_team_report(department_id: str) -> TeamReport | None:
 # Participation Overview  — SHORT (300s / 60s)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def get_participation_overview() -> ParticipationOverview:
-    key    = _key_participation()
+async def get_participation_overview():
+    """
+    Returns participation stats: who has given/received reviews,
+    pie-chart slices, and per-department participation rates.
+    """
+    from src.analytics.schemas import ParticipationOverview
+    import asyncio
+
+    key    = "dashboard:participation"
     cached = await cache_get(key, l1_ttl=L1_SHORT)
     logger.debug("cache participation key=%s %s", key, "HIT" if cached is not None else "MISS")
     if cached is not None:
         return ParticipationOverview(**cached)
 
-    active_emps, reviewer_ids, receiver_ids, total_reviews, reviews_last = await asyncio.gather(
-        get_active_employees_with_departments(),
-        get_all_reviewer_ids(),
-        get_all_receiver_ids(),
-        get_total_review_count(),
-        get_last_month_review_count(),
+    now         = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # Fetch active employees + all reviews this month in parallel
+    from src.prisma.client import db
+    active_employees, reviews_this_month, all_departments = await asyncio.gather(
+        db.employees.find_many(
+            where={"status_master_employees_status_idTostatus_master": {"status_code": "ACTIVE"}}
+        ),
+        db.reviews.find_many(
+            where={"review_at": {"gte": month_start}},
+        ),
+        db.departments.find_many(),
     )
 
-    active_ids   = {e.employee_id for e in active_emps}
-    total        = len(active_ids)
+    total_employees = len(active_employees)
+    active_ids      = {e.employee_id for e in active_employees}
 
-    # Intersect with active_ids to exclude ex-employees in old reviews
-    reviewer_ids = reviewer_ids & active_ids
-    receiver_ids = receiver_ids & active_ids
+    reviewers  = {r.reviewer_id for r in reviews_this_month} & active_ids
+    receivers  = {r.receiver_id for r in reviews_this_month} & active_ids
+    both       = reviewers & receivers
+    neither    = active_ids - reviewers - receivers
 
-    both          = reviewer_ids & receiver_ids
-    only_reviewed = reviewer_ids - receiver_ids
-    only_received = receiver_ids - reviewer_ids
-    participated  = reviewer_ids | receiver_ids
+    # Per-department participation
+    dept_map = {d.department_id: d.department_name for d in all_departments}
+    emp_dept = {e.employee_id: e.department_id for e in active_employees}
+    dept_reviewer_counts: dict = {}
+    dept_total_counts:    dict = {}
 
-    def pct(n: int) -> float:
-        return round(n / total * 100, 1) if total else 0.0
+    for emp_id in active_ids:
+        dept_id = emp_dept.get(emp_id)
+        if not dept_id:
+            continue
+        dept_total_counts[dept_id]    = dept_total_counts.get(dept_id, 0) + 1
+        if emp_id in reviewers:
+            dept_reviewer_counts[dept_id] = dept_reviewer_counts.get(dept_id, 0) + 1
 
-    pie = [
-        ParticipationSlice(name="Reviewed & Received", value=pct(len(both))),
-        ParticipationSlice(name="Only Reviewed",       value=pct(len(only_reviewed))),
-        ParticipationSlice(name="Only Received",       value=pct(len(only_received))),
-        ParticipationSlice(name="Not Participated",    value=pct(total - len(participated))),
+    dept_participation = [
+        {
+            "department_id":         str(dept_id),
+            "department_name":       dept_map.get(dept_id, "Unknown"),
+            "total_members":         total,
+            "participating_members": dept_reviewer_counts.get(dept_id, 0),
+            "participation_rate":    round(
+                dept_reviewer_counts.get(dept_id, 0) / total * 100, 1
+            ) if total > 0 else 0.0,
+        }
+        for dept_id, total in dept_total_counts.items()
     ]
 
-    active_count = len(participated)
-    stats = ParticipationStats(
-        total_employees=total,
-        active_participants=active_count,
-        non_participants=total - active_count,
-        participation_rate=pct(active_count),
-        avg_reviews_per_employee=round(total_reviews / total, 1) if total else 0.0,
-        avg_reviews_last_month=round(reviews_last / total, 1) if total else 0.0,
+    result = ParticipationOverview(
+        total_employees       =total_employees,
+        reviewers_count       =len(reviewers),
+        receivers_count       =len(receivers),
+        both_count            =len(both),
+        neither_count         =len(neither),
+        participation_rate    =round(len(reviewers) / total_employees * 100, 1) if total_employees > 0 else 0.0,
+        department_breakdown  =dept_participation,
     )
 
-    # ── Department breakdown — top 6 by participation rate ────────────────────
-    dept_map: dict = {}
-    for emp in active_emps:
-        dept = emp.departments_employees_department_idTodepartments
-        if not dept:
-            continue
-        dept_id = str(dept.department_id)
-        if dept_id not in dept_map:
-            dept_map[dept_id] = {"name": dept.department_name, "total": 0, "active": 0}
-        dept_map[dept_id]["total"] += 1
-        if emp.employee_id in participated:
-            dept_map[dept_id]["active"] += 1
-
-    by_department = sorted(
-        [
-            DepartmentParticipation(
-                department_id=dept_id,
-                name=d["name"],
-                rate=round(d["active"] / d["total"] * 100, 1) if d["total"] else 0.0,
-                active=d["active"],
-                total=d["total"],
-            )
-            for dept_id, d in dept_map.items()
-        ],
-        key=lambda x: x.rate,
-        reverse=True,
-    )[:6]
-
-    result = ParticipationOverview(pie=pie, stats=stats, by_department=by_department)
     await cache_set(key, result.model_dump(), ttl=TTL_SHORT, l1_ttl=L1_SHORT)
     return result
 
@@ -483,150 +414,195 @@ async def get_participation_overview() -> ParticipationOverview:
 # Recognition Trend  — SHORT (300s / 60s)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def get_recognition_trend(range_: str) -> RecognitionTrend:
-    key    = _key_recog_trend(range_)
+async def get_recognition_trend(range: str):
+    """Time-series review activity. range: 3m → weekly buckets, 6m/1y → monthly."""
+    from src.analytics.schemas import RecognitionTrend
+    from dateutil.relativedelta import relativedelta
+    import asyncio
+
+    key    = f"dashboard:recognition_trend:{range}"
     cached = await cache_get(key, l1_ttl=L1_SHORT)
-    logger.debug("cache recog-trend key=%s %s", key, "HIT" if cached is not None else "MISS")
+    logger.debug("cache trend key=%s %s", key, "HIT" if cached is not None else "MISS")
     if cached is not None:
         return RecognitionTrend(**cached)
 
-    now = _now_utc()
-    if range_ == "3m":
-        buckets = _weekly_buckets(now, n=12)
-    elif range_ == "6m":
-        buckets = _monthly_buckets(now, n=6)
+    from src.prisma.client import db
+    now = datetime.now(timezone.utc)
+
+    if range == "3m":
+        start    = now - relativedelta(months=3)
+        bucket   = "week"
+        n_buckets = 12
+    elif range == "6m":
+        start    = now - relativedelta(months=6)
+        bucket   = "month"
+        n_buckets = 6
     else:  # 1y
-        buckets = _monthly_buckets(now, n=12)
+        start    = now - relativedelta(years=1)
+        bucket   = "month"
+        n_buckets = 12
 
-    # Derive start from the first bucket so the query window matches exactly
-    start = buckets[0][0]
-    reviews = await get_reviews_in_range(start)
+    reviews = await db.reviews.find_many(
+        where={"review_at": {"gte": start}},
+        order={"review_at": "asc"},
+    )
 
-    data: list[TrendPoint] = []
-    for b_start, b_end, label in buckets:
-        bucket = [r for r in reviews if b_start <= r.review_at < b_end]
-        given    = len({r.reviewer_id for r in bucket})
-        received = len(bucket)
-        data.append(TrendPoint(label=label, given=given, received=received))
+    # Build buckets
+    buckets: list[dict] = []
+    for i in range(n_buckets):
+        if bucket == "week":
+            b_start = start + relativedelta(weeks=i)
+            b_end   = b_start + relativedelta(weeks=1)
+            label   = b_start.strftime("%b %d")
+        else:
+            b_start = (start + relativedelta(months=i)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            b_end   = b_start + relativedelta(months=1)
+            label   = b_start.strftime("%b %Y")
 
-    result = RecognitionTrend(data=data)
+        count = sum(1 for r in reviews if b_start <= r.review_at.replace(tzinfo=timezone.utc) < b_end)
+        buckets.append({"label": label, "count": count, "start": b_start.isoformat(), "end": b_end.isoformat()})
+
+    result = RecognitionTrend(range=range, bucket=bucket, data=buckets)
     await cache_set(key, result.model_dump(), ttl=TTL_SHORT, l1_ttl=L1_SHORT)
     return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Shared aggregation helper
+# Recognition per User  — SHORT (300s / 60s)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _aggregate_recognition(range_: str) -> tuple[list[UserRecognition], list[TeamRecognition]]:
-    """Fetch reviews + active employees for *range_*, return (users, teams) sorted by given desc."""
-    reviews, active_emps = await asyncio.gather(
-        get_reviews_in_range(_start_for_range(range_)),
-        get_active_employees_with_departments(),
+async def get_recognition_users(range: str, page: int, limit: int):
+    """Paginated employees with given/received review counts for the period."""
+    from src.analytics.schemas import PaginatedUserRecognition
+    from dateutil.relativedelta import relativedelta
+    import asyncio, math
+
+    key    = f"dashboard:recognition_users:{range}:{page}:{limit}"
+    cached = await cache_get(key, l1_ttl=L1_SHORT)
+    if cached is not None:
+        return PaginatedUserRecognition(**cached)
+
+    from src.prisma.client import db
+    now   = datetime.now(timezone.utc)
+    start = _range_start(now, range)
+
+    employees, reviews = await asyncio.gather(
+        db.employees.find_many(
+            where={"status_master_employees_status_idTostatus_master": {"status_code": "ACTIVE"}}
+        ),
+        db.reviews.find_many(where={"review_at": {"gte": start}}),
     )
 
-    given_count:    dict[str, int] = {}
-    received_count: dict[str, int] = {}
+    given_map:    dict = {}
+    received_map: dict = {}
     for r in reviews:
-        rid  = str(r.reviewer_id)
-        rcid = str(r.receiver_id)
-        given_count[rid]  = given_count.get(rid, 0) + 1
-        received_count[rcid] = received_count.get(rcid, 0) + 1
+        given_map[r.reviewer_id]    = given_map.get(r.reviewer_id, 0) + 1
+        received_map[r.receiver_id] = received_map.get(r.receiver_id, 0) + 1
 
-    users: list[UserRecognition] = []
-    team_map: dict[str, dict]    = {}
+    rows = sorted([
+        {
+            "employee_id": e.employee_id,
+            "username":    e.username,
+            "given":       given_map.get(e.employee_id, 0),
+            "received":    received_map.get(e.employee_id, 0),
+        }
+        for e in employees
+    ], key=lambda x: x["given"], reverse=True)
 
-    for emp in active_emps:
-        emp_id    = str(emp.employee_id)
-        dept      = emp.departments_employees_department_idTodepartments
-        dept_name = dept.department_name if dept else "N/A"
-        dept_id   = str(dept.department_id) if dept else None
+    total       = len(rows)
+    total_pages = math.ceil(total / limit) if total else 0
+    skip        = (page - 1) * limit
+    data        = rows[skip: skip + limit]
 
-        users.append(UserRecognition(
-            employee_id=emp_id,
-            username=emp.username,
-            department=dept_name,
-            given=given_count.get(emp_id, 0),
-            received=received_count.get(emp_id, 0),
-        ))
-
-        if dept_id:
-            if dept_id not in team_map:
-                team_map[dept_id] = {"name": dept_name, "given": 0, "received": 0, "members": 0}
-            team_map[dept_id]["members"]  += 1
-            team_map[dept_id]["given"]    += given_count.get(emp_id, 0)
-            team_map[dept_id]["received"] += received_count.get(emp_id, 0)
-
-    teams = [
-        TeamRecognition(
-            department_id=dept_id,
-            name=d["name"],
-            given=d["given"],
-            received=d["received"],
-            members=d["members"],
-        )
-        for dept_id, d in team_map.items()
-    ]
-
-    users.sort(key=lambda u: u.given, reverse=True)
-    teams.sort(key=lambda t: t.given, reverse=True)
-    return users, teams
-
-
-def _paginate(items: list, page: int, limit: int) -> tuple[list, int]:
-    """Return (page_slice, total_pages)."""
-    total = len(items)
-    pages = max(1, -(-total // limit))          # ceiling division
-    start = (page - 1) * limit
-    return items[start: start + limit], pages
+    result = PaginatedUserRecognition(
+        data=data,
+        pagination={
+            "current_page": page, "per_page": limit,
+            "total": total, "total_pages": total_pages,
+            "has_next": page < total_pages, "has_previous": page > 1,
+        },
+    )
+    await cache_set(key, result.model_dump(), ttl=TTL_SHORT, l1_ttl=L1_SHORT)
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Recognition — Per User  (VOLATILE 60s / 30s)
+# Recognition per Team  — SHORT (300s / 60s)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def get_recognition_users(
-    range_: str, page: int = 1, limit: int = 20
-) -> PaginatedUserRecognition:
-    key    = _key_recog_users(range_)
-    cached = await cache_get(key, l1_ttl=L1_VOLATILE)
-    logger.debug("cache recog-users key=%s %s", key, "HIT" if cached is not None else "MISS")
+async def get_recognition_teams(range: str, page: int, limit: int):
+    """Paginated departments with aggregated given/received review counts."""
+    from src.analytics.schemas import PaginatedTeamRecognition
+    import asyncio, math
 
+    key    = f"dashboard:recognition_teams:{range}:{page}:{limit}"
+    cached = await cache_get(key, l1_ttl=L1_SHORT)
     if cached is not None:
-        all_users = [UserRecognition(**u) for u in cached]
-    else:
-        all_users, all_teams = await _aggregate_recognition(range_)
-        await cache_set(key, [u.model_dump() for u in all_users], ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
-        # Opportunistically warm the teams cache too
-        teams_key = _key_recog_teams(range_)
-        await cache_set(teams_key, [t.model_dump() for t in all_teams], ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
+        return PaginatedTeamRecognition(**cached)
 
-    items, pages = _paginate(all_users, page, limit)
-    return PaginatedUserRecognition(
-        items=items, total=len(all_users), page=page, limit=limit, pages=pages
+    from src.prisma.client import db
+    now   = datetime.now(timezone.utc)
+    start = _range_start(now, range)
+
+    departments, employees, reviews = await asyncio.gather(
+        db.departments.find_many(),
+        db.employees.find_many(
+            where={"status_master_employees_status_idTostatus_master": {"status_code": "ACTIVE"}}
+        ),
+        db.reviews.find_many(where={"review_at": {"gte": start}}),
     )
 
+    emp_dept = {e.employee_id: e.department_id for e in employees}
+    dept_members: dict = {}
+    for e in employees:
+        if e.department_id:
+            dept_members[e.department_id] = dept_members.get(e.department_id, 0) + 1
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Recognition — Per Team  (VOLATILE 60s / 30s)
-# ─────────────────────────────────────────────────────────────────────────────
+    dept_given:    dict = {}
+    dept_received: dict = {}
+    for r in reviews:
+        d = emp_dept.get(r.reviewer_id)
+        if d:
+            dept_given[d] = dept_given.get(d, 0) + 1
+        d = emp_dept.get(r.receiver_id)
+        if d:
+            dept_received[d] = dept_received.get(d, 0) + 1
 
-async def get_recognition_teams(
-    range_: str, page: int = 1, limit: int = 10
-) -> PaginatedTeamRecognition:
-    key    = _key_recog_teams(range_)
-    cached = await cache_get(key, l1_ttl=L1_VOLATILE)
-    logger.debug("cache recog-teams key=%s %s", key, "HIT" if cached is not None else "MISS")
+    dept_map = {d.department_id: d.department_name for d in departments}
+    rows = sorted([
+        {
+            "department_id":   str(dept_id),
+            "department_name": dept_map.get(dept_id, "Unknown"),
+            "headcount":       members,
+            "given":           dept_given.get(dept_id, 0),
+            "received":        dept_received.get(dept_id, 0),
+        }
+        for dept_id, members in dept_members.items()
+    ], key=lambda x: x["given"], reverse=True)
 
-    if cached is not None:
-        all_teams = [TeamRecognition(**t) for t in cached]
-    else:
-        all_users, all_teams = await _aggregate_recognition(range_)
-        await cache_set(key, [t.model_dump() for t in all_teams], ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
-        users_key = _key_recog_users(range_)
-        await cache_set(users_key, [u.model_dump() for u in all_users], ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
+    total       = len(rows)
+    total_pages = math.ceil(total / limit) if total else 0
+    skip        = (page - 1) * limit
+    data        = rows[skip: skip + limit]
 
-    items, pages = _paginate(all_teams, page, limit)
-    return PaginatedTeamRecognition(
-        items=items, total=len(all_teams), page=page, limit=limit, pages=pages
+    result = PaginatedTeamRecognition(
+        data=data,
+        pagination={
+            "current_page": page, "per_page": limit,
+            "total": total, "total_pages": total_pages,
+            "has_next": page < total_pages, "has_previous": page > 1,
+        },
     )
+    await cache_set(key, result.model_dump(), ttl=TTL_SHORT, l1_ttl=L1_SHORT)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _range_start(now: datetime, range: str) -> datetime:
+    from dateutil.relativedelta import relativedelta
+    mapping = {"week": relativedelta(weeks=1), "month": relativedelta(months=1),
+               "quarter": relativedelta(months=3), "year": relativedelta(years=1)}
+    return now - mapping.get(range, relativedelta(months=1))
