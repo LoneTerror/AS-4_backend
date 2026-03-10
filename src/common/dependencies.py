@@ -130,6 +130,10 @@ async def check_route_permission(
     matched route. Uses the route *template* (e.g. /v1/roles/{role_id}) so
     that parameterised paths resolve correctly against the DB records.
     SUPER_ADMIN bypasses all permission checks.
+
+    Route permissions are cached under "roles:route_permissions" (MEDIUM tier,
+    3600s L2 / 300s L1) — invalidated by route_registry on every startup and
+    by any route_permission write. DB is only hit on a full cache miss.
     """
 
     if "SUPER_ADMIN" in current_user.roles:
@@ -143,18 +147,36 @@ async def check_route_permission(
 
     route_key = f"{request.method}:{path_template}"
 
-    allowed = await db.route_permissions.find_many(
-        where={"route_key": route_key},
-        include={"roles": True},
-    )
+    # ── Cache lookup — keyed per route_key ───────────────────────────────────
+    # Stores a list of allowed role_codes for each route.
+    # TTL matches MEDIUM tier (L2: 3600s / L1: 300s) — same tier used by
+    # route_registry when it invalidates "roles:route_permissions" on startup.
+    from src.common.cache import TTL_MEDIUM, L1_MEDIUM
+    perm_cache_key = f"roles:route_permissions:{route_key}"
+    cached_roles: list[str] | None = await cache_get(perm_cache_key, l1_ttl=L1_MEDIUM)
 
-    if not allowed:
+    if cached_roles is None:
+        # Cache miss — fetch from DB and populate cache
+        allowed = await db.route_permissions.find_many(
+            where={"route_key": route_key},
+            include={"roles": True},
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No permissions configured for {route_key}",
+            )
+        cached_roles = [p.roles.role_code.upper() for p in allowed]
+        await cache_set(perm_cache_key, cached_roles, ttl=TTL_MEDIUM, l1_ttl=L1_MEDIUM)
+    elif not cached_roles:
+        # Cached empty list means no permissions configured
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"No permissions configured for {route_key}",
         )
+    # ─────────────────────────────────────────────────────────────────────────
 
-    allowed_role_codes = {p.roles.role_code.upper() for p in allowed}
+    allowed_role_codes = set(cached_roles)
 
     if not any(r in allowed_role_codes for r in current_user.roles):
         raise HTTPException(
