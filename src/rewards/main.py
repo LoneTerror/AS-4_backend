@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        logger.info("Rewards Service: 🟢 Redis Connected")
+        logger.info("Rewards Service: ☑️ Redis Connected")
     except Exception as e:
         logger.warning("Rewards Service: Redis unavailable (%s) — notifications will not be queued in real-time", e)
 

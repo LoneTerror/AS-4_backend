@@ -30,18 +30,24 @@ from src.common.route_registry import register_app_routes
 logger = logging.getLogger(__name__)
 
 
-# ── OpenTelemetry setup (module-level, matches analytics/main.py) ─────────────
+# ── OpenTelemetry setup ───────────────────────────────────────────────────────
+# Mirrors analytics/main.py exactly:
+#   - Always create provider + resource
+#   - Only attach OTLP exporter when OTEL_EXPORTER_OTLP_ENDPOINT is set
+#   - Never crashes locally when Jaeger is not running
 resource = Resource.create({"service.name": "rnr-employees"})
 provider = TracerProvider(resource=resource)
 
-_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-if _otlp_endpoint:
+otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+if otlp_endpoint:
     try:
-        _exporter = OTLPSpanExporter()
-        provider.add_span_processor(BatchSpanProcessor(_exporter))
-        logging.getLogger(__name__).info("OpenTelemetry: OTLP exporter → %s", _otlp_endpoint)
-    except Exception as _exc:
-        logging.getLogger(__name__).warning("OpenTelemetry: OTLP init failed (%s) — tracing disabled", _exc)
+        otlp_exporter = OTLPSpanExporter()   # reads endpoint from env automatically
+        provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+        logger.info("OpenTelemetry: OTLP exporter → %s", otlp_endpoint)
+    except Exception as exc:
+        logger.warning("OpenTelemetry: OTLP init failed (%s) — tracing disabled", exc)
+else:
+    logger.debug("OpenTelemetry: OTEL_EXPORTER_OTLP_ENDPOINT not set — tracing skipped")
 
 trace.set_tracer_provider(provider)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,11 +97,12 @@ async def lifespan(app: FastAPI):
     r = None
     try:
         r = await connect_redis()
-        print("Employee Service: 🟢 Redis Connected")
+        print("Employee Service: ☑️ Redis Connected")
     except Exception as exc:
         logger.warning(
             "Redis unavailable (%s) — workers disabled. "
-            "Notifications queue in DB; recovered on next restart.", exc,
+            "Notifications queue in DB; recovered on next restart.",
+            exc,
         )
         print("Employee Service: 🔴 Redis Unavailable — workers disabled")
 
@@ -113,6 +120,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Slack disabled — missing env var: %s", e)
         print("Employee Service: ⚠️  Slack disabled (missing env var)")
 
+    # Store Redis on app state so routers and the health check can access it
     app.state.redis = r
 
     # ── 5. Background workers ─────────────────────────────────────────────────
@@ -132,10 +140,11 @@ async def lifespan(app: FastAPI):
     else:
         print("Employee Service: ⚠️  Workers not started — Redis unavailable")
 
-    # ── 6. Yield — /health is reachable from here ─────────────────────────────
+    # ── 6. Yield — app is live, /health is reachable ──────────────────────────
+    #
     # register_app_routes runs AFTER yield in a background task so it never
-    # delays the health check. Until it completes, check_route_permission falls
-    # back to default_roles — same safe default as before.
+    # blocks startup. Until it completes, check_route_permission falls back
+    # to default_roles — the same safe default it has always used.
     print("Employee Service: 🟢 Service is live")
 
     route_registry_task = asyncio.create_task(
@@ -143,10 +152,11 @@ async def lifespan(app: FastAPI):
         name="route_registry_loader",
     )
 
-    yield
+    yield  # ← /health returns 200 from this point on
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
     route_registry_task.cancel()
+
     for task in (worker_task, celebration_task):
         if task is None:
             continue
@@ -156,13 +166,19 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     print("Employee Service: 📧 Workers stopped")
+
     await disconnect_redis()
     print("Employee Service: 🔴 Redis Disconnected")
+
     await db.disconnect()
     print("Employee Service: 🔴 Database Disconnected")
 
 
 async def _load_route_registry(app: FastAPI) -> None:
+    """
+    Loads route permissions from DB in the background after the app is live.
+    Retries once on failure. Falls back to default_roles if both fail.
+    """
     for attempt in (1, 2):
         try:
             await asyncio.wait_for(
@@ -180,16 +196,20 @@ async def _load_route_registry(app: FastAPI) -> None:
             return
         except asyncio.TimeoutError:
             logger.error(
-                "register_app_routes timed out (attempt %d/2) — %s", attempt,
+                "register_app_routes timed out (attempt %d/2) — %s",
+                attempt,
                 "retrying in 5s" if attempt == 1 else "falling back to default role enforcement",
             )
         except Exception as exc:
             logger.error(
-                "register_app_routes failed (attempt %d/2): %s — %s", attempt, exc,
+                "register_app_routes failed (attempt %d/2): %s — %s",
+                attempt,
+                exc,
                 "retrying in 5s" if attempt == 1 else "falling back to default role enforcement",
             )
         if attempt == 1:
             await asyncio.sleep(5)
+
     print("Employee Service: ⚠️  Route registry failed — using default roles")
 
 
@@ -219,26 +239,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Health check — MUST be registered BEFORE the routers below ───────────────
-#
-# The routers (emp_router, notifications_router, webhooks_router) attach
-# check_route_permission → get_current_user to every route they register.
-# get_current_user raises 401 when there is no Authorization header.
-#
-# FastAPI route registration order does NOT affect which dependency runs on
-# which route — each route carries only its own declared dependencies.
-# HOWEVER: custom_openapi() was previously iterating ALL paths and injecting
-# BearerAuth security onto every operation including /health. This caused
-# check_route_permission (which reads the route permissions table) to find
-# /health as a "protected" route and return 401/403.
-#
-# Two fixes applied here:
-#   1. /health registered first (defence in depth)
-#   2. custom_openapi() skips _PUBLIC_PATHS (the real fix)
 @app.get("/health", tags=["System"])
 async def health_check():
     r = getattr(app.state, "redis", None)
     redis_status = "not_configured"
+
     if r is not None:
         try:
             await asyncio.wait_for(r.ping(), timeout=2.0)
@@ -247,6 +252,7 @@ async def health_check():
             redis_status = "timeout"
         except Exception:
             redis_status = "unavailable"
+
     return {
         "status": "healthy",
         "service": "Employee Service",
@@ -276,9 +282,6 @@ def custom_openapi():
         "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
     }
     for path, path_item in schema.get("paths", {}).items():
-        # Skip public paths — previously this loop ran unconditionally on all
-        # paths (iterating .values() not .items()) so /health got BearerAuth
-        # injected, causing check_route_permission to return 401 on health polls.
         if path in _PUBLIC_PATHS:
             continue
         for operation in path_item.values():

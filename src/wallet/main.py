@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        print("Wallet Service: 🟢 Redis Connected")
+        print("Wallet Service: ☑️ Redis Connected")
     except Exception as e:
         print(f"Wallet Service: ⚠️  Redis unavailable ({e}) — caching disabled")
 

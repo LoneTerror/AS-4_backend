@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
     print("Roles Service: Connecting to Redis...")
     try:
         await connect_redis()
-        print("Roles Service: 🟢 Redis Connected")
+        print("Roles Service: ☑️ Redis Connected")
     except Exception as e:
         print(f"Roles Service: ⚠️  Redis unavailable ({e})")
 
