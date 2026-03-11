@@ -26,12 +26,13 @@ from src.common.middleware import (
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    "GET:/v1/analytics/dashboard/leaderboard":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/recent-reviews":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/teams":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/teams/{department_id}":   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/platform-stats":          ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/dashboard/leaderboard":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/dashboard/recent-reviews":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/dashboard/teams":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/dashboard/teams/{department_id}":   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/dashboard/platform-stats":          ["SUPER_ADMIN", "HR_ADMIN"],
 }
+
 # ==========================================
 # OpenTelemetry Configuration
 # ==========================================
@@ -63,7 +64,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        print("Analytics Service: 🟢 Redis Connected")
+        print("Analytics Service: ☑️ Redis Connected")
     except Exception as e:
         print(f"Analytics Service: ⚠️  Redis unavailable ({e}) — caching disabled")
 
