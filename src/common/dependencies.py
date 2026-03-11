@@ -21,11 +21,27 @@ ALGORITHM = os.getenv("ALGORITHM", "HS256")
 security = HTTPBearer(auto_error=False)
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
 
-# ── How long to cache a validated token result ────────────────────────────────
-# JWTs are stateless — a token valid at time T stays valid until its exp claim.
-# Caching for 30s means a revoked/expired token can still work for up to 30s.
-# Safe for this system; lower to 10s if you need tighter revocation guarantees.
 _AUTH_CACHE_TTL = 30
+
+# ── Paths that never require authentication ───────────────────────────────────
+_PUBLIC_PATHS: frozenset[str] = frozenset({
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/v1/docs",
+    "/v1/redoc",
+    "/v1/openapi.json",
+})
+
+
+def _is_public(request: Request) -> bool:
+    """
+    True if this request should bypass all auth and permission checks.
+    Uses scope["path"] — the raw ASGI path, unaffected by root_path or
+    proxy prefix rewriting — so the check works identically in all envs.
+    """
+    return request.scope.get("path", request.url.path) in _PUBLIC_PATHS
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -48,13 +64,10 @@ def get_auth_client() -> httpx.AsyncClient:
 
 
 async def close_auth_client() -> None:
-    """Call this in your lifespan shutdown to cleanly close pooled connections."""
     global _auth_client
     if _auth_client and not _auth_client.is_closed:
         await _auth_client.aclose()
         _auth_client = None
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -65,10 +78,23 @@ class CurrentUser(BaseModel):
     department_id: Optional[str] = None
 
 
+# Sentinel returned for public paths.
+# Roles=["PUBLIC"] so no business-logic permission check can accidentally pass.
+_PUBLIC_USER = CurrentUser(id="system", email="", roles=["PUBLIC"])
+
+
 async def get_current_user(
     request:     Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> CurrentUser:
+
+    # ── Public path bypass ────────────────────────────────────────────────────
+    # fast.py's health poller sends no Authorization header.
+    # Without this, credentials=None and we raise 401 four lines below.
+    # This is the primary fix for the health check 401.
+    if _is_public(request):
+        return _PUBLIC_USER
+    # ─────────────────────────────────────────────────────────────────────────
 
     if not credentials:
         raise HTTPException(
@@ -88,11 +114,8 @@ async def get_current_user(
         import asyncio
         cached = await asyncio.wait_for(cache_get(cache_key), timeout=2.0)
         if cached is not None:
-            # FIX: Validate cached user_id before returning — a previously
-            # cached None/invalid value must not be surfaced to callers.
             cached_id = cached.get("id")
             if not cached_id or not isinstance(cached_id, str) or cached_id.lower() == "null":
-                # Evict the poisoned cache entry and fall through to re-auth
                 from src.common.cache import cache_delete
                 await cache_delete(cache_key)
             else:
@@ -103,7 +126,6 @@ async def get_current_user(
     # ─────────────────────────────────────────────────────────────────────────
 
     try:
-        # 1. PRIMARY: Try calling the Auth Service API
         client   = get_auth_client()
         response = await client.post(
             AUTH_SERVICE_URL,
@@ -119,9 +141,6 @@ async def get_current_user(
 
         data = response.json()
 
-        # FIX: Validate user_id from auth service response before use.
-        # A missing or null user_id would become the string "null" when passed
-        # to Prisma UUID fields, causing a DataError and a 500 response.
         user_id = data.get("user_id")
         if not user_id or not isinstance(user_id, str) or user_id.lower() == "null":
             raise HTTPException(
@@ -137,27 +156,22 @@ async def get_current_user(
             department_id=data.get("department_id"),
         )
 
-        # Cache the validated result
         try:
             await cache_set(cache_key, user.model_dump(), ttl=_AUTH_CACHE_TTL)
         except Exception:
-            pass  # Ignore caching errors if Redis is down
+            pass
 
         return user
 
     except httpx.RequestError as e:
-        # 2. FALLBACK: Auth Service is unreachable (Redis timeout, container crash, etc.)
         from src.core.logger import logger
         logger.warning(
             f"[{request_id}] Auth service unreachable, falling back to local JWT validation. ({e})"
         )
 
         try:
-            # Mathematically verify the token signature using python-jose
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
-            # FIX: Extract and validate user_id from JWT payload.
-            # Both 'user_id' and standard 'sub' claims are supported.
             user_id = payload.get("user_id") or payload.get("sub")
             if not user_id or not isinstance(user_id, str) or user_id.lower() == "null":
                 raise HTTPException(
@@ -166,13 +180,12 @@ async def get_current_user(
                 )
 
             roles = [r.upper() for r in payload.get("roles", [])]
-            fallback_user = CurrentUser(
+            return CurrentUser(
                 id=str(user_id),
                 email=payload.get("email", ""),
                 roles=roles,
                 department_id=payload.get("department_id"),
             )
-            return fallback_user
 
         except ExpiredSignatureError:
             raise HTTPException(
@@ -187,6 +200,7 @@ async def get_current_user(
         except HTTPException:
             raise
         except Exception as fallback_err:
+            from src.core.logger import logger
             logger.error(
                 f"[{request_id}] Fallback validation failed: {fallback_err}",
                 exc_info=True,
@@ -203,14 +217,18 @@ async def check_route_permission(
 ) -> CurrentUser:
     """
     Checks that the authenticated user has a role permitted to access the
-    matched route. Uses the route *template* (e.g. /v1/roles/{role_id}) so
-    that parameterised paths resolve correctly against the DB records.
-    SUPER_ADMIN bypasses all permission checks.
-
-    Route permissions are cached under "roles:route_permissions" (MEDIUM tier,
-    3600s L2 / 300s L1) — invalidated by route_registry on every startup and
-    by any route_permission write. DB is only hit on a full cache miss.
+    matched route. Uses the route template so parameterised paths resolve
+    correctly against the DB records.
+    SUPER_ADMIN and PUBLIC sentinel bypass all permission checks.
     """
+
+    # ── Public path bypass ────────────────────────────────────────────────────
+    # get_current_user already returned _PUBLIC_USER for these paths.
+    # Without this guard the DB lookup finds no route_permissions row for
+    # /health and raises 403 — swapping a 401 for a 403, still broken.
+    if _is_public(request):
+        return current_user
+    # ─────────────────────────────────────────────────────────────────────────
 
     if "SUPER_ADMIN" in current_user.roles:
         return current_user
@@ -223,13 +241,11 @@ async def check_route_permission(
 
     route_key = f"{request.method}:{path_template}"
 
-    # ── Cache lookup — keyed per route_key ───────────────────────────────────
     from src.common.cache import TTL_MEDIUM, L1_MEDIUM
     perm_cache_key = f"roles:route_permissions:{route_key}"
     cached_roles: list[str] | None = await cache_get(perm_cache_key, l1_ttl=L1_MEDIUM)
 
     if cached_roles is None:
-        # Cache miss — fetch from DB and populate cache
         allowed = await db.route_permissions.find_many(
             where={"route_key": route_key},
             include={"roles": True},
@@ -242,15 +258,12 @@ async def check_route_permission(
         cached_roles = [p.roles.role_code.upper() for p in allowed]
         await cache_set(perm_cache_key, cached_roles, ttl=TTL_MEDIUM, l1_ttl=L1_MEDIUM)
     elif not cached_roles:
-        # Cached empty list means no permissions configured
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"No permissions configured for {route_key}",
         )
-    # ─────────────────────────────────────────────────────────────────────────
 
     allowed_role_codes = set(cached_roles)
-
     if not any(r in allowed_role_codes for r in current_user.roles):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -261,4 +274,4 @@ async def check_route_permission(
 
 
 def get_db() -> Prisma:
-    return db   
+    return db
