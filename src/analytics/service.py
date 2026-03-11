@@ -450,41 +450,54 @@ async def get_recognition_trend(range_: str):
     from src.prisma.client import db
     now = datetime.now(timezone.utc)
 
-    if range_ == "3m":
-        start    = now - relativedelta(months=3)
-        bucket   = "week"
-        n_buckets = 12
-    elif range_ == "6m":
-        start    = now - relativedelta(months=6)
-        bucket   = "month"
-        n_buckets = 6
-    else:  # 1y
-        start    = now - relativedelta(years=1)
-        bucket   = "month"
-        n_buckets = 12
-
-    reviews = await db.reviews.find_many(
-        where={"review_at": {"gte": start}},
-        order={"review_at": "asc"},
-    )
-
-    # Build buckets
     from src.analytics.schemas import TrendPoint
-    points: list[TrendPoint] = []
-    for i in builtins_range(n_buckets):
-        if bucket == "week":
+
+    if range_ == "3m":
+        n_buckets = 12
+        # Anchor to exactly 12 weeks back so no gap between last bucket and now
+        start = now - relativedelta(weeks=n_buckets)
+
+        reviews = await db.reviews.find_many(
+            where={"review_at": {"gte": start}},
+            order={"review_at": "asc"},
+        )
+
+        points: list[TrendPoint] = []
+        for i in builtins_range(n_buckets):
             b_start = start + relativedelta(weeks=i)
             b_end   = b_start + relativedelta(weeks=1)
             label   = b_start.strftime("%b %d")
-        else:
-            b_start = (start + relativedelta(months=i)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            b_end   = b_start + relativedelta(months=1)
-            label   = b_start.strftime("%b %Y")
+            in_bucket = [r for r in reviews if b_start <= r.review_at.replace(tzinfo=timezone.utc) < b_end]
+            points.append(TrendPoint(
+                label=label,
+                given=len({r.reviewer_id for r in in_bucket}),
+                received=len(in_bucket),
+            ))
+    else:
+        # Monthly buckets — compute backwards from now so current month is always included
+        n_buckets = 6 if range_ == "6m" else 12
+        # Build bucket boundaries from oldest → newest
+        bucket_starts = [
+            (now - relativedelta(months=i)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            for i in builtins_range(n_buckets - 1, -1, -1)  # n-1 months ago → 0 (current month)
+        ]
+        start = bucket_starts[0]
 
-        in_bucket = [r for r in reviews if b_start <= r.review_at.replace(tzinfo=timezone.utc) < b_end]
-        given    = len({r.reviewer_id for r in in_bucket})
-        received = len(in_bucket)
-        points.append(TrendPoint(label=label, given=given, received=received))
+        reviews = await db.reviews.find_many(
+            where={"review_at": {"gte": start}},
+            order={"review_at": "asc"},
+        )
+
+        points: list[TrendPoint] = []
+        for b_start in bucket_starts:
+            b_end = b_start + relativedelta(months=1)
+            label = b_start.strftime("%b %Y")
+            in_bucket = [r for r in reviews if b_start <= r.review_at.replace(tzinfo=timezone.utc) < b_end]
+            points.append(TrendPoint(
+                label=label,
+                given=len({r.reviewer_id for r in in_bucket}),
+                received=len(in_bucket),
+            ))
 
     result = RecognitionTrend(data=points)
     await cache_set(key, result.model_dump(), ttl=TTL_SHORT, l1_ttl=L1_SHORT)
