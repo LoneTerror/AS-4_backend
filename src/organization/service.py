@@ -433,16 +433,34 @@ async def update_designation(
     data: schemas.UpdateDesignationRequest,
     updated_by_id: str
 ) -> schemas.DesignationDetailResponse:
+    # 1. Check if the target record exists
     existing = await db.designations.find_unique(where={"designation_id": designation_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Designation not found")
 
-    # BUG FIX 3: description was incorrectly excluded, preventing it from ever being updated
+    # 2. Extract update data
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items()
                    if k not in ("is_active",)}
 
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    # --- FIX: UNIQUE CONSTRAINT CHECK ---
+    # If designation_code is in the update, ensure it's not already taken by another record
+    new_code = update_data.get("designation_code")
+    if new_code and new_code != existing.designation_code:
+        conflict = await db.designations.find_first(
+            where={
+                "designation_code": new_code,
+                "NOT": {"designation_id": designation_id}
+            }
+        )
+        if conflict:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Designation code '{new_code}' is already in use."
+            )
+    # ------------------------------------
 
     update_data["updated_by"] = updated_by_id
     update_data["updated_at"] = datetime.now()
@@ -452,7 +470,7 @@ async def update_designation(
         data=update_data
     )
 
-    # Invalidate this designation's detail cache after update
+    # Invalidate caches
     await cache_delete(_key_desig(designation_id))
     await invalidate_pattern("org:designations:*")
 
