@@ -36,7 +36,16 @@ ROLE_OVERRIDES = {
     "POST:/v1/wallets/transactions":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
     "POST:/v1/wallets/credit-from-review":        ["SUPER_ADMIN", "HR_ADMIN"],
 }
-
+ROUTE_TITLES = {
+    "GET:/v1/wallets/employees/{employee_id}":          "Get Employee Wallet",
+    "GET:/v1/wallets/{wallet_id}/balance":              "Get Wallet Balance",
+    "GET:/v1/wallets/{wallet_id}/points-summary":       "Get Points Summary",
+    "GET:/v1/wallets/transactions":                     "List All Transactions",
+    "GET:/v1/wallets/transactions/{transaction_id}":    "Get Transaction Details",
+    "GET:/v1/wallets/transactions/types":               "List Transaction Types",
+    "POST:/v1/wallets/transactions":                    "Create Transaction",
+    "POST:/v1/wallets/credit-from-review":              "Credit Points from Review",
+}
 # ==========================================
 # OpenTelemetry Configuration
 # ==========================================
@@ -71,6 +80,7 @@ async def lifespan(app: FastAPI):
         app,
         default_roles=["SUPER_ADMIN", "HR_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
+        route_titles=ROUTE_TITLES,
     )
 
     yield

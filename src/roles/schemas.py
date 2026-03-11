@@ -21,10 +21,16 @@ class RevokeRoleRequest(BaseModel):
 
 
 class SetRoutePermissionRequest(BaseModel):
-    route_key: str   # e.g. "POST:/v1/rewards/grant"
+    route_key: str            # e.g. "POST:/v1/rewards/grant"
     role_id:   str
+    title:     Optional[str] = None   # Human-readable label shown in the UI
 
 
 class DeleteRoutePermissionRequest(BaseModel):
     route_key: str
     role_id:   str
+
+
+class UpdateRouteTitleRequest(BaseModel):
+    route_key: str
+    title:     str   # Required — use this endpoint specifically to set/update the label

@@ -9,6 +9,7 @@ from src.roles.schemas import (
     RevokeRoleRequest,
     SetRoutePermissionRequest,
     DeleteRoutePermissionRequest,
+    UpdateRouteTitleRequest,
 )
 import src.roles.service as service
 
@@ -80,3 +81,12 @@ async def remove_route_permission(
     current_user: CurrentUser = Depends(check_route_permission)
 ):
     return await service.remove_route_permission(body, current_user)
+
+
+@router.patch("/route-permissions/title")
+async def update_route_title(
+    body: UpdateRouteTitleRequest,
+    current_user: CurrentUser = Depends(check_route_permission)
+):
+    """Set or update the human-readable display title for a route key."""
+    return await service.update_route_title(body, current_user)
