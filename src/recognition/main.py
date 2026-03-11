@@ -44,6 +44,18 @@ ROLE_OVERRIDES = {
     "GET:/v1/recognitions/digest":                         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     "POST:/v1/recognitions/digest/send":                   ["SUPER_ADMIN", "HR_ADMIN"],
 }
+# ── Recognitions Service ──────────────────────────────────────────────────────
+ROUTE_TITLES = {
+    "GET:/v1/recognitions/reviews":                         "List Reviews",
+    "GET:/v1/recognitions/reviews/{id}":                    "Get Review Details",
+    "POST:/v1/recognitions/reviews":                        "Submit Review",
+    "PUT:/v1/recognitions/reviews/{id}":                    "Update Review",
+    "GET:/v1/recognitions/review-categories":               "List Review Categories",
+    "POST:/v1/recognitions/review-categories":              "Create Review Category",
+    "PUT:/v1/recognitions/review-categories/{id}":          "Update Review Category",
+    "GET:/v1/recognitions/digest":                          "View Recognition Digest",
+    "POST:/v1/recognitions/digest/send":                    "Send Recognition Digest",
+}
 
 
 # ==========================================
@@ -83,6 +95,7 @@ async def lifespan(app: FastAPI):
         app,
         default_roles=["SUPER_ADMIN", "HR_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
+        route_titles=ROUTE_TITLES,
     )
 
     yield

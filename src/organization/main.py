@@ -66,7 +66,49 @@ ROLE_OVERRIDES = {
     "GET:/v1/organizations/audit-logs":                               ["SUPER_ADMIN", "HR_ADMIN"],
     "GET:/v1/organizations/audit-logs/{audit_id}":                    ["SUPER_ADMIN", "HR_ADMIN"],
 }
+# ── Recognitions Service ──────────────────────────────────────────────────────
+ROUTE_TITLES = {
+    "GET:/v1/recognitions/reviews":                         "List Reviews",
+    "GET:/v1/recognitions/reviews/{id}":                    "Get Review Details",
+    "POST:/v1/recognitions/reviews":                        "Submit Review",
+    "PUT:/v1/recognitions/reviews/{id}":                    "Update Review",
+    "GET:/v1/recognitions/review-categories":               "List Review Categories",
+    "POST:/v1/recognitions/review-categories":              "Create Review Category",
+    "PUT:/v1/recognitions/review-categories/{id}":          "Update Review Category",
+    "GET:/v1/recognitions/digest":                          "View Recognition Digest",
+    "POST:/v1/recognitions/digest/send":                    "Send Recognition Digest",
+}
 
+
+# ── Organizations Service ─────────────────────────────────────────────────────
+ROUTE_TITLES = {
+    # Departments
+    "GET:/v1/organizations/departments":                                "List Departments",
+    "GET:/v1/organizations/departments/{department_id}":                "Get Department Details",
+    "POST:/v1/organizations/departments":                               "Create Department",
+    "PUT:/v1/organizations/departments/{department_id}":                "Update Department",
+    # Department Types
+    "GET:/v1/organizations/department-types":                           "List Department Types",
+    # Designations
+    "GET:/v1/organizations/designations":                               "List Designations",
+    "GET:/v1/organizations/designations/{designation_id}":              "Get Designation Details",
+    "POST:/v1/organizations/designations":                              "Create Designation",
+    "PUT:/v1/organizations/designations/{designation_id}":              "Update Designation",
+    # Statuses
+    "GET:/v1/organizations/statuses":                                   "List Statuses",
+    "GET:/v1/organizations/statuses/{status_id}":                       "Get Status Details",
+    "POST:/v1/organizations/statuses":                                  "Create Status",
+    "PUT:/v1/organizations/statuses/{status_id}":                       "Update Status",
+    # Seasonal Multipliers
+    "GET:/v1/organizations/seasonal-multipliers":                       "List Seasonal Multipliers",
+    "GET:/v1/organizations/seasonal-multipliers/active":                "Get Active Seasonal Multiplier",
+    "POST:/v1/organizations/seasonal-multipliers":                      "Create Seasonal Multiplier",
+    "PUT:/v1/organizations/seasonal-multipliers/{mult_id}":             "Update Seasonal Multiplier",
+    "DELETE:/v1/organizations/seasonal-multipliers/{mult_id}":          "Delete Seasonal Multiplier",
+    # Audit Logs
+    "GET:/v1/organizations/audit-logs":                                 "List Audit Logs",
+    "GET:/v1/organizations/audit-logs/{audit_id}":                      "Get Audit Log Details",
+}
 # ==========================================
 # OpenTelemetry Configuration
 # ==========================================
@@ -102,6 +144,7 @@ async def lifespan(app: FastAPI):
         app,
         default_roles=["SUPER_ADMIN", "HR_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
+        route_titles=ROUTE_TITLES,
     )
 
     yield
