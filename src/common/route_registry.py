@@ -85,6 +85,10 @@ def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
     Skips system/doc routes and non-API routes.
     """
     results = []
+    
+    # 1. Grab the root_path defined in your FastAPI app (e.g., "/v1/rewards")
+    root = app.root_path.rstrip("/") if app.root_path else ""
+
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue
@@ -92,8 +96,13 @@ def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
             continue
         if any(route.path.startswith(skip) for skip in ["/docs", "/redoc", "/openapi"]):
             continue
+
+        # 2. Glue them together so the DB string matches the real HTTP URL
+        full_path = f"{root}/{route.path.lstrip('/')}"
+
         for method in route.methods or []:
-            results.append((method.upper(), route.path))
+            results.append((method.upper(), full_path))
+            
     return results
 
 

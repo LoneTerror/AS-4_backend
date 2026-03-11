@@ -30,17 +30,14 @@ from src.roles.router import router
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    # If your base routes are defined as @router.get("/") or @router.post("/")
-    "GET:/":                            ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/":                           ["SUPER_ADMIN"],
-    
-    # All other endpoints
-    "GET:/employees":                   ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/assign":                     ["SUPER_ADMIN"],
-    "POST:/revoke":                     ["SUPER_ADMIN"],
-    "GET:/route-permissions":           ["SUPER_ADMIN"],
-    "POST:/route-permissions":          ["SUPER_ADMIN"],
-    "PATCH:/route-permissions":         ["SUPER_ADMIN"],
+    "GET:/v1/roles":                ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/roles/employees":      ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/roles":               ["SUPER_ADMIN"],
+    "POST:/v1/roles/assign":        ["SUPER_ADMIN"],
+    "POST:/v1/roles/revoke":        ["SUPER_ADMIN"],
+    "GET:/v1/roles/route-permissions":    ["SUPER_ADMIN"],
+    "POST:/v1/roles/route-permissions":   ["SUPER_ADMIN"],
+    "PATCH:/v1/roles/route-permissions":  ["SUPER_ADMIN"],
 }
 
 # ==========================================

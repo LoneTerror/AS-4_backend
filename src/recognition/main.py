@@ -34,18 +34,15 @@ from src.common.middleware import (
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    # ─── Employee & Manager Accessible ─────────────────────────────────────────
-    "GET:/reviews":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/reviews/{id}":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/reviews":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "PUT:/reviews/{id}":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/review-categories":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/digest":                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    
-    # ─── Admin Only ────────────────────────────────────────────────────────────
-    "POST:/review-categories":            ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/review-categories/{id}":        ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/digest/send":                  ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/recognitions/reviews":                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/recognitions/reviews/{id}":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/reviews":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/recognitions/reviews/{id}":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/recognitions/review-categories":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/review-categories":             ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/recognitions/review-categories/{id}":         ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/recognitions/digest":                         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/digest/send":                   ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 

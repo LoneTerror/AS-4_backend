@@ -65,23 +65,18 @@ trace.set_tracer_provider(provider)
 
 
 ROLE_OVERRIDES = {
-    # ── Employee Management ───────────────────────────────────────────────────
-    "GET:/list":                                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/{employee_id}":                               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/create":                                     ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/{employee_id}":                               ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/{employee_id}":                             ["SUPER_ADMIN", "HR_ADMIN"],
-    
-    # ── Notifications ─────────────────────────────────────────────────────────
-    "GET:/notifications":                               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/notifications/unread-count":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "PUT:/notifications/{notification_id}/read":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "PUT:/notifications/read-all":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/notifications":                              ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/notifications/announcements":                ["SUPER_ADMIN", "HR_ADMIN"],
-    
-    # ── Webhooks ──────────────────────────────────────────────────────────────
-    "POST:/webhooks/hris":                              ["SUPER_ADMIN"],
+    "GET:/v1/employees/list":                                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/employees/{employee_id}":                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/employees/create":                                 ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/employees/{employee_id}":                           ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/employees/{employee_id}":                         ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/employees/notifications":                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/employees/notifications/unread-count":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/employees/notifications/{notification_id}/read":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/employees/notifications/read-all":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/employees/notifications":                          ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/employees/notifications/announcements":            ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/employees/webhooks/hris":                          ["SUPER_ADMIN"],
 }
 
 # Paths that must never require a token.

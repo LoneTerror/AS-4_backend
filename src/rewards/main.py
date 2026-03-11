@@ -29,19 +29,16 @@ from src.core.logger import logger
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    # ─── Employee & Manager Accessible ───────────────────────────────────────
-    "GET:/catalog":                     ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/categories":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/history":                     ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/history/me":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/redeem":                     ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    
-    # ─── Admin Only ────────────────────────────────────────────────────────
-    "POST:/catalog":                    ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/catalog/{catalog_id}":      ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/catalog/{catalog_id}/stock":["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/categories":                 ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/categories/{category_id}":  ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/rewards/catalog":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/rewards/categories":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/rewards/history":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/rewards/history/me":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/rewards/redeem":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/rewards/catalog":                     ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/rewards/catalog/{catalog_id}":       ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/rewards/catalog/{catalog_id}/stock": ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/v1/rewards/categories":                  ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/v1/rewards/categories/{category_id}":   ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 # ==========================================

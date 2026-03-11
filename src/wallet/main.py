@@ -29,17 +29,14 @@ from src.common.middleware import (
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    # ─── Accessible by Everyone ────────────────────────────────────────────────
-    "GET:/employees/{employee_id}":         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/{wallet_id}/balance":             ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/{wallet_id}/points-summary":      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/transactions":                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/transactions/{transaction_id}":   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/transactions/types":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    
-    # ─── Restricted Actions ────────────────────────────────────────────────────
-    "POST:/transactions":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
-    "POST:/credit-from-review":             ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/wallets/employees/{employee_id}":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/{wallet_id}/balance":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/{wallet_id}/points-summary": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/transactions":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/transactions/{transaction_id}": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/wallets/transactions/types":         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/wallets/transactions":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
+    "POST:/v1/wallets/credit-from-review":        ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 # ==========================================
