@@ -28,14 +28,18 @@ from src.common.middleware import (
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    # ── Employee & Manager Dashboard ──────────────────────────────────────────
-    "GET:/dashboard/leaderboard":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/dashboard/recent-reviews":         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/dashboard/teams":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/dashboard/teams/{department_id}":  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    
-    # ── Admin Only Dashboard ──────────────────────────────────────────────────
-    "GET:/dashboard/platform-stats":         ["SUPER_ADMIN", "HR_ADMIN"],
+    # ── Routes accessible by all roles ──────────────────────────────────────
+    "GET:/dashboard/leaderboard":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/dashboard/recent-reviews":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/dashboard/platform-stats":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+
+    # ── Admin-only routes ────────────────────────────────────────────────────
+    "GET:/dashboard/teams":                    ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/dashboard/teams/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/dashboard/participation":            ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/dashboard/recognition-trend":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/dashboard/recognition/users":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/dashboard/recognition/teams":        ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 # ==========================================
