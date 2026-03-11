@@ -17,6 +17,7 @@ from src.roles.schemas import (
     RevokeRoleRequest,
     SetRoutePermissionRequest,
     DeleteRoutePermissionRequest,
+    UpdateRouteTitleRequest,
 )
 
 import logging
@@ -167,7 +168,15 @@ async def list_route_permissions():
     for row in rows:
         key = row.route_key
         if key not in grouped:
-            grouped[key] = {"route_key": key, "roles": []}
+            grouped[key] = {
+                "route_key": key,
+                # Human-readable label; falls back to None for legacy rows that
+                # were registered before the title field was added.
+                "title": row.title,
+                "roles": [],
+            }
+        elif row.title and not grouped[key]["title"]:
+            grouped[key]["title"] = row.title
         grouped[key]["roles"].append({
             "role_id":   row.role_id,
             "role_code": row.roles.role_code,
@@ -189,6 +198,7 @@ async def add_route_permission(body: SetRoutePermissionRequest, current_user: Cu
             where={"id": existing.id},
             data={
                 "is_active":  True,
+                "title":      body.title,
                 "updated_by": current_user.id,
                 "updated_at": datetime.now(timezone.utc),
             },
@@ -197,6 +207,7 @@ async def add_route_permission(body: SetRoutePermissionRequest, current_user: Cu
         result = await db.route_permissions.create(data={
             "route_key":  body.route_key,
             "role_id":    body.role_id,
+            "title":      body.title,
             "is_active":  True,
             "created_by": current_user.id,
             "updated_by": current_user.id,
@@ -224,3 +235,23 @@ async def remove_route_permission(body: DeleteRoutePermissionRequest, current_us
     )
     await invalidate_permissions()
     return result
+
+
+async def update_route_title(body: UpdateRouteTitleRequest, current_user: CurrentUser):
+    """Update the human-readable title for all route_permission rows sharing the same route_key."""
+    rows = await db.route_permissions.find_many(
+        where={"route_key": body.route_key}
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No permissions found for this route_key")
+
+    await db.route_permissions.update_many(
+        where={"route_key": body.route_key},
+        data={
+            "title":      body.title,
+            "updated_by": current_user.id,
+            "updated_at": datetime.now(timezone.utc),
+        },
+    )
+    await invalidate_permissions()
+    return {"route_key": body.route_key, "title": body.title, "updated_rows": len(rows)}

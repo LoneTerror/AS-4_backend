@@ -61,7 +61,21 @@ ROLE_OVERRIDES = {
     "POST:/v1/employees/notifications/announcements":            ["SUPER_ADMIN", "HR_ADMIN"],
     "POST:/v1/employees/webhooks/hris":                          ["SUPER_ADMIN"],
 }
-
+# ── Employees Service ─────────────────────────────────────────────────────────
+ROUTE_TITLES = {
+    "GET:/v1/employees/list":                                   "List Employees",
+    "GET:/v1/employees/{employee_id}":                          "Get Employee Details",
+    "POST:/v1/employees/create":                                "Create Employee",
+    "PUT:/v1/employees/{employee_id}":                          "Update Employee",
+    "PATCH:/v1/employees/{employee_id}":                        "Partially Update Employee",
+    "GET:/v1/employees/notifications":                          "List Notifications",
+    "GET:/v1/employees/notifications/unread-count":             "Get Unread Notification Count",
+    "PUT:/v1/employees/notifications/{notification_id}/read":   "Mark Notification as Read",
+    "PUT:/v1/employees/notifications/read-all":                 "Mark All Notifications as Read",
+    "POST:/v1/employees/notifications":                         "Send Notification",
+    "POST:/v1/employees/notifications/announcements":           "Send Announcement",
+    "POST:/v1/employees/webhooks/hris":                         "HRIS Webhook",
+}
 # Paths that must never require a token — skipped in custom_openapi() too.
 _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
 
@@ -156,6 +170,7 @@ async def _load_route_registry(app: FastAPI) -> None:
                     app,
                     default_roles=["SUPER_ADMIN", "HR_ADMIN"],
                     role_overrides=ROLE_OVERRIDES,
+                    route_titles=ROUTE_TITLES,
                 ),
                 timeout=30.0,
             )
