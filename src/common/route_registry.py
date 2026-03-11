@@ -30,6 +30,7 @@ USAGE — add to each service's lifespan:
             app,
             default_roles=["SUPER_ADMIN", "HR_ADMIN"],
             role_overrides=ROLE_OVERRIDES,
+            route_titles=ROUTE_TITLES,       # optional but recommended
         )
 
         yield
@@ -39,9 +40,19 @@ ROLE_OVERRIDES — optional dict to set per-route roles:
 ────────────────────────────────────────────────────────
     ROLE_OVERRIDES = {
         "GET:/v1/dashboard/leaderboard":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-        "GET:/v1/dashboard/recent-reviews": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
         "POST:/v1/rewards/redeem":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     }
+
+ROUTE_TITLES — optional dict to set human-readable display labels:
+────────────────────────────────────────────────────────────────────
+    ROUTE_TITLES = {
+        "GET:/v1/dashboard/leaderboard":    "View Leaderboard",
+        "POST:/v1/rewards/redeem":          "Redeem Reward",
+    }
+
+    Routes without a title entry get a sensible auto-generated label
+    derived from the method + path (e.g. "GET /v1/rewards/catalog"
+    becomes "Get Rewards Catalog").
 
 Any route NOT in role_overrides gets default_roles assigned.
 """
@@ -49,6 +60,7 @@ Any route NOT in role_overrides gets default_roles assigned.
 import asyncio
 import logging
 import random
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -68,32 +80,61 @@ _SKIP_PATHS = {
     "/redoc",
 }
 
-# created_by / updated_by are String? @db.Uuid (nullable) in the schema,
-# so we pass None for system-generated rows — no UUID string needed.
 _SYSTEM_ACTOR = None
 
-# How long to wait for the entire registration before giving up.
-# Service will still start — registration failure is non-fatal.
-# Increased from 30s to 120s — all 8 services start simultaneously and
-# hammer the DB at once; the previous 30s timeout was too tight.
 _REGISTRATION_TIMEOUT_SECONDS = 120
+
+
+def _auto_title(route_key: str) -> str:
+    """
+    Derive a human-readable title from a route_key when no explicit title
+    is provided.
+
+    Examples:
+        "GET:/v1/rewards/catalog"              → "Get Rewards Catalog"
+        "POST:/v1/employees/create"            → "Post Employees Create"
+        "PATCH:/v1/rewards/catalog/{id}/stock" → "Patch Rewards Catalog Stock"
+        "DELETE:/v1/organizations/seasonal-multipliers/{mult_id}" → "Delete Seasonal Multipliers"
+    """
+    method, _, path = route_key.partition(":")
+    # Strip leading slash and split on /
+    parts = path.strip("/").split("/")
+    # Drop the version segment (v1, v2 …)
+    parts = [p for p in parts if not re.fullmatch(r"v\d+", p)]
+    # Drop path parameter segments like {employee_id}
+    parts = [p for p in parts if not (p.startswith("{") and p.endswith("}"))]
+    # Replace hyphens with spaces, title-case each word
+    label_parts = " ".join(p.replace("-", " ") for p in parts).title()
+    return f"{method.title()} {label_parts}".strip()
 
 
 def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
     """
-    Walk app.routes and return list of (method, path) tuples.
-    Skips system/doc routes and non-API routes.
+    Walk app.routes and return list of (method, full_path) tuples.
+    full_path = app.root_path + route.path  (e.g. /v1/analytics + /dashboard/leaderboard)
+    This ensures route_keys in the DB match the keys used in ROLE_OVERRIDES.
+    Skips system/doc routes, health checks, and non-API routes.
     """
+    # root_path is set via FastAPI(root_path="/v1/service") for reverse-proxy
+    # stripping — it is NOT part of route.path, so we prepend it manually.
+    root_path = (getattr(app, "root_path", "") or "").rstrip("/")
+
+    # Paths to skip — checked against both the short path and the full path
+    _skip_prefixes = ("/docs", "/redoc", "/openapi", "/health")
+
     results = []
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue
-        if route.path in _SKIP_PATHS:
+        full_path = root_path + route.path
+        # Skip if short path or full path is in the explicit skip set
+        if route.path in _SKIP_PATHS or full_path in _SKIP_PATHS:
             continue
-        if any(route.path.startswith(skip) for skip in ["/docs", "/redoc", "/openapi"]):
+        # Skip health and docs regardless of prefix
+        if any(route.path.startswith(p) for p in _skip_prefixes):
             continue
         for method in route.methods or []:
-            results.append((method.upper(), route.path))
+            results.append((method.upper(), full_path))
     return results
 
 
@@ -101,12 +142,12 @@ async def _do_register(
     app: FastAPI,
     default_roles: list[str],
     role_overrides: dict[str, list[str]],
+    route_titles: dict[str, str],
 ) -> None:
     """Inner registration logic — runs inside an asyncio timeout guard."""
     from src.prisma.client import db
 
-    # Random jitter so all 8 services don't hammer the DB simultaneously.
-    # Increased from 0–2s to 0–10s to spread the load across services.
+    # Random jitter so all services don't hammer the DB simultaneously.
     jitter = random.uniform(0, 10)
     await asyncio.sleep(jitter)
 
@@ -125,7 +166,6 @@ async def _do_register(
         return
 
     # 3. Bulk-fetch all existing route_permission rows for this service's routes
-    #    in ONE query — avoids N×M individual find_first calls under parallel startup.
     route_keys = list({f"{method}:{path}" for method, path in routes})
     existing_rows = await db.route_permissions.find_many(
         where={"route_key": {"in": route_keys}}
@@ -140,15 +180,14 @@ async def _do_register(
 
     now = datetime.now(timezone.utc)
 
-    # Categorise every (route_key, role_id) pair:
-    #   to_insert     — brand-new rows  → single create_many call (1 round-trip)
-    #   to_reactivate — inactive rows   → individual updates (need row id)
     to_insert: list[dict] = []
     to_reactivate: list = []
 
     for method, path in routes:
         route_key = f"{method}:{path}"
         roles_for_route = role_overrides.get(route_key, default_roles)
+        # Use explicit title if provided, otherwise auto-generate one
+        title = route_titles.get(route_key) or _auto_title(route_key)
 
         for role_code in roles_for_route:
             role_id = role_map.get(role_code)
@@ -164,10 +203,11 @@ async def _do_register(
             if pair in existing_active:
                 skipped += 1
             elif pair in existing_inactive:
-                to_reactivate.append(existing_inactive[pair])
+                to_reactivate.append((existing_inactive[pair], title))
             else:
                 to_insert.append({
                     "route_key":  route_key,
+                    "title":      title,
                     "role_id":    role_id,
                     "is_active":  True,
                     "created_by": _SYSTEM_ACTOR,
@@ -180,7 +220,7 @@ async def _do_register(
         try:
             result = await db.route_permissions.create_many(
                 data=to_insert,
-                skip_duplicates=True,  # safe against concurrent service startups
+                skip_duplicates=True,
             )
             inserted = result.count if hasattr(result, "count") else len(to_insert)
             logger.debug("route_registry: batch-inserted %d rows", inserted)
@@ -188,13 +228,14 @@ async def _do_register(
             errors += len(to_insert)
             logger.warning("route_registry: batch insert failed: %s", insert_err)
 
-    # ── Reactivate previously-deactivated rows (need per-row id) ─────────────
-    for row in to_reactivate:
+    # ── Reactivate previously-deactivated rows ────────────────────────────────
+    for row, title in to_reactivate:
         try:
             await db.route_permissions.update(
                 where={"id": row.id},
                 data={
                     "is_active":  True,
+                    "title":      title,
                     "updated_by": _SYSTEM_ACTOR,
                     "updated_at": now,
                 },
@@ -205,7 +246,7 @@ async def _do_register(
             errors += 1
             logger.warning("route_registry: reactivation failed for %s: %s", row.route_key, err)
 
-    # Invalidate the permissions cache so middleware picks up new routes immediately
+    # ── Invalidate permissions cache ──────────────────────────────────────────
     try:
         from src.common.cache import cache_delete
         await cache_delete("roles:route_permissions")
@@ -225,25 +266,28 @@ async def register_app_routes(
     app: FastAPI,
     default_roles: list[str],
     role_overrides: Optional[dict[str, list[str]]] = None,
+    route_titles: Optional[dict[str, str]] = None,
 ) -> None:
     """
     Auto-register all routes from `app` into route_permissions.
 
     Non-fatal — if registration times out or fails for any reason, the
-    service still starts normally. Routes will be registered on the next
-    restart once DB contention clears.
+    service still starts normally.
 
     Args:
         app:            The FastAPI app instance for this service.
         default_roles:  Role codes assigned to routes not in role_overrides.
         role_overrides: Optional dict of {route_key: [role_codes]} for
                         routes that need non-default access.
+        route_titles:   Optional dict of {route_key: "Human Readable Title"}.
+                        Routes without an entry get an auto-generated title.
     """
     role_overrides = role_overrides or {}
+    route_titles   = route_titles   or {}
 
     try:
         await asyncio.wait_for(
-            _do_register(app, default_roles, role_overrides),
+            _do_register(app, default_roles, role_overrides, route_titles),
             timeout=_REGISTRATION_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:

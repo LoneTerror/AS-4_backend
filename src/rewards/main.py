@@ -43,6 +43,19 @@ ROLE_OVERRIDES = {
     "POST:/categories":                 ["SUPER_ADMIN", "HR_ADMIN"],
     "PATCH:/categories/{category_id}":  ["SUPER_ADMIN", "HR_ADMIN"],
 }
+# ── Rewards Service ───────────────────────────────────────────────────────────
+ROUTE_TITLES = {
+    "GET:/v1/rewards/catalog":                        "Browse Rewards Catalog",
+    "GET:/v1/rewards/categories":                     "List Reward Categories",
+    "GET:/v1/rewards/history":                        "View All Redemption History",
+    "GET:/v1/rewards/history/me":                     "View My Redemption History",
+    "POST:/v1/rewards/redeem":                        "Redeem Reward",
+    "POST:/v1/rewards/catalog":                       "Add Catalog Item",
+    "PATCH:/v1/rewards/catalog/{catalog_id}":         "Update Catalog Item",
+    "PATCH:/v1/rewards/catalog/{catalog_id}/stock":   "Update Catalog Item Stock",
+    "POST:/v1/rewards/categories":                    "Create Reward Category",
+    "PATCH:/v1/rewards/categories/{category_id}":     "Update Reward Category",
+}
 
 # ==========================================
 # OpenTelemetry Configuration
@@ -79,6 +92,7 @@ async def lifespan(app: FastAPI):
         app,
         default_roles=["SUPER_ADMIN", "HR_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
+        route_titles=ROUTE_TITLES,
     )
 
     yield

@@ -42,7 +42,17 @@ ROLE_OVERRIDES = {
     "POST:/bulk-import":     ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
-
+# ── Auth Service ──────────────────────────────────────────────────────────────
+ROUTE_TITLES = {
+    "POST:/v1/auth/login":            "Login",
+    "POST:/v1/auth/logout":           "Logout",
+    "POST:/v1/auth/refresh":          "Refresh Access Token",
+    "POST:/v1/auth/forgot-password":  "Request Password Reset",
+    "POST:/v1/auth/reset-password":   "Reset Password",
+    "POST:/v1/auth/signup":           "Sign Up",
+    "POST:/v1/auth/validate":         "Validate Token",
+    "POST:/v1/auth/bulk-import":      "Bulk Import Employees",
+}
 # ==========================================
 # OpenTelemetry Configuration
 # ==========================================
@@ -75,6 +85,7 @@ async def lifespan(app: FastAPI):
         app,
         default_roles=["SUPER_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
+        route_titles=ROUTE_TITLES,
     )
     yield
     await db.disconnect()

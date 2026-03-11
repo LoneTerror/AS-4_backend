@@ -28,20 +28,30 @@ from src.common.middleware import (
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    # ── Routes accessible by all roles ──────────────────────────────────────
-    "GET:/dashboard/leaderboard":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/dashboard/recent-reviews":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/dashboard/platform-stats":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
 
-    # ── Admin-only routes ────────────────────────────────────────────────────
-    "GET:/dashboard/teams":                    ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/dashboard/teams/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/dashboard/participation":            ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/dashboard/recognition-trend":        ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/dashboard/recognition/users":        ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/dashboard/recognition/teams":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/leaderboard":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/analytics/dashboard/recent-reviews":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/analytics/dashboard/platform-stats":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+
+    "GET:/v1/analytics/dashboard/teams":                    ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/teams/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/participation":            ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition-trend":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition/teams":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition/users":        ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
+ROUTE_TITLES = {
+    "GET:/v1/analytics/dashboard/leaderboard":              "View Leaderboard",
+    "GET:/v1/analytics/dashboard/recent-reviews":           "View Recent Reviews",
+    "GET:/v1/analytics/dashboard/teams":                    "View All Teams Overview",
+    "GET:/v1/analytics/dashboard/teams/{department_id}":    "View Team Details",
+    "GET:/v1/analytics/dashboard/platform-stats":           "View Platform Statistics",
+    "GET:/v1/analytics/dashboard/participation":            "View Participation Stats",
+    "GET:/v1/analytics/dashboard/recognition-trend":        "View Recognition Trends",
+    "GET:/v1/analytics/dashboard/recognition/teams":        "View Team Recognition",
+    "GET:/v1/analytics/dashboard/recognition/users":        "View User Recognition",
+}
 # ==========================================
 # OpenTelemetry Configuration
 # ==========================================
@@ -73,7 +83,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        print("Analytics Service: ☑️ Redis Connected")
+        print("Analytics Service: 🟢 Redis Connected")
     except Exception as e:
         print(f"Analytics Service: ⚠️  Redis unavailable ({e}) — caching disabled")
 
@@ -81,6 +91,7 @@ async def lifespan(app: FastAPI):
         app,
         default_roles=["SUPER_ADMIN", "HR_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
+        route_titles=ROUTE_TITLES,
     )
 
     yield
