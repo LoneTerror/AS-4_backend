@@ -11,6 +11,12 @@ pipeline {
         githubPush() 
     }
 
+    triggers {
+        // Triggers the build automatically when a push or PR is made
+        // Note: Requires GitHub/GitLab webhook pointing to your Jenkins URL
+        githubPush() 
+    }
+
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         disableConcurrentBuilds()
