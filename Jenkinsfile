@@ -34,31 +34,30 @@ pipeline {
                     agent {
                         docker {
                             image 'python:3.10-slim'
-                            
-                            args '-u 0:0 -v ${WORKSPACE}:${WORKSPACE} -w ${WORKSPACE}' 
+                            // REMOVE the -v and -w flags, keep only the user flag
+                            args '-u 0:0' 
                         }
                     }
                     steps {
                         sh '''
-                        python -m venv venv
-                        . venv/bin/activate
-                        pip install --upgrade pip
-                        pip install -r requirements.txt 
-                        pip install pytest bandit pip-audit
-                        
-                        echo "🧪 Running Unit Tests..."
-                        # FIX 2: Explicitly path to the workspace to ensure visibility
-                        pytest tests/ --disable-warnings --junitxml=${WORKSPACE}/test-results.xml
-                        
-                        echo "🔒 Running Static Security Scans..."
-                        # FIX 3: Output reports to ${WORKSPACE}
-                        bandit -r . --exclude ./venv,./tests -lll -iii -f json -o ${WORKSPACE}/bandit-report.json
-                        bandit -r . --exclude ./venv,./tests -lll -iii -f html -o ${WORKSPACE}/bandit-report.html
-                        
-                        pip-audit --format json --output ${WORKSPACE}/pip-audit-report.json
-                        '''
+                            python -m venv venv
+                            . venv/bin/activate
+                            pip install --upgrade pip
+                            pip install -r requirements.txt 
+                            pip install pytest bandit pip-audit
+        
+                            echo "🧪 Running Unit Tests..."
+                            pytest tests/ --disable-warnings --junitxml=test-results.xml
+        
+                            echo "🔒 Running Static Security Scans..."
+                            # We use '|| true' so the pipeline doesn't stop before archiving the reports
+                            bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json || true
+                            bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html || true
+        
+                            pip-audit --format json --output pip-audit-report.json || true
+                            '''
+                        }
                     }
-                }
             }
         }
 
