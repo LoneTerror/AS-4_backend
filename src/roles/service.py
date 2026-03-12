@@ -6,10 +6,10 @@ from fastapi import HTTPException
 from src.prisma.client import db
 from src.common.dependencies import CurrentUser
 from src.common.cache import (
-    cache_get, cache_set, cache_delete, invalidate_pattern,
-    TTL_VOLATILE, L1_VOLATILE,   # employee roles  →   60s /  30s  (changes on assign/revoke)
-    TTL_MEDIUM,   L1_MEDIUM,     # roles list      → 3600s / 300s  (almost static)
-    TTL_PERMANENT, L1_PERMANENT, # route perms     → 86400s / 3600s (auto-registered, rarely changed)
+    cache_get, cache_set, cache_delete,
+    TTL_VOLATILE,  L1_VOLATILE,   # employee roles  →  60s /  30s
+    TTL_MEDIUM,    L1_MEDIUM,     # roles list      → 3600s / 300s
+    TTL_PERMANENT, L1_PERMANENT,  # route perms     → 86400s / 3600s
 )
 from src.roles.schemas import (
     CreateRoleRequest,
@@ -24,7 +24,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ── Cache keys ────────────────────────────────────────────────────────────────
-# Single keys (not paginated) — invalidated explicitly on every write.
 _KEY_ROLES       = "roles:list"
 _KEY_EMP_ROLES   = "roles:employees"
 _KEY_PERMISSIONS = "roles:route_permissions"
@@ -39,8 +38,8 @@ async def invalidate_employee_roles():
 async def invalidate_permissions():
     await cache_delete(_KEY_PERMISSIONS)
 
-# ─────────────────────────────────────────────────────────────────────────────
 
+# ── Roles ─────────────────────────────────────────────────────────────────────
 
 async def list_roles():
     cached = await cache_get(_KEY_ROLES, l1_ttl=L1_MEDIUM)
@@ -55,13 +54,14 @@ async def list_roles():
 
 
 async def create_role(body: CreateRoleRequest, current_user: CurrentUser):
-    existing = await db.roles.find_first(where={"role_code": body.role_code.upper()})
+    role_code = body.role_code.upper()
+    existing  = await db.roles.find_first(where={"role_code": role_code})
     if existing:
-        raise HTTPException(status_code=409, detail=f"Role '{body.role_code}' already exists")
+        raise HTTPException(status_code=409, detail=f"Role '{role_code}' already exists")
 
     result = await db.roles.create(data={
         "role_name":   body.role_name,
-        "role_code":   body.role_code.upper(),
+        "role_code":   role_code,
         "description": body.description,
         "created_by":  current_user.id,
         "updated_by":  current_user.id,
@@ -71,9 +71,9 @@ async def create_role(body: CreateRoleRequest, current_user: CurrentUser):
     return result
 
 
+# ── Employee ↔ Role ───────────────────────────────────────────────────────────
+
 async def list_employee_roles():
-    # VOLATILE — assign/revoke happens regularly and explicit invalidation
-    # covers freshness, but TTL acts as the safety net between writes.
     cached = await cache_get(_KEY_EMP_ROLES, l1_ttl=L1_VOLATILE)
     logger.debug("cache emp_roles key=%s %s", _KEY_EMP_ROLES, "HIT" if cached is not None else "MISS")
     if cached is not None:
@@ -150,10 +150,9 @@ async def revoke_role(body: RevokeRoleRequest, current_user: CurrentUser):
     return result
 
 
+# ── Route permissions ─────────────────────────────────────────────────────────
+
 async def list_route_permissions():
-    # PERMANENT — route_permissions are auto-registered on startup and only
-    # changed via the admin UI. Cache for 24h; explicit invalidation on every
-    # add/remove covers real-time updates.
     cached = await cache_get(_KEY_PERMISSIONS, l1_ttl=L1_PERMANENT)
     logger.debug("cache permissions key=%s %s", _KEY_PERMISSIONS, "HIT" if cached is not None else "MISS")
     if cached is not None:
@@ -164,41 +163,58 @@ async def list_route_permissions():
         include={"roles": True},
         order=[{"route_key": "asc"}],
     )
-    grouped: dict = {}
+
+    # Group rows by route_key — one DB row per (route_key, role_id) pair,
+    # so we collapse them into a single object per route_key with a roles list.
+    grouped: dict[str, dict] = {}
     for row in rows:
         key = row.route_key
         if key not in grouped:
             grouped[key] = {
                 "route_key": key,
-                # Human-readable label; falls back to None for legacy rows that
-                # were registered before the title field was added.
-                "title": row.title,
-                "roles": [],
+                "title":     row.title,
+                "roles":     [],
             }
         elif row.title and not grouped[key]["title"]:
+            # Use the first non-null title found (they should all be the same).
             grouped[key]["title"] = row.title
+
         grouped[key]["roles"].append({
             "role_id":   row.role_id,
             "role_code": row.roles.role_code,
             "role_name": row.roles.role_name,
         })
+
     data = list(grouped.values())
     await cache_set(_KEY_PERMISSIONS, data, ttl=TTL_PERMANENT, l1_ttl=L1_PERMANENT)
     return data
 
 
 async def add_route_permission(body: SetRoutePermissionRequest, current_user: CurrentUser):
+    """
+    Add a role to a route.
+
+    Finds the single canonical row for (route_key, role_id).
+    - If active → 409 (already exists).
+    - If inactive → reactivate it.
+    - If missing → create it.
+
+    We use find_first (not find_many) because the @@unique([route_key, role_id])
+    constraint guarantees at most one row per pair.
+    """
     existing = await db.route_permissions.find_first(
         where={"route_key": body.route_key, "role_id": body.role_id}
     )
+
     if existing:
         if existing.is_active:
-            raise HTTPException(status_code=409, detail="Permission already exists")
+            raise HTTPException(status_code=409, detail="Permission already exists and is active")
+        # Reactivate the soft-deleted row instead of creating a duplicate.
         result = await db.route_permissions.update(
             where={"id": existing.id},
             data={
                 "is_active":  True,
-                "title":      body.title,
+                "title":      body.title or existing.title,
                 "updated_by": current_user.id,
                 "updated_at": datetime.now(timezone.utc),
             },
@@ -238,7 +254,7 @@ async def remove_route_permission(body: DeleteRoutePermissionRequest, current_us
 
 
 async def update_route_title(body: UpdateRouteTitleRequest, current_user: CurrentUser):
-    """Update the human-readable title for all route_permission rows sharing the same route_key."""
+    """Update the display title for every row sharing this route_key."""
     rows = await db.route_permissions.find_many(
         where={"route_key": body.route_key}
     )

@@ -48,10 +48,10 @@ logger = logging.getLogger(__name__)
 
 # ── TTL tiers — import and use these everywhere ───────────────────────────────
 #                             L2 (Redis)    L1 (in-process)
-TTL_VOLATILE  = 60   ;  L1_VOLATILE  = 30    # wallet balance, unread counts
-TTL_SHORT     = 300  ;  L1_SHORT     = 60    # employee records, active lists
-TTL_MEDIUM    = 3600 ;  L1_MEDIUM    = 300   # dept, desig, roles, permissions
-TTL_PERMANENT = 86400;  L1_PERMANENT = 3600  # Slack UIDs, status codes
+TTL_VOLATILE  = 60   ;  L1_VOLATILE  = 30    
+TTL_SHORT     = 300  ;  L1_SHORT     = 60    
+TTL_MEDIUM    = 3600 ;  L1_MEDIUM    = 300   
+TTL_PERMANENT = 86400;  L1_PERMANENT = 3600  
 
 
 # ─────────────────────────────────────────────────────────────────────────────
