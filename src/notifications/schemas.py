@@ -8,6 +8,8 @@ from pydantic import BaseModel, UUID4
 class NotificationType(str, Enum):
     REVIEW = "REVIEW"
     REWARD = "REWARD"
+    REWARD_REDEEMED = "REWARD_REDEEMED"
+    POINTS_CREDIT = "POINTS_CREDIT"
     SYSTEM = "SYSTEM"
     CELEBRATION = "CELEBRATION"
     ANNOUNCEMENT = "ANNOUNCEMENT"
