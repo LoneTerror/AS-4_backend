@@ -22,23 +22,21 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+os.environ["FRONTEND_CORS_ORIGINS"] = "http://localhost:3000"
+
+sys.modules["src.prisma.client"] = MagicMock()
+sys.modules["src.notifications.redis_client"] = MagicMock()
+
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# ---------------------------------------------------------------------------
-# Stub ALL heavy dependencies before importing main.py
-# ---------------------------------------------------------------------------
 for _p in [
-    "src", "src.prisma", "src.prisma.client",
-    "src.recognition", "src.recognition.router",
-    "src.recognition.dependencies", "src.recognition.schemas",
-    "src.recognition.service",
-    "src.common", "src.common.middleware",
-    "src.notifications", "src.notifications.email_sender",
-    "src.digest", "src.digest.router", "src.digest.worker",
+    "src.prisma", "src.prisma.client",
+    "src.recognition.router",
+    "src.notifications.redis_client"
 ]:
-    if _p not in sys.modules:
-        sys.modules[_p] = types.ModuleType(_p)
+    sys.modules.setdefault(_p, types.ModuleType(_p))
+
 
 # Fake database — main.py calls connect_with_retry() then db.disconnect()
 _fake_db = MagicMock()
@@ -48,6 +46,17 @@ _fake_connect = AsyncMock()   # connect_with_retry is a standalone coroutine
 
 sys.modules["src.prisma.client"].db                 = _fake_db
 sys.modules["src.prisma.client"].connect_with_retry = _fake_connect
+
+_fake_connect_redis = AsyncMock()
+_fake_disconnect_redis = AsyncMock()
+
+sys.modules["src.notifications.redis_client"] = MagicMock()
+sys.modules["src.notifications.redis_client"].connect_redis = _fake_connect_redis
+sys.modules["src.notifications.redis_client"].disconnect_redis = _fake_disconnect_redis
+
+_fake_close_auth = AsyncMock()
+sys.modules["src.common.dependencies"] = MagicMock()
+sys.modules["src.common.dependencies"].close_auth_client = _fake_close_auth
 
 # Fake routers
 from fastapi import APIRouter
@@ -97,6 +106,7 @@ async def _fake_generic_handler(request, exc):
     from fastapi.responses import JSONResponse
     return JSONResponse({"detail": "error"}, status_code=500)
 
+sys.modules["src.common.middleware"] = MagicMock()
 _mw_mod = sys.modules["src.common.middleware"]
 _mw_mod.request_rate_limit_middleware = _fake_rate_limit
 _mw_mod.http_exception_handler        = _fake_http_handler
@@ -129,13 +139,13 @@ class TestAppMetadata:
         assert app.version == "1.0.0"
 
     def test_openapi_url(self):
-        assert app.openapi_url == "/v1/openapi.json"
+        assert app.openapi_url == "/openapi.json"
 
     def test_docs_url(self):
-        assert app.docs_url == "/v1/docs"
+        assert app.docs_url == "/docs"
 
     def test_redoc_url(self):
-        assert app.redoc_url == "/v1/redoc"
+        assert app.redoc_url == "/redoc"
 
 
 # ===========================================================================
@@ -144,9 +154,8 @@ class TestAppMetadata:
 
 class TestRouterInclusion:
 
-    def test_recognition_router_mounted_at_v1(self):
-        prefixes = [r.path for r in app.routes]
-        assert any("/v1" in p for p in prefixes)
+    def test_recognition_router_mounted_with_root_path(self):
+        assert app.root_path == "/v1/recognitions"
 
     def test_router_tags_no_error(self):
         tags_found = set()
@@ -238,41 +247,25 @@ class TestExceptionHandlers:
 # ===========================================================================
 
 class TestLifespan:
-
     @pytest.mark.asyncio
     async def test_connect_with_retry_called_on_startup(self):
-        """
-        FIXED: main.py calls connect_with_retry() (not db.connect()) in the
-        lifespan. The old test asserted db.connect.called which was always
-        False because that function is never called.
-        """
+        # Reset mocks before execution
         _fake_connect.reset_mock()
-        _fake_db.disconnect.reset_mock()
+        _fake_disconnect_redis.reset_mock() # Ensure this is an AsyncMock in conftest
 
         async with _main_mod.lifespan(app):
-            assert _fake_connect.called
-
-    @pytest.mark.asyncio
-    async def test_db_disconnect_called_on_shutdown(self):
-        _fake_connect.reset_mock()
-        _fake_db.disconnect.reset_mock()
-
-        async with _main_mod.lifespan(app):
-            pass
-
-        assert _fake_db.disconnect.called
-
+            # Verify startup calls
+            _fake_connect.assert_called_once()
+            
     @pytest.mark.asyncio
     async def test_db_disconnect_called_on_normal_exit(self):
-        _fake_connect.reset_mock()
         _fake_db.disconnect.reset_mock()
-
-        try:
-            async with _main_mod.lifespan(app):
-                pass
-        except Exception:
-            pass
-
+        
+        # We must enter AND exit the context manager to trigger cleanup
+        async with _main_mod.lifespan(app):
+            pass 
+        
+        # Now verify cleanup calls
         assert _fake_db.disconnect.called
 
 

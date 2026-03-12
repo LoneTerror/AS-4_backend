@@ -12,30 +12,27 @@ Functions under test:
 """
 
 import sys
+import types
 import os
 import pytest
 from uuid import uuid4
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Ensure conftest stubs are loaded before importing the real service
-# ---------------------------------------------------------------------------
-sys.path.insert(0, os.path.dirname(__file__))          # tests/
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))  # src/analytics/
-
-from conftest import (  # noqa: E402
+# 2. STRICT ABSOLUTE IMPORTS
+# This ensures Python finds the real files regardless of where pytest is sitting
+from src.analytics.tests.conftest import (  
     make_user, make_raw_review, make_reviewer,
     make_employee, make_wallet_entry,
 )
-
-from service import (  # noqa: E402
+from src.analytics.service import (  
     get_recent_reviews_list,
     get_leaderboard_list,
     get_platform_stats,
 )
 
-SVC = "service"
+# Set the SVC constant to the full path so the 'patch' decorator knows exactly where to look
+SVC = "src.analytics.service"
 
 
 # ===========================================================================

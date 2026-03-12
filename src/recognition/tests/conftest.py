@@ -25,31 +25,95 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 # ---------------------------------------------------------------------------
-# 1. Stub the entire src.* namespace
+# 1. Surgically stub only the external dependencies (No root folder faking!)
 # ---------------------------------------------------------------------------
-_src = types.ModuleType("src")
-sys.modules.setdefault("src", _src)
 
-for _path in [
-    "src.prisma",
-    "src.prisma.client",
-    "src.recognition",
-    "src.recognition.dependencies",
-    "src.recognition.schemas",
-    "src.recognition.points_engine",
-    "src.common",
-    "src.common.middleware",
-    "src.notifications",
-    "src.notifications.service",
-    "src.notifications.schemas",
-    "src.notifications.email_sender",
-    "src.wallet",
-    "src.wallet.service",
-    "src.digest",
-    "src.digest.router",
-    "src.digest.worker",
-]:
-    sys.modules.setdefault(_path, types.ModuleType(_path))
+# Fake the Prisma database client
+_prisma_stub = types.ModuleType("src.prisma.client")
+sys.modules["src.prisma.client"] = _prisma_stub
+_prisma_stub.db = MagicMock()
+_prisma_stub.connect_with_retry = AsyncMock()
+fake_db = _prisma_stub.db
+
+# Ensure common DB methods are AsyncMocks
+_prisma_stub.db.find_many = AsyncMock()
+_prisma_stub.db.find_unique = AsyncMock()
+_prisma_stub.db.find_first = AsyncMock()
+_prisma_stub.db.create = AsyncMock()
+_prisma_stub.db.update = AsyncMock()
+_prisma_stub.db.delete = AsyncMock()
+_prisma_stub.db.count = AsyncMock()
+_prisma_stub.db.update_many = AsyncMock()
+_prisma_stub.db.delete_many = AsyncMock()
+_prisma_stub.db.tx = AsyncMock()
+
+# Ensure specific table methods are AsyncMocks (preserved from original)
+fake_db.reviews.find_many = AsyncMock()
+fake_db.reviews.find_unique = AsyncMock()
+fake_db.reviews.create = AsyncMock()
+fake_db.reviews.update = AsyncMock()
+fake_db.reviews.delete = AsyncMock()
+fake_db.reviews.count = AsyncMock()
+fake_db.employees.find_unique = AsyncMock()
+fake_db.employees.find_many = AsyncMock()
+fake_db.status_master.find_first = AsyncMock()
+fake_db.status_master.find_unique = AsyncMock()
+fake_db.review_categories.find_unique = AsyncMock()
+fake_db.review_categories.find_many = AsyncMock()
+fake_db.review_category_tags.create_many = AsyncMock()
+fake_db.review_category_tags.delete_many = AsyncMock()
+fake_db.roles.find_first = AsyncMock()
+fake_db.seasonal_multipliers.find_first = AsyncMock()
+fake_db.wallets.find_unique = AsyncMock()
+fake_db.transaction_types.find_unique = AsyncMock()
+fake_db.transactions.create = AsyncMock()
+fake_db.wallets.update_many = AsyncMock()
+
+# Fake the Redis cache so it doesn't try to connect to a real Redis server
+_cache_stub = types.ModuleType("src.common.cache")
+sys.modules["src.common.cache"] = _cache_stub
+_cache_stub.cache_get = AsyncMock(return_value=None)
+_cache_stub.cache_set = AsyncMock()
+_cache_stub.cache_delete = AsyncMock()
+_cache_stub.invalidate_pattern = AsyncMock()
+
+# TTL and L1 constants
+_cache_stub.TTL_VOLATILE = 60
+_cache_stub.L1_VOLATILE = 30
+_cache_stub.TTL_SHORT = 300
+_cache_stub.L1_SHORT = 60
+_cache_stub.TTL_MEDIUM = 3600
+_cache_stub.L1_MEDIUM = 300
+_cache_stub.TTL_PERMANENT = 86400
+_cache_stub.L1_PERMANENT = 3600
+
+# Stub other external-ish things
+_notif_redis_stub = types.ModuleType("src.notifications.redis_client")
+sys.modules["src.notifications.redis_client"] = _notif_redis_stub
+_notif_redis_stub.connect_redis = AsyncMock()
+_notif_redis_stub.disconnect_redis = AsyncMock()
+
+# For internal modules, we avoid replacing them if possible, 
+# but if we must, we ensure they are not blank.
+# However, many recognition tests depend on these being mocked.
+
+def ensure_real_or_stub(mod_name):
+    if mod_name in sys.modules:
+        return sys.modules[mod_name]
+    try:
+        import importlib
+        return importlib.import_module(mod_name)
+    except Exception:
+        mod = types.ModuleType(mod_name)
+        sys.modules[mod_name] = mod
+        return mod
+
+_notif_svc_stub = ensure_real_or_stub("src.notifications.service")
+_wallet_svc_stub = ensure_real_or_stub("src.wallet.service")
+_notif_email_stub = ensure_real_or_stub("src.notifications.email_sender")
+_digest_router_stub = ensure_real_or_stub("src.digest.router")
+_digest_worker_stub = ensure_real_or_stub("src.digest.worker")
+_notif_schemas_stub = ensure_real_or_stub("src.notifications.schemas")
 
 # Stub NotificationService — service.py calls _notif.create_notification()
 class _FakeNotificationService:
@@ -58,7 +122,7 @@ class _FakeNotificationService:
     async def create_notification(self, *args, **kwargs):
         pass
 
-sys.modules["src.notifications.service"].NotificationService = _FakeNotificationService
+_notif_svc_stub.NotificationService = _FakeNotificationService
 
 # Stub wallet functions (imported inline inside service.py)
 async def _fake_credit_wallet(*args, **kwargs):
@@ -67,8 +131,8 @@ async def _fake_credit_wallet(*args, **kwargs):
 async def _fake_adjust_wallet(*args, **kwargs):
     return {"new_balance": 0}
 
-sys.modules["src.wallet.service"].credit_wallet_from_review = _fake_credit_wallet
-sys.modules["src.wallet.service"].adjust_wallet_for_review_update = _fake_adjust_wallet
+_wallet_svc_stub.credit_wallet_from_review = _fake_credit_wallet
+_wallet_svc_stub.adjust_wallet_for_review_update = _fake_adjust_wallet
 
 # Stub EmailSender / SMTPConfig for main.py import
 class _FakeSMTPConfig:
@@ -80,17 +144,17 @@ class _FakeEmailSender:
     def __init__(self, *args, **kwargs):
         pass
 
-sys.modules["src.notifications.email_sender"].SMTPConfig  = _FakeSMTPConfig
-sys.modules["src.notifications.email_sender"].EmailSender = _FakeEmailSender
+_notif_email_stub.SMTPConfig  = _FakeSMTPConfig
+_notif_email_stub.EmailSender = _FakeEmailSender
 
 # Stub digest router + worker
 from fastapi import APIRouter as _APIRouter
-sys.modules["src.digest.router"].router = _APIRouter()
+_digest_router_stub.router = _APIRouter()
 
 async def _fake_digest_worker(*args, **kwargs):
     pass
 
-sys.modules["src.digest.worker"].digest_worker_loop = _fake_digest_worker
+_digest_worker_stub.digest_worker_loop = _fake_digest_worker
 
 # Stub NotificationType enum
 import enum as _enum
@@ -100,12 +164,10 @@ class _NotificationType(_enum.Enum):
     REWARD = "REWARD"
     SYSTEM = "SYSTEM"
 
-sys.modules["src.notifications.schemas"].NotificationType = _NotificationType
+_notif_schemas_stub.NotificationType = _NotificationType
 
 # ---------------------------------------------------------------------------
 # 2. Load REAL points_engine
-#    points_engine.py only exports calculate_points + PointsResult.
-#    quarters_elapsed and apply_decay do NOT exist — do not stub them.
 # ---------------------------------------------------------------------------
 import importlib.util as _ilu, pathlib as _pl
 
@@ -114,19 +176,12 @@ _pe_spec = _ilu.spec_from_file_location("_real_points_engine", _pe_path)
 _real_pe = _ilu.module_from_spec(_pe_spec)
 _pe_spec.loader.exec_module(_real_pe)
 
-_pe = sys.modules["src.recognition.points_engine"]
-_pe.calculate_points = _real_pe.calculate_points
-_pe.PointsResult     = _real_pe.PointsResult
+_pe_stub = ensure_real_or_stub("src.recognition.points_engine")
+_pe_stub.calculate_points = _real_pe.calculate_points
+_pe_stub.PointsResult     = _real_pe.PointsResult
 
 # ---------------------------------------------------------------------------
-# 3. Fake database object
-# ---------------------------------------------------------------------------
-fake_db = MagicMock()
-sys.modules["src.prisma.client"].db             = fake_db
-sys.modules["src.prisma.client"].connect_with_retry = AsyncMock()
-
-# ---------------------------------------------------------------------------
-# 4. CurrentUser model
+# 3. CurrentUser model
 # ---------------------------------------------------------------------------
 class CurrentUser(BaseModel):
     id:            str
@@ -134,10 +189,11 @@ class CurrentUser(BaseModel):
     roles:         List[str]
     department_id: Optional[str] = None
 
-sys.modules["src.recognition.dependencies"].CurrentUser = CurrentUser
+_deps_stub = ensure_real_or_stub("src.recognition.dependencies")
+_deps_stub.CurrentUser = CurrentUser
 
 # ---------------------------------------------------------------------------
-# 5. Schema stubs — use category_ids (plural List) to match real schemas.py
+# 4. Schema stubs — use category_ids (plural List) to match real schemas.py
 # ---------------------------------------------------------------------------
 class ReviewCreateRequest(BaseModel):
     receiver_id:  object
@@ -154,8 +210,9 @@ class ReviewUpdateRequest(BaseModel):
     image_url:    object                  = None
     video_url:    object                  = None
 
-sys.modules["src.recognition.schemas"].ReviewCreateRequest = ReviewCreateRequest
-sys.modules["src.recognition.schemas"].ReviewUpdateRequest = ReviewUpdateRequest
+_schemas_stub = ensure_real_or_stub("src.recognition.schemas")
+_schemas_stub.ReviewCreateRequest = ReviewCreateRequest
+_schemas_stub.ReviewUpdateRequest = ReviewUpdateRequest
 
 # ---------------------------------------------------------------------------
 # 6. Factory helpers

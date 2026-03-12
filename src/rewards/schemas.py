@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, UUID4, field_validator,model_validator, StrictBool, StrictInt
+from pydantic import BaseModel, Field, UUID4, field_validator,model_validator, StrictBool, StrictInt, ConfigDict
 from typing import Optional, List, Any
 from datetime import datetime
 
@@ -110,16 +110,14 @@ class CategoryResponse(BaseModel):
     is_active: bool
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class MinimalCategoryInfo(BaseModel):
     category_id: UUID4
     category_name: str
     category_code: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 #CATALOG SCHEMAS (reward_catalog)
 
@@ -294,8 +292,7 @@ class RewardItemResponse(BaseModel):
 
     category: Optional[MinimalCategoryInfo] = None 
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class AddStockRequest(BaseModel):
     amount: int = Field(..., gt=0, description="Amount of new stock to add")
@@ -348,8 +345,7 @@ class RewardHistoryResponse(BaseModel):
     reward_catalog: Optional[MinimalCatalogInfo] = None
     employees_reward_history_granted_byToemployees: Optional[MinimalEmployeeInfo] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class RedemptionResponse(BaseModel):
     history_id: UUID4
@@ -358,8 +354,7 @@ class RedemptionResponse(BaseModel):
     status: str
     new_stock_level: Optional[int] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PaginatedHistoryResponse(BaseModel):
     data: List[RewardHistoryResponse]
