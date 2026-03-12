@@ -53,9 +53,6 @@ def _key_category(category_id: str) -> str:
 def _key_role_weight(role_code: str) -> str:
     return f"recognition:role_weight:{role_code}"
 
-def _key_seasonal(quarter: int) -> str:
-    return f"recognition:seasonal:{quarter}"
-
 def _key_team_count(department_id: str | None) -> str:
     return f"recognition:team_count:{department_id or 'all'}"
 
@@ -146,36 +143,11 @@ async def _get_cached_role_weight(role_code: str) -> float:
     return weight
 
 
-async def _get_cached_seasonal_multiplier(quarter: int, review_dt: datetime) -> float:
-    """
-    Fetch the seasonal multiplier for the given quarter with MEDIUM-tier caching.
-    Falls back to 1.0 if no row is configured.
-    """
-    key    = _key_seasonal(quarter)
-    cached = await cache_get(key, l1_ttl=L1_MEDIUM)
-    if cached is not None:
-        return float(cached)
-
-    seasonal_row = await db.seasonal_multipliers.find_first(
-        where={
-            "quarter": quarter,
-            "OR": [
-                {"effective_from": None},
-                {"effective_from": {"lte": review_dt}},
-            ],
-        },
-        order={"effective_from": "desc"},
-    )
-    multiplier = float(seasonal_row.multiplier) if seasonal_row else 1.0
-    await cache_set(key, multiplier, ttl=TTL_MEDIUM, l1_ttl=L1_MEDIUM)
-    return multiplier
-
 
 async def _resolve_multipliers(
     category_ids: list[str],
     reviewer_roles: list[str],
-    review_dt: datetime,
-) -> tuple[float, float, float, list[dict]]:
+) -> tuple[float, float, list[dict]]:
     if not category_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -214,13 +186,7 @@ async def _resolve_multipliers(
             reviewer_weight = await _get_cached_role_weight(role_code)
             break
 
-    # Seasonal multiplier — cached per quarter
-    if review_dt.tzinfo is None:
-        review_dt = review_dt.replace(tzinfo=timezone.utc)
-    quarter = (review_dt.month - 1) // 3 + 1
-    seasonal_multiplier = await _get_cached_seasonal_multiplier(quarter, review_dt)
-
-    return total_multiplier, reviewer_weight, seasonal_multiplier, tag_snapshots
+    return total_multiplier, reviewer_weight, tag_snapshots
 
 
 async def _get_team_member_count(department_id: str | None) -> int:
@@ -568,27 +534,24 @@ class RecognitionService:
 
         category_ids_str = [str(cid) for cid in payload.category_ids]
 
-        total_multiplier, reviewer_weight, seasonal_multiplier, tag_snapshots = (
+        total_multiplier, reviewer_weight, tag_snapshots = (
             await _resolve_multipliers(
                 category_ids   = category_ids_str,
                 reviewer_roles = current_user.roles,
-                review_dt      = now,
             )
         )
 
         joined_codes = ",".join(t["category_code_snapshot"] for t in tag_snapshots)
         pts = calculate_points(
-            rating                    = payload.rating,
             total_category_multiplier = total_multiplier,
             reviewer_weight           = reviewer_weight,
-            seasonal_multiplier       = seasonal_multiplier,
             category_code             = joined_codes,
         )
 
         logger.info(
-            "Points calculated | receiver=%s rating=%s categories=%s "
+            "Points calculated | receiver=%s categories=%s "
             "total_mult=%.4f raw=%.4f reviewer_roles=%s",
-            payload.receiver_id, payload.rating, joined_codes,
+            payload.receiver_id, joined_codes,
             total_multiplier, pts.raw_points, current_user.roles,
         )
 
@@ -596,7 +559,6 @@ class RecognitionService:
             data={
                 "reviewer_id": current_user.id,
                 "receiver_id": str(payload.receiver_id),
-                "rating":      payload.rating,
                 "comment":     payload.comment,
                 "image_url":   str(payload.image_url) if payload.image_url else None,
                 "video_url":   str(payload.video_url) if payload.video_url else None,
@@ -650,11 +612,10 @@ class RecognitionService:
             logger.exception("Unexpected wallet credit failure for review %s", review.review_id)
 
         try:
-            stars   = "⭐" * payload.rating
             preview = payload.comment[:100] + ("..." if len(payload.comment) > 100 else "")
             await _get_notif().create_notification(
                 employee_id = str(payload.receiver_id),
-                title       = f"You received a {payload.rating}-star review {stars}",
+                title       = "You received a new recognition",
                 message     = (
                     f"{current_user.email} reviewed you ({joined_codes}): \"{preview}\"\n"
                     f"Points earned: {round(pts.raw_points, 1)}"
@@ -699,7 +660,6 @@ class RecognitionService:
             )
 
         update_data: dict = {}
-        if payload.rating    is not None: update_data["rating"]    = payload.rating
         if payload.comment   is not None: update_data["comment"]   = payload.comment
         if payload.image_url is not None: update_data["image_url"] = str(payload.image_url)
         if payload.video_url is not None: update_data["video_url"] = str(payload.video_url)
@@ -710,37 +670,24 @@ class RecognitionService:
                 detail="No fields provided for update",
             )
 
-        points_changed = payload.rating is not None or payload.category_ids is not None
+        points_changed = payload.category_ids is not None
         old_raw_points = float(getattr(review, "raw_points", 0) or 0)
 
         if points_changed:
-            new_rating = payload.rating if payload.rating is not None else review.rating
+            new_cat_ids = [str(cid) for cid in payload.category_ids]
 
-            if payload.category_ids is not None:
-                new_cat_ids = [str(cid) for cid in payload.category_ids]
-            else:
-                existing_tags = await db.review_category_tags.find_many(
-                    where={"review_id": review_id}
-                )
-                new_cat_ids = [t.category_id for t in existing_tags]
-
-            review_dt = getattr(review, "review_at", datetime.now(timezone.utc))
-
-            total_multiplier, reviewer_weight, seasonal_multiplier, tag_snapshots = (
+            total_multiplier, reviewer_weight, tag_snapshots = (
                 await _resolve_multipliers(
                     category_ids   = new_cat_ids,
                     reviewer_roles = current_user.roles,
-                    review_dt      = review_dt,
                 )
             )
 
             joined_codes = ",".join(t["category_code_snapshot"] for t in tag_snapshots)
 
             pts = calculate_points(
-                rating                    = new_rating,
                 total_category_multiplier = total_multiplier,
                 reviewer_weight           = reviewer_weight,
-                seasonal_multiplier       = seasonal_multiplier,
                 category_code             = joined_codes,
             )
 
