@@ -32,8 +32,8 @@ categories_router = APIRouter(prefix="/review-categories")
     description=(
         "Returns all active review categories with their points multipliers.\n\n"
         "Call this first to get valid `category_ids` UUIDs before creating a review. "
-        "You can select **1–5 tags** per review; the points multiplier will be the "
-        "**average** of all selected category multipliers."
+        "You can select **1–5 tags** per review; points = "
+        "**sum of all selected category multipliers × reviewer weight**."
     ),
 )
 async def list_review_categories(
@@ -221,17 +221,12 @@ _CREATE_REQUEST_BODY = {
         "application/json": {
             "schema": {
                 "type": "object",
-                "required": ["receiver_id", "rating", "category_ids", "comment"],
+                "required": ["receiver_id", "category_ids", "comment"],
                 "properties": {
                     "receiver_id": {
                         "type": "string", "format": "uuid",
                         "description": "UUID of the employee receiving the review",
                         "example": "550e8400-e29b-41d4-a716-446655440000",
-                    },
-                    "rating": {
-                        "type": "integer", "minimum": 1, "maximum": 5,
-                        "description": "Rating value 1–5",
-                        "example": 4,
                     },
                     "category_ids": {
                         "type": "array",
@@ -241,7 +236,7 @@ _CREATE_REQUEST_BODY = {
                         "uniqueItems": True,
                         "description": (
                             "1–5 category UUIDs from GET /v1/review-categories. "
-                            "Points multiplier = average of all selected multipliers."
+                            "Points = sum of all selected multipliers × reviewer weight."
                         ),
                         "example": [
                             "dd0e8400-e29b-41d4-a716-446655440000",
@@ -264,7 +259,6 @@ _CREATE_REQUEST_BODY = {
                 },
                 "example": {
                     "receiver_id":  "550e8400-e29b-41d4-a716-446655440000",
-                    "rating":       4,
                     "category_ids": [
                         "dd0e8400-e29b-41d4-a716-446655440000",
                         "dd0e8400-e29b-41d4-a716-446655440001",
@@ -287,18 +281,13 @@ _UPDATE_REQUEST_BODY = {
                     "category_ids replaces all tags and triggers points recalculation."
                 ),
                 "properties": {
-                    "rating": {
-                        "type": "integer", "minimum": 1, "maximum": 5,
-                        "description": "Updated rating (1–5). Triggers recalculation.",
-                        "example": 5,
-                    },
                     "category_ids": {
                         "type": "array",
                         "items": {"type": "string", "format": "uuid"},
                         "minItems": 1,
                         "maxItems": 5,
                         "uniqueItems": True,
-                        "description": "Updated 1–5 tag UUIDs. Replaces existing tags. Triggers recalculation.",
+                        "description": "Updated 1–5 tag UUIDs. Replaces existing tags and triggers points recalculation.",
                         "example": [
                             "dd0e8400-e29b-41d4-a716-446655440000",
                             "dd0e8400-e29b-41d4-a716-446655440002",
@@ -312,7 +301,6 @@ _UPDATE_REQUEST_BODY = {
                     "video_url": {"type": "string", "format": "uri", "maxLength": 500},
                 },
                 "example": {
-                    "rating":       5,
                     "category_ids": [
                         "dd0e8400-e29b-41d4-a716-446655440000",
                         "dd0e8400-e29b-41d4-a716-446655440002",
@@ -333,12 +321,13 @@ _UPDATE_REQUEST_BODY = {
     summary="Create Review",
     description=(
         "Create a new performance review.\n\n"
-        "**Required:** `receiver_id`, `rating` (1–5), `category_ids` (1–5 UUIDs), "
+        "**Required:** `receiver_id`, `category_ids` (1–5 UUIDs), "
         "`comment` (10–2000 chars).\n\n"
         "## Multi-category tagging\n\n"
         "Select 1–5 category tags per review. Points formula:\n\n"
-        "`rating × avg(category_multipliers) × reviewer_weight × seasonal_multiplier`\n\n"
-        "Using more tags does **not** inflate points — the average keeps it fair.\n\n"
+        "`sum(category_multipliers) × reviewer_weight`\n\n"
+        "Each additional tag adds its full multiplier weight — "
+        "selecting INNOVATION (1.4) + TEAMWORK (1.2) gives 2.6 × reviewer_weight.\n\n"
         "## Steps\n"
         "1. Call **`GET /v1/review-categories`** → copy one or more `category_id` UUIDs\n"
         "2. Pass them as the `category_ids` array\n"

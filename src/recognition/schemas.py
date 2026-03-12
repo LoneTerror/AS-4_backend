@@ -13,15 +13,13 @@ class ReviewCreateRequest(BaseModel):
     Request schema for creating a new review.
 
     - receiver_id  : UUID of the employee being reviewed
-    - rating       : Integer 1–5
     - comment      : 10–2000 characters
     - category_ids : 1–5 unique UUIDs from GET /v1/review-categories.
-                     Points multiplier = average of all selected multipliers.
+                     Points = sum of all selected multipliers × reviewer weight.
     - image_url    : Optional HTTPS URL (max 500 chars)
     - video_url    : Optional HTTPS URL (max 500 chars)
     """
     receiver_id: UUID = Field(..., description="UUID of the employee receiving the review")
-    rating: int = Field(..., ge=1, le=5, description="Rating value between 1 and 5")
     comment: str = Field(..., min_length=10, max_length=2000, description="Review comment (10–2000 chars)")
     category_ids: List[UUID] = Field(
         ...,
@@ -29,7 +27,7 @@ class ReviewCreateRequest(BaseModel):
         max_length=5,
         description=(
             "1–5 review category UUIDs from GET /v1/review-categories. "
-            "Points multiplier = average of all selected category multipliers."
+            "Points = sum of all selected category multipliers × reviewer weight."
         )
     )
     image_url: Optional[HttpUrl] = Field(None, description="Optional image URL (max 500 chars)")
@@ -60,9 +58,7 @@ class ReviewUpdateRequest(BaseModel):
     """
     At least one field must be supplied.
     Providing category_ids replaces ALL existing tags and triggers points recalculation.
-    Providing rating alone also triggers recalculation.
     """
-    rating: Optional[int] = Field(None, ge=1, le=5, description="Updated rating (1–5)")
     comment: Optional[str] = Field(None, min_length=10, max_length=2000, description="Updated comment")
     category_ids: Optional[List[UUID]] = Field(
         None,
@@ -223,7 +219,6 @@ class ReviewResponse(BaseModel):
     review_id:   UUID          = Field(...)
     reviewer_id: UUID          = Field(...)
     receiver_id: UUID          = Field(...)
-    rating:      int           = Field(...)
     comment:     str           = Field(...)
     image_url:   Optional[str] = Field(None)
     video_url:   Optional[str] = Field(None)
@@ -246,7 +241,7 @@ class ReviewResponse(BaseModel):
     # ── Points ────────────────────────────────────────────────────────────────
     raw_points: Optional[float] = Field(
         None,
-        description="rating × sum(category_multipliers) × reviewer_weight × seasonal_multiplier"
+        description="sum(category_multipliers) × reviewer_weight"
     )
 
     model_config = {
@@ -256,7 +251,6 @@ class ReviewResponse(BaseModel):
                 "review_id":    "990e8400-e29b-41d4-a716-446655440004",
                 "reviewer_id":  "880e8400-e29b-41d4-a716-446655440000",
                 "receiver_id":  "550e8400-e29b-41d4-a716-446655440000",
-                "rating":       4,
                 "comment":      "Excellent work on the Q1 project.",
                 "category_tags": [
                     {"category_id": "770e8400-e29b-41d4-a716-446655440001",
@@ -275,7 +269,8 @@ class ReviewResponse(BaseModel):
                 "created_by":          "880e8400-e29b-41d4-a716-446655440000",
                 "updated_at":          "2026-02-06T10:30:00.000Z",
                 "updated_by":          "880e8400-e29b-41d4-a716-446655440000",
-                "raw_points":          15.68,
+                # raw_points = (OWNERSHIP 1.2 + INNOVATION 1.3) × reviewer_weight(1.0) = 2.5
+                "raw_points":          2.5,
             }
         }
     }
