@@ -108,6 +108,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+async def prisma_unique_violation_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.warning(f"[{request_id}] Unique constraint violation at {request.url.path}: {str(exc)}")
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "error": {
+                "code": "CONFLICT",
+                "message": "A record with the same unique identifier already exists",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "path": request.url.path,
+                "request_id": request_id,
+            }
+        },
+    )
+
+
 async def generic_exception_handler(request: Request, exc: Exception):
     request_id = getattr(request.state, "request_id", "unknown")
 

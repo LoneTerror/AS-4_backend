@@ -143,7 +143,7 @@ async def recognition_trend(
     range: Literal["3m", "6m", "1y"] = Query("6m", description="Time range: 3m | 6m | 1y"),
     current_user: CurrentUser = _auth,
 ):
-    return await get_recognition_trend(range)
+    return await get_recognition_trend(range_=range)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -166,7 +166,7 @@ async def recognition_users(
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
     current_user: CurrentUser = _auth,
 ):
-    return await get_recognition_users(range, page, limit)
+    return await get_recognition_users(range_=range, page=page, limit=limit)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -189,4 +189,4 @@ async def recognition_teams(
     limit: int = Query(10, ge=1, le=50,  description="Items per page"),
     current_user: CurrentUser = _auth,
 ):
-    return await get_recognition_teams(range, page, limit)
+    return await get_recognition_teams(range_=range, page=page, limit=limit)

@@ -28,15 +28,17 @@ from src.common.middleware import (
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
+
     "GET:/v1/analytics/dashboard/leaderboard":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     "GET:/v1/analytics/dashboard/recent-reviews":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/teams":                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/teams/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/platform-stats":           ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/participation":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/recognition-trend":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/recognition/teams":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/recognition/users":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/analytics/dashboard/platform-stats":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+
+    "GET:/v1/analytics/dashboard/teams":                    ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/teams/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/participation":            ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition-trend":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition/teams":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition/users":        ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 ROUTE_TITLES = {
