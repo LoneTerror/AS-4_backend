@@ -36,7 +36,8 @@ pipeline {
                     agent {
                         docker {
                             image 'python:3.10-slim'
-                            args '-u 0:0' 
+                            
+                            args '-u 0:0 -v ${WORKSPACE}:${WORKSPACE} -w ${WORKSPACE}' 
                         }
                     }
                     steps {
