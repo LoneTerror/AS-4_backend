@@ -1,4 +1,11 @@
 # src/roles/router.py
+#
+# Route paths registered here are BARE paths (no /v1/roles prefix).
+# route_registry builds the full DB key as:
+#   f"{METHOD}:{app.root_path}{route.path}"
+#   e.g.  GET  +  /v1/roles  +  /list  =  GET:/v1/roles/list
+#
+# Your ROLE_OVERRIDES and ROUTE_TITLES in main.py MUST use those full keys.
 
 from fastapi import APIRouter, Depends
 
@@ -20,7 +27,7 @@ router = APIRouter(tags=["Role Management"])
 
 @router.get("/list")
 async def list_roles(
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await service.list_roles()
 
@@ -28,7 +35,7 @@ async def list_roles(
 @router.post("/create", status_code=201)
 async def create_role(
     body: CreateRoleRequest,
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await service.create_role(body, current_user)
 
@@ -37,7 +44,7 @@ async def create_role(
 
 @router.get("/employees")
 async def list_employee_roles(
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await service.list_employee_roles()
 
@@ -45,7 +52,7 @@ async def list_employee_roles(
 @router.post("/assign", status_code=201)
 async def assign_role(
     body: AssignRoleRequest,
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await service.assign_role(body, current_user)
 
@@ -53,7 +60,7 @@ async def assign_role(
 @router.post("/revoke")
 async def revoke_role(
     body: RevokeRoleRequest,
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await service.revoke_role(body, current_user)
 
@@ -62,7 +69,7 @@ async def revoke_role(
 
 @router.get("/route-permissions")
 async def list_route_permissions(
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await service.list_route_permissions()
 
@@ -70,7 +77,7 @@ async def list_route_permissions(
 @router.post("/route-permissions", status_code=201)
 async def add_route_permission(
     body: SetRoutePermissionRequest,
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await service.add_route_permission(body, current_user)
 
@@ -78,7 +85,7 @@ async def add_route_permission(
 @router.patch("/route-permissions")
 async def remove_route_permission(
     body: DeleteRoutePermissionRequest,
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await service.remove_route_permission(body, current_user)
 
@@ -86,7 +93,7 @@ async def remove_route_permission(
 @router.patch("/route-permissions/title")
 async def update_route_title(
     body: UpdateRouteTitleRequest,
-    current_user: CurrentUser = Depends(check_route_permission)
+    current_user: CurrentUser = Depends(check_route_permission),
 ):
     """Set or update the human-readable display title for a route key."""
     return await service.update_route_title(body, current_user)

@@ -1,14 +1,6 @@
 """
 src/common/local_cache.py
 ──────────────────────────
-Ultra-fast in-process (L1) cache — pure Python dict, zero network cost.
-
-Used as the first layer in front of Redis. Every cache_get() checks
-here before touching Redis. TTLs are shorter than Redis so data
-stays reasonably fresh without needing Redis round-trips.
-
-Thread/async safety: asyncio is single-threaded per event loop,
-so plain dict reads/writes are safe with no locking needed.
 """
 
 import time

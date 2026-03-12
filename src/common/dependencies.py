@@ -16,9 +16,9 @@ from src.prisma.client import db
 from src.common.cache import cache_get, cache_set
 
 SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ALGORITHM  = os.getenv("ALGORITHM", "HS256")
 
-security = HTTPBearer(auto_error=False)
+security        = HTTPBearer(auto_error=False)
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
 
 _AUTH_CACHE_TTL = 30
@@ -42,7 +42,39 @@ def _is_public(request: Request) -> bool:
     proxy prefix rewriting — so the check works identically in all envs.
     """
     return request.scope.get("path", request.url.path) in _PUBLIC_PATHS
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _build_route_key(request: Request) -> str:
+    """
+    Build the route key that matches what route_registry stored in the DB.
+
+    route_registry stores:  f"{METHOD}:{root_path}{route.path}"
+    e.g.  GET:/v1/analytics/dashboard/leaderboard
+
+    request.scope["route"].path  →  bare template,  e.g. /dashboard/leaderboard
+    request.app.root_path        →  proxy prefix,   e.g. /v1/analytics
+
+    We must combine them the same way route_registry does, otherwise the
+    DB lookup always misses and every non-SUPER_ADMIN gets 403.
+
+    NOTE: request.scope["root_path"] is the ASGI root_path forwarded by the
+    proxy and may differ from app.root_path in some deployments.  We use
+    app.root_path (set in FastAPI(..., root_path=...)) because that is
+    exactly what route_registry reads via getattr(app, "root_path", "").
+    """
+    matched_route = request.scope.get("route")
+    if isinstance(matched_route, APIRoute):
+        # Parameterised template: /dashboard/leaderboard or /{employee_id}
+        bare_path = matched_route.path
+    else:
+        # Fallback — should not happen for real API routes
+        bare_path = request.scope.get("path", request.url.path)
+
+    # app.root_path is set via FastAPI(root_path="/v1/service")
+    root_path = (getattr(request.app, "root_path", "") or "").rstrip("/")
+
+    full_path = root_path + bare_path          # e.g. /v1/analytics/dashboard/leaderboard
+    return f"{request.method.upper()}:{full_path}"  # e.g. GET:/v1/analytics/dashboard/leaderboard
 
 
 # ── Singleton HTTP client ─────────────────────────────────────────────────────
@@ -68,9 +100,9 @@ async def close_auth_client() -> None:
     if _auth_client and not _auth_client.is_closed:
         await _auth_client.aclose()
         _auth_client = None
-# ─────────────────────────────────────────────────────────────────────────────
 
 
+# ── Models ────────────────────────────────────────────────────────────────────
 class CurrentUser(BaseModel):
     id:            str
     email:         str
@@ -79,22 +111,17 @@ class CurrentUser(BaseModel):
 
 
 # Sentinel returned for public paths.
-# Roles=["PUBLIC"] so no business-logic permission check can accidentally pass.
 _PUBLIC_USER = CurrentUser(id="system", email="", roles=["PUBLIC"])
 
 
+# ── Authentication ────────────────────────────────────────────────────────────
 async def get_current_user(
     request:     Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> CurrentUser:
 
-    # ── Public path bypass ────────────────────────────────────────────────────
-    # fast.py's health poller sends no Authorization header.
-    # Without this, credentials=None and we raise 401 four lines below.
-    # This is the primary fix for the health check 401.
     if _is_public(request):
         return _PUBLIC_USER
-    # ─────────────────────────────────────────────────────────────────────────
 
     if not credentials:
         raise HTTPException(
@@ -123,8 +150,8 @@ async def get_current_user(
     except Exception as cache_err:
         from src.core.logger import logger
         logger.debug(f"[{request_id}] Cache lookup skipped/failed: {cache_err}")
-    # ─────────────────────────────────────────────────────────────────────────
 
+    # ── Auth service validation ───────────────────────────────────────────────
     try:
         client   = get_auth_client()
         response = await client.post(
@@ -139,9 +166,9 @@ async def get_current_user(
                 detail="Invalid or expired authentication token",
             )
 
-        data = response.json()
-
+        data    = response.json()
         user_id = data.get("user_id")
+
         if not user_id or not isinstance(user_id, str) or user_id.lower() == "null":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -171,8 +198,8 @@ async def get_current_user(
 
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-
             user_id = payload.get("user_id") or payload.get("sub")
+
             if not user_id or not isinstance(user_id, str) or user_id.lower() == "null":
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -211,43 +238,44 @@ async def get_current_user(
             )
 
 
+# ── Permission check ──────────────────────────────────────────────────────────
 async def check_route_permission(
     request:      Request,
     current_user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
     """
     Checks that the authenticated user has a role permitted to access the
-    matched route. Uses the route template so parameterised paths resolve
-    correctly against the DB records.
-    SUPER_ADMIN and PUBLIC sentinel bypass all permission checks.
+    matched route.
+
+    Route key format:  METHOD:/v1/<service>/<path_template>
+    e.g.               GET:/v1/analytics/dashboard/leaderboard
+                       GET:/v1/employees/{employee_id}
+
+    This MUST match what route_registry stored — built as:
+        f"{METHOD}:{app.root_path}{route.path}"
+
+    The previous implementation used bare `matched_route.path` without
+    root_path, so "GET:/dashboard/leaderboard" never matched the DB record
+    "GET:/v1/analytics/dashboard/leaderboard" → every non-SUPER_ADMIN got 403.
     """
 
-    # ── Public path bypass ────────────────────────────────────────────────────
-    # get_current_user already returned _PUBLIC_USER for these paths.
-    # Without this guard the DB lookup finds no route_permissions row for
-    # /health and raises 403 — swapping a 401 for a 403, still broken.
     if _is_public(request):
         return current_user
-    # ─────────────────────────────────────────────────────────────────────────
 
+    # SUPER_ADMIN bypasses all permission checks
     if "SUPER_ADMIN" in current_user.roles:
         return current_user
 
-    matched_route = request.scope.get("route")
-    if isinstance(matched_route, APIRoute):
-        path_template = matched_route.path
-    else:
-        path_template = request.scope.get("path", request.url.path)
+    route_key = _build_route_key(request)
 
-    route_key = f"{request.method}:{path_template}"
-
+    # ── Cache lookup ──────────────────────────────────────────────────────────
     from src.common.cache import TTL_MEDIUM, L1_MEDIUM
-    perm_cache_key = f"roles:route_permissions:{route_key}"
+    perm_cache_key  = f"roles:route_permissions:{route_key}"
     cached_roles: list[str] | None = await cache_get(perm_cache_key, l1_ttl=L1_MEDIUM)
 
     if cached_roles is None:
         allowed = await db.route_permissions.find_many(
-            where={"route_key": route_key},
+            where={"route_key": route_key, "is_active": True},
             include={"roles": True},
         )
         if not allowed:
@@ -263,8 +291,7 @@ async def check_route_permission(
             detail=f"No permissions configured for {route_key}",
         )
 
-    allowed_role_codes = set(cached_roles)
-    if not any(r in allowed_role_codes for r in current_user.roles):
+    if not any(r in set(cached_roles) for r in current_user.roles):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient permissions for this operation",

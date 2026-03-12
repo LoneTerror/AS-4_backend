@@ -12,13 +12,35 @@ HOW IT WORKS
 2. We walk app.routes, build "METHOD:/path" keys, and upsert them into
    route_permissions for the given default roles.
 3. New routes → inserted automatically.
-4. Existing routes → skipped (no overwrite — preserves custom role
-   assignments made via the UI).
-5. Routes removed from code → left in DB as is_active=False so history
-   is preserved (you can clean them up manually if needed).
+4. Existing active rows → skipped (preserves custom UI assignments).
+5. Existing inactive rows → reactivated.
+6. Routes removed from code → left in DB as is_active=False.
 
-USAGE — add to each service's lifespan:
-────────────────────────────────────────
+ROUTE KEY FORMAT
+────────────────
+Keys are always:  METHOD:/v1/<service>/<endpoint>
+e.g.             GET:/v1/roles/list
+                 POST:/v1/rewards/redeem
+
+The key is built as:  f"{METHOD}:{root_path}{route.path}"
+where root_path = FastAPI(root_path="/v1/roles") — the reverse-proxy prefix.
+route.path is the bare path registered on the router, e.g. "/list".
+
+Your ROLE_OVERRIDES and ROUTE_TITLES dicts MUST use this same format.
+
+IMPORTANT — DB UNIQUE CONSTRAINT REQUIRED
+──────────────────────────────────────────
+route_permissions must have a unique index on (route_key, role_id).
+Without it, skip_duplicates=True in create_many is a no-op and you will
+get duplicate rows on every restart.
+
+Add to your Prisma schema:
+    @@unique([route_key, role_id])
+
+Then run:  prisma migrate dev
+
+USAGE
+──────
     from src.common.route_registry import register_app_routes
 
     @asynccontextmanager
@@ -30,31 +52,22 @@ USAGE — add to each service's lifespan:
             app,
             default_roles=["SUPER_ADMIN", "HR_ADMIN"],
             role_overrides=ROLE_OVERRIDES,
-            route_titles=ROUTE_TITLES,       # optional but recommended
+            route_titles=ROUTE_TITLES,
         )
-
         yield
         ...
 
-ROLE_OVERRIDES — optional dict to set per-route roles:
-────────────────────────────────────────────────────────
+ROLE_OVERRIDES — per-route role lists (optional):
     ROLE_OVERRIDES = {
-        "GET:/v1/dashboard/leaderboard":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-        "POST:/v1/rewards/redeem":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+        "GET:/v1/dashboard/leaderboard": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+        "POST:/v1/rewards/redeem":       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     }
 
-ROUTE_TITLES — optional dict to set human-readable display labels:
-────────────────────────────────────────────────────────────────────
+ROUTE_TITLES — human-readable labels (optional, auto-generated if absent):
     ROUTE_TITLES = {
-        "GET:/v1/dashboard/leaderboard":    "View Leaderboard",
-        "POST:/v1/rewards/redeem":          "Redeem Reward",
+        "GET:/v1/dashboard/leaderboard": "View Leaderboard",
+        "POST:/v1/rewards/redeem":       "Redeem Reward",
     }
-
-    Routes without a title entry get a sensible auto-generated label
-    derived from the method + path (e.g. "GET /v1/rewards/catalog"
-    becomes "Get Rewards Catalog").
-
-Any route NOT in role_overrides gets default_roles assigned.
 """
 
 import asyncio
@@ -70,57 +83,68 @@ from fastapi.routing import APIRoute
 logger = logging.getLogger(__name__)
 
 # ── System routes to always skip ─────────────────────────────────────────────
-_SKIP_PATHS = {
+_SKIP_EXACT: set[str] = {
     "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
     "/v1/docs",
     "/v1/redoc",
     "/v1/openapi.json",
-    "/openapi.json",
-    "/docs",
-    "/redoc",
 }
 
-_SYSTEM_ACTOR = None
+_SKIP_PREFIXES: tuple[str, ...] = (
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi",
+)
 
+_SYSTEM_ACTOR = None
 _REGISTRATION_TIMEOUT_SECONDS = 120
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def _auto_title(route_key: str) -> str:
     """
-    Derive a human-readable title from a route_key when no explicit title
-    is provided.
+    Derive a human-readable title from a route key.
 
     Examples:
-        "GET:/v1/rewards/catalog"              → "Get Rewards Catalog"
-        "POST:/v1/employees/create"            → "Post Employees Create"
-        "PATCH:/v1/rewards/catalog/{id}/stock" → "Patch Rewards Catalog Stock"
-        "DELETE:/v1/organizations/seasonal-multipliers/{mult_id}" → "Delete Seasonal Multipliers"
+        "GET:/v1/rewards/catalog"               → "Get Rewards Catalog"
+        "POST:/v1/employees/create"             → "Post Employees Create"
+        "PATCH:/v1/rewards/catalog/{id}/stock"  → "Patch Rewards Catalog Stock"
+        "DELETE:/v1/orgs/seasonal-multipliers/{id}" → "Delete Orgs Seasonal Multipliers"
     """
     method, _, path = route_key.partition(":")
-    # Strip leading slash and split on /
     parts = path.strip("/").split("/")
-    # Drop the version segment (v1, v2 …)
+    # Drop version segments (v1, v2 …)
     parts = [p for p in parts if not re.fullmatch(r"v\d+", p)]
     # Drop path parameter segments like {employee_id}
     parts = [p for p in parts if not (p.startswith("{") and p.endswith("}"))]
-    # Replace hyphens with spaces, title-case each word
-    label_parts = " ".join(p.replace("-", " ") for p in parts).title()
-    return f"{method.title()} {label_parts}".strip()
+    label = " ".join(p.replace("-", " ") for p in parts).title()
+    return f"{method.title()} {label}".strip()
 
 
 def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
     """
-    Walk app.routes and return list of (method, full_path) tuples.
-    full_path = app.root_path + route.path  (e.g. /v1/analytics + /dashboard/leaderboard)
-    This ensures route_keys in the DB match the keys used in ROLE_OVERRIDES.
-    Skips system/doc routes, health checks, and non-API routes.
+    Walk app.routes and return a DEDUPLICATED list of (METHOD, full_path) tuples.
+
+    full_path = root_path + route.path
+    e.g. root_path="/v1/roles", route.path="/list"  →  "/v1/roles/list"
+
+    FastAPI's root_path is the reverse-proxy prefix. It is NOT automatically
+    prepended to route.path at the ASGI level — we do it here so the route
+    keys stored in the DB match the paths as seen by the gateway/client.
+
+    Deduplication: FastAPI sometimes surfaces the same APIRoute twice (e.g.
+    when a router is included multiple times, or HEAD is paired with GET).
+    We use a set to guarantee uniqueness.
     """
-    # root_path is set via FastAPI(root_path="/v1/service") for reverse-proxy
-    # stripping — it is NOT part of route.path, so we prepend it manually.
     root_path = (getattr(app, "root_path", "") or "").rstrip("/")
 
-    # Paths to skip — checked against both the short path and the full path
-    _skip_prefixes = ("/docs", "/redoc", "/openapi", "/health")
+    seen: set[tuple[str, str]] = set()
+    results: list[tuple[str, str]] = []
 
     results = []
     
@@ -130,21 +154,33 @@ def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue
-        full_path = root_path + route.path
-        # Skip if short path or full path is in the explicit skip set
-        if route.path in _SKIP_PATHS or full_path in _SKIP_PATHS:
+
+        short_path = route.path  # e.g. "/list"
+        full_path  = root_path + short_path  # e.g. "/v1/roles/list"
+
+        # Skip system/utility routes
+        if short_path in _SKIP_EXACT or full_path in _SKIP_EXACT:
             continue
-        # Skip health and docs regardless of prefix
-        if any(route.path.startswith(p) for p in _skip_prefixes):
+        if any(short_path.startswith(p) for p in _SKIP_PREFIXES):
+            continue
+        if any(full_path.startswith(p) for p in _SKIP_PREFIXES):
             continue
 
-        # 2. Glue them together so the DB string matches the real HTTP URL
-        full_path = f"{root}/{route.path.lstrip('/')}"
+        for method in sorted(route.methods or []):
+            method = method.upper()
+            # Skip HEAD — it's auto-added by FastAPI alongside GET and is not
+            # a distinct permission boundary.
+            if method == "HEAD":
+                continue
+            pair = (method, full_path)
+            if pair not in seen:
+                seen.add(pair)
+                results.append(pair)
 
-        for method in route.methods or []:
-            results.append((method.upper(), full_path))
     return results
 
+
+# ── Core registration logic ───────────────────────────────────────────────────
 
 async def _do_register(
     app: FastAPI,
@@ -152,50 +188,63 @@ async def _do_register(
     role_overrides: dict[str, list[str]],
     route_titles: dict[str, str],
 ) -> None:
-    """Inner registration logic — runs inside an asyncio timeout guard."""
+    """Inner registration — runs inside an asyncio.wait_for timeout guard."""
     from src.prisma.client import db
 
-    # Random jitter so all services don't hammer the DB simultaneously.
-    jitter = random.uniform(0, 10)
+    # Stagger startup so multiple services don't all hit the DB at t=0.
+    jitter = random.uniform(0, 5)
     await asyncio.sleep(jitter)
 
-    # 1. Load all roles from DB into a code→id map
+    # ── 1. Load roles ─────────────────────────────────────────────────────────
     all_roles = await db.roles.find_many()
-    role_map = {r.role_code: r.role_id for r in all_roles}
+    role_map: dict[str, str] = {r.role_code: r.role_id for r in all_roles}
 
     if not role_map:
-        logger.warning("route_registry: no roles found in DB — skipping route registration")
+        logger.warning("route_registry: no roles in DB — skipping registration")
         return
 
-    # 2. Extract routes from the app
+    # ── 2. Extract routes (deduplicated) ──────────────────────────────────────
     routes = _extract_routes(app)
     if not routes:
         logger.warning("route_registry: no routes found in app")
         return
 
-    # 3. Bulk-fetch all existing route_permission rows for this service's routes
+    logger.info("route_registry: found %d unique route+method pairs", len(routes))
+
+    # ── 3. Fetch existing rows for these route keys ───────────────────────────
     route_keys = list({f"{method}:{path}" for method, path in routes})
     existing_rows = await db.route_permissions.find_many(
         where={"route_key": {"in": route_keys}}
     )
-    existing_active   = {(r.route_key, r.role_id) for r in existing_rows if r.is_active}
-    existing_inactive = {(r.route_key, r.role_id): r for r in existing_rows if not r.is_active}
 
-    inserted    = 0
-    reactivated = 0
-    skipped     = 0
-    errors      = 0
+    # Build lookup sets — (route_key, role_id) → row
+    existing_active:   set[tuple[str, str]]         = set()
+    existing_inactive: dict[tuple[str, str], object] = {}
 
+    for row in existing_rows:
+        pair = (row.route_key, row.role_id)
+        if row.is_active:
+            existing_active.add(pair)
+        else:
+            # If somehow there are duplicate inactive rows, keep the latest one
+            if pair not in existing_inactive:
+                existing_inactive[pair] = row
+
+    # ── 4. Build insert / reactivate batches ──────────────────────────────────
     now = datetime.now(timezone.utc)
 
-    to_insert: list[dict] = []
-    to_reactivate: list = []
+    to_insert:     list[dict] = []
+    to_reactivate: list[tuple[object, str]] = []
+
+    # Track which (route_key, role_id) pairs we've already queued to avoid
+    # inserting duplicates within the same batch (possible if a route somehow
+    # appears in _extract_routes twice despite dedup — defensive guard).
+    queued: set[tuple[str, str]] = set()
 
     for method, path in routes:
-        route_key = f"{method}:{path}"
+        route_key       = f"{method}:{path}"
         roles_for_route = role_overrides.get(route_key, default_roles)
-        # Use explicit title if provided, otherwise auto-generate one
-        title = route_titles.get(route_key) or _auto_title(route_key)
+        title           = route_titles.get(route_key) or _auto_title(route_key)
 
         for role_code in roles_for_route:
             role_id = role_map.get(role_code)
@@ -209,34 +258,45 @@ async def _do_register(
             pair = (route_key, role_id)
 
             if pair in existing_active:
-                skipped += 1
+                # Already live — nothing to do. Title updates are intentionally
+                # not overwritten here to preserve admin UI edits.
+                continue
             elif pair in existing_inactive:
-                to_reactivate.append((existing_inactive[pair], title))
+                if pair not in queued:
+                    to_reactivate.append((existing_inactive[pair], title))
+                    queued.add(pair)
             else:
-                to_insert.append({
-                    "route_key":  route_key,
-                    "title":      title,
-                    "role_id":    role_id,
-                    "is_active":  True,
-                    "created_by": _SYSTEM_ACTOR,
-                    "updated_by": _SYSTEM_ACTOR,
-                    "updated_at": now,
-                })
+                if pair not in queued:
+                    to_insert.append({
+                        "route_key":  route_key,
+                        "title":      title,
+                        "role_id":    role_id,
+                        "is_active":  True,
+                        "created_by": _SYSTEM_ACTOR,
+                        "updated_by": _SYSTEM_ACTOR,
+                        "updated_at": now,
+                    })
+                    queued.add(pair)
 
-    # ── Batch insert all new rows in ONE round-trip ───────────────────────────
+    # ── 5. Batch insert ───────────────────────────────────────────────────────
+    inserted = 0
     if to_insert:
         try:
-            result = await db.route_permissions.create_many(
+            # skip_duplicates relies on the @@unique([route_key, role_id])
+            # constraint in your Prisma schema.  Without that constraint this
+            # is a no-op and duplicates WILL be created. See module docstring.
+            result   = await db.route_permissions.create_many(
                 data=to_insert,
                 skip_duplicates=True,
             )
             inserted = result.count if hasattr(result, "count") else len(to_insert)
             logger.debug("route_registry: batch-inserted %d rows", inserted)
-        except Exception as insert_err:
-            errors += len(to_insert)
-            logger.warning("route_registry: batch insert failed: %s", insert_err)
+        except Exception as err:
+            logger.warning("route_registry: batch insert failed: %s", err)
 
-    # ── Reactivate previously-deactivated rows ────────────────────────────────
+    # ── 6. Reactivate previously-deactivated rows ─────────────────────────────
+    reactivated = 0
+    errors      = 0
     for row, title in to_reactivate:
         try:
             await db.route_permissions.update(
@@ -249,26 +309,27 @@ async def _do_register(
                 },
             )
             reactivated += 1
-            logger.debug("route_registry: re-activated %s", row.route_key)
         except Exception as err:
             errors += 1
             logger.warning("route_registry: reactivation failed for %s: %s", row.route_key, err)
 
-    # ── Invalidate permissions cache ──────────────────────────────────────────
+    skipped = len(routes) * len(default_roles) - inserted - reactivated - errors
+
+    # ── 7. Invalidate permissions cache ───────────────────────────────────────
     try:
         from src.common.cache import cache_delete
         await cache_delete("roles:route_permissions")
         logger.debug("route_registry: cache invalidated")
-    except Exception as cache_err:
-        logger.warning("route_registry: cache invalidation failed: %s", cache_err)
+    except Exception as err:
+        logger.warning("route_registry: cache invalidation failed: %s", err)
 
     logger.info(
-        "route_registry: %d routes found | %d inserted | %d re-activated | %d already active | %d errors",
+        "route_registry done — routes=%d | inserted=%d | reactivated=%d | skipped=%d | errors=%d",
         len(routes), inserted, reactivated, skipped, errors,
     )
-    if inserted or reactivated:
-        logger.info("route_registry: new routes are live immediately (cache cleared)")
 
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 async def register_app_routes(
     app: FastAPI,
@@ -279,16 +340,14 @@ async def register_app_routes(
     """
     Auto-register all routes from `app` into route_permissions.
 
-    Non-fatal — if registration times out or fails for any reason, the
-    service still starts normally.
+    Non-fatal — if registration times out or fails, the service still starts.
 
     Args:
         app:            The FastAPI app instance for this service.
-        default_roles:  Role codes assigned to routes not in role_overrides.
-        role_overrides: Optional dict of {route_key: [role_codes]} for
-                        routes that need non-default access.
-        route_titles:   Optional dict of {route_key: "Human Readable Title"}.
-                        Routes without an entry get an auto-generated title.
+        default_roles:  Role codes assigned to any route not in role_overrides.
+        role_overrides: {route_key: [role_codes]} for per-route overrides.
+        route_titles:   {route_key: "Human Readable Title"}.
+                        Routes without an entry get an auto-generated label.
     """
     role_overrides = role_overrides or {}
     route_titles   = route_titles   or {}
@@ -300,8 +359,8 @@ async def register_app_routes(
         )
     except asyncio.TimeoutError:
         logger.warning(
-            "route_registry: registration timed out after %ds — service starting without "
-            "full route seeding. Routes will be registered on next restart.",
+            "route_registry: timed out after %ds — service starting without full "
+            "route seeding. Routes will register on next restart.",
             _REGISTRATION_TIMEOUT_SECONDS,
         )
     except Exception as err:
