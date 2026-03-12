@@ -36,8 +36,8 @@ pipeline {
                     agent {
                         docker {
                             image 'python:3.10-slim'
-                            
-                            args '-u 0:0 -v ${WORKSPACE}:${WORKSPACE} -w ${WORKSPACE}' 
+                            // REMOVE the -v and -w flags, keep only the user flag
+                            args '-u 0:0' 
                         }
                     }
                     steps {
@@ -76,7 +76,6 @@ pipeline {
                             ls -lh bandit-report.html pip-audit-report.json test-results.xml
                         '''
                     }
-                }
             }
         }
 
