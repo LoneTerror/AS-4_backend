@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock
 # Import the actual service class from the rewards package
-from rewards.service import RewardService
+from src.rewards.service import RewardService
 
 def test_get_categories_route(app_client, mocker):
     # Patch the class method directly using the imported class reference
@@ -23,7 +23,7 @@ def test_get_categories_route(app_client, mocker):
         }
     ]
 
-    response = app_client.get("/v1/rewards/categories?active_only=true")
+    response = app_client.get("/v1/rewards/categories?is_active=true")
     
     # Assertions
     assert response.status_code == 200
@@ -32,4 +32,4 @@ def test_get_categories_route(app_client, mocker):
     assert data[0]["category_code"] == "CAT-TECH"
     
     # Verify the router passed the correct logic to the service
-    mock_get_categories.assert_called_once_with(active_only=True)
+    mock_get_categories.assert_called_once_with(is_active=True)

@@ -7,6 +7,12 @@ pipeline {
         TARGET_EC2_HOST="test.aabhar.top"
     }
 
+    triggers {
+        // Triggers the build automatically when a push or PR is made
+        // Note: Requires GitHub/GitLab webhook pointing to your Jenkins URL
+        githubPush() 
+    }
+
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         disableConcurrentBuilds()
@@ -19,7 +25,8 @@ pipeline {
             parallel {
                 stage('Secrets Scan (Gitleaks)') {
                     steps {
-                        sh 'gitleaks detect --source . --report-format json --report-path gitleaks-report.json --exit-code 0'
+                        // Fails the build immediately if secrets are detected
+                        sh 'gitleaks detect --source . --report-format json --report-path gitleaks-report.json --exit-code 1'
                     }
                 }
 
@@ -35,13 +42,22 @@ pipeline {
                         python -m venv venv
                         . venv/bin/activate
                         pip install --upgrade pip
-                        pip install bandit pip-audit
                         
-                        # Running Bandit and Pip-Audit in background to save time
-                        bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json &
-                        bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html &
-                        pip-audit --format json --output pip-audit-report.json &
-                        wait
+                        # Install your FastAPI app dependencies AND testing tools
+                        pip install -r requirements.txt 
+                        pip install pytest bandit pip-audit
+                        
+                        echo "🧪 Running Unit Tests..."
+                        # FAILS the build if your code logic is broken
+                        pytest tests/ --disable-warnings --junitxml=test-results.xml
+                        
+                        echo "🔒 Running Static Security Scans..."
+                        # Running sequentially to ensure exit codes trigger pipeline failure
+                        bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json
+                        bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html
+                        
+                        # Fails the build if vulnerable dependencies are found
+                        pip-audit --format json --output pip-audit-report.json
                         '''
                     }
                 }
@@ -60,7 +76,7 @@ pipeline {
             parallel {
                 stage('Container Scan - Trivy') {
                     steps {
-                        sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --format json --output trivy-report.json $IMAGE:$TAG || true'
+                        sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format json --output trivy-report.json $IMAGE:$TAG'
                     }
                 }
 
@@ -111,7 +127,7 @@ pipeline {
                                         docker run --rm --user 0 --network zap-net \
                                         -v \$(pwd):/zap/wrk/:rw \
                                         ghcr.io/zaproxy/zaproxy:stable \
-                                        zap-baseline.py -t http://target-app:8000 -r zap-report.html || true
+                                        zap-baseline.py -t http://target-app:8000 -r zap-report.html -I
                                         """
                                     } finally {
                                         sh 'docker stop target-app || true'
@@ -224,7 +240,8 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: '**/*.json, **/*.html', allowEmptyArchive: true
+            archiveArtifacts artifacts: '**/*.json, **/*.html, test-results.xml', allowEmptyArchive: true
+            junit 'test-results.xml' 
             publishHTML([
                 allowMissing: false,
                 alwaysLinkToLastBuild: true,

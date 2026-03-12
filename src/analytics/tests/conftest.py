@@ -11,49 +11,54 @@ import types
 import pytest
 from uuid import uuid4
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 from pydantic import BaseModel
 from typing import List
 
-# ---------------------------------------------------------------------------
-# 1. Stub the entire src.* namespace so real modules can be imported
-# ---------------------------------------------------------------------------
-_src = types.ModuleType("src")
-sys.modules.setdefault("src", _src)
+import src.analytics.schemas as _schemas
 
-for _path in [
-    "src.prisma",
-    "src.prisma.client",
-    "src.analytics",
-    "src.analytics.dependencies",
-    "src.analytics.queries",
-    "src.analytics.schemas",
-    "src.analytics.service",
-]:
-    sys.modules.setdefault(_path, types.ModuleType(_path))
+# 1. Safely stub ONLY the database and cache
+_prisma_stub = types.ModuleType("src.prisma.client")
+sys.modules["src.prisma.client"] = _prisma_stub
+_prisma_stub.db = MagicMock()
 
-# Load the REAL schemas so service.py can import the Pydantic models.
-import importlib.util as _ilu, pathlib as _pl
-_schemas_path = _pl.Path(__file__).parent.parent / "schemas.py"
-_schemas_spec = _ilu.spec_from_file_location("_real_schemas", _schemas_path)
-_real_schemas = _ilu.module_from_spec(_schemas_spec)
-_schemas_spec.loader.exec_module(_real_schemas)
+# Ensure common DB methods are AsyncMocks
+_prisma_stub.db.find_many = AsyncMock()
+_prisma_stub.db.find_unique = AsyncMock()
+_prisma_stub.db.find_first = AsyncMock()
+_prisma_stub.db.create = AsyncMock()
+_prisma_stub.db.update = AsyncMock()
+_prisma_stub.db.delete = AsyncMock()
+_prisma_stub.db.count = AsyncMock()
+_prisma_stub.db.update_many = AsyncMock()
+_prisma_stub.db.delete_many = AsyncMock()
+_prisma_stub.db.tx = AsyncMock()
+_prisma_stub.connect_with_retry = AsyncMock()
 
-_schemas = sys.modules["src.analytics.schemas"]
-_schemas.RecentReview     = _real_schemas.RecentReview
-_schemas.LeaderboardEntry = _real_schemas.LeaderboardEntry
-_schemas.MetricWithGrowth = _real_schemas.MetricWithGrowth
-_schemas.PlatformStats    = _real_schemas.PlatformStats
+# Keep specific table mocks if they existed
+_prisma_stub.db.reviews.find_many = AsyncMock()
+_prisma_stub.db.wallets.find_many = AsyncMock()
+_prisma_stub.db.employees.find_unique = AsyncMock()
 
-# ---------------------------------------------------------------------------
-# 2. Fake database object — every test patches individual methods on this
-# ---------------------------------------------------------------------------
-fake_db = MagicMock()
-sys.modules["src.prisma.client"].db = fake_db
+_cache_stub = types.ModuleType("src.common.cache")
+sys.modules["src.common.cache"] = _cache_stub
+_cache_stub.cache_get = AsyncMock(return_value=None)
+_cache_stub.cache_set = AsyncMock()
+_cache_stub.cache_delete = AsyncMock()
+_cache_stub.invalidate_pattern = AsyncMock()
 
-# ---------------------------------------------------------------------------
-# 3. CurrentUser model (mirrors the real one in dependencies.py)
-# ---------------------------------------------------------------------------
+# TTL and L1 constants
+_cache_stub.TTL_VOLATILE = 60
+_cache_stub.L1_VOLATILE = 30
+_cache_stub.TTL_SHORT = 300
+_cache_stub.L1_SHORT = 60
+_cache_stub.TTL_MEDIUM = 3600
+_cache_stub.L1_MEDIUM = 300
+_cache_stub.TTL_PERMANENT = 86400
+_cache_stub.L1_PERMANENT = 3600
+
+sys.modules["src.analytics.dependencies"] = types.ModuleType("src.analytics.dependencies")
+
 class CurrentUser(BaseModel):
     id: str
     email: str
@@ -61,28 +66,6 @@ class CurrentUser(BaseModel):
     department_id: str | None = None
 
 sys.modules["src.analytics.dependencies"].CurrentUser = CurrentUser
-
-# ---------------------------------------------------------------------------
-# 4. Stub query functions so service.py can import them
-#    Tests will patch these individually via unittest.mock.patch
-# ---------------------------------------------------------------------------
-from unittest.mock import AsyncMock
-
-_queries = sys.modules["src.analytics.queries"]
-_queries.get_recent_reviews                 = AsyncMock()
-_queries.get_leaderboard                    = AsyncMock()
-_queries.get_user_total_points              = AsyncMock()
-_queries.get_user_points_earned_this_month  = AsyncMock()
-_queries.get_user_points_earned_last_month  = AsyncMock()
-_queries.get_user_total_rewards_redeemed    = AsyncMock()
-_queries.get_user_rewards_redeemed_this_month = AsyncMock()
-_queries.get_user_rewards_redeemed_last_month = AsyncMock()
-_queries.get_user_total_reviews             = AsyncMock()
-_queries.get_user_reviews_this_month        = AsyncMock()
-_queries.get_user_reviews_last_month        = AsyncMock()
-_queries.get_active_users_count             = AsyncMock()
-_queries.get_active_users_count_last_month  = AsyncMock()
-
 
 # ---------------------------------------------------------------------------
 # 5. Reusable factory helpers (imported by every test file)

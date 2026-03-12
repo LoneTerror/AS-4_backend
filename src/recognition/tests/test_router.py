@@ -25,20 +25,20 @@ import types
 import pytest
 from uuid import uuid4
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+from src.common.dependencies import get_current_user, check_route_permission
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# ---------------------------------------------------------------------------
-# Stub src.* namespace
-# ---------------------------------------------------------------------------
+sys.modules["src.prisma.client"] = MagicMock()
 for _p in [
-    "src", "src.prisma", "src.prisma.client",
-    "src.recognition", "src.recognition.dependencies",
-    "src.recognition.schemas", "src.recognition.service",
+    "src.prisma", "src.prisma.client",
+    "src.recognition.dependencies",
+    "src.recognition.schemas",
     "src.recognition.points_engine",
-    "src.common", "src.common.middleware",
+    "src.common.middleware",
+    "src.common.dependencies"
 ]:
     sys.modules.setdefault(_p, types.ModuleType(_p))
 
@@ -127,12 +127,15 @@ sys.modules["src.recognition.schemas"].PaginatedReviewCategoryResponse  = _Pagin
 sys.modules["src.recognition.schemas"].ReviewCategoryCreateRequest      = _ReviewCategoryCreateRequest
 sys.modules["src.recognition.schemas"].ReviewCategoryUpdateRequest      = _ReviewCategoryUpdateRequest
 sys.modules["src.recognition.dependencies"].CurrentUser                 = CurrentUser
+sys.modules["src.common.dependencies"].CurrentUser                      = CurrentUser 
+
+# Now it is safe to import your project modules
+from src.recognition.service import RecognitionService
 
 # ---------------------------------------------------------------------------
 # Mock service
 # ---------------------------------------------------------------------------
 _service = MagicMock()
-sys.modules["src.recognition.service"].RecognitionService = _service
 
 # ---------------------------------------------------------------------------
 # Stub auth dependencies
@@ -140,18 +143,23 @@ sys.modules["src.recognition.service"].RecognitionService = _service
 async def _stub_get_current_user():
     return DEFAULT_USER
 
-def _stub_require_roles(*args, **kwargs):
-    async def _inner():
-        return DEFAULT_USER
-    return _inner
+async def _stub_require_roles():
+    return DEFAULT_USER
+
+async def _stub_check_route_permission():
+    return DEFAULT_USER
 
 sys.modules["src.recognition.dependencies"].get_current_user = _stub_get_current_user
 sys.modules["src.recognition.dependencies"].require_roles    = _stub_require_roles
+
+sys.modules["src.common.dependencies"].check_route_permission = _stub_check_route_permission
+sys.modules["src.common.dependencies"].get_current_user = _stub_get_current_user
 
 # ---------------------------------------------------------------------------
 # Load real router AFTER stubs are in place
 # ---------------------------------------------------------------------------
 _router_mod = _load("router_mod", _root / "router.py")
+_router_mod.RecognitionService = _service
 
 # ---------------------------------------------------------------------------
 # Build FastAPI app and override ALL dependencies
@@ -162,12 +170,12 @@ from fastapi.testclient import TestClient
 app = FastAPI()
 app.include_router(_router_mod.router, prefix="/v1")
 
-app.dependency_overrides[_router_mod.get_current_user] = lambda: DEFAULT_USER
-
 for _route in app.routes:
     for _dep in getattr(_route, "dependencies", []):
         app.dependency_overrides[_dep.dependency] = lambda: DEFAULT_USER
 
+app.dependency_overrides[get_current_user] = lambda: DEFAULT_USER
+app.dependency_overrides[check_route_permission] = lambda: DEFAULT_USER
 client = TestClient(app, raise_server_exceptions=False)
 
 
@@ -208,7 +216,7 @@ def _paginated_json(items=None):
             "total": 1,
             "total_pages": 1,
             "has_next": False,
-            "has_previous": False,
+            "has_previous": False
         }
     }
 

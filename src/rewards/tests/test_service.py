@@ -127,6 +127,10 @@ async def test_grant_reward_success(mock_db, mocker):
     # 3. FIX: Properly mock the async context manager (`async with self.db.tx() as transaction:`)
     # First, create a mock for the inner 'transaction' database object
     transaction_mock = AsyncMock()
+    transaction_mock.wallets.update = AsyncMock()
+    transaction_mock.reward_catalog.update = AsyncMock(return_value=MagicMock(available_stock=9))
+    transaction_mock.transactions.create = AsyncMock()
+    transaction_mock.reward_history.create = AsyncMock(return_value=MagicMock(history_id="h-1"))
     transaction_mock.reward_catalog.update.return_value = MagicMock(available_stock=9)
     transaction_mock.reward_history.create.return_value = MagicMock(history_id="hist-1", points=100, granted_at="2026-03-02")
 

@@ -53,7 +53,7 @@ dev = [
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -62,5 +62,3 @@ exclude = ["tests*", "scripts*"]
 # ✅ SINGLE merged block — no duplicates
 [tool.pytest.ini_options]
 asyncio_mode   = "auto"
-testpaths      = ["."]
-filterwarnings = ["ignore::PendingDeprecationWarning"]
