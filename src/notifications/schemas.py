@@ -6,10 +6,12 @@ from pydantic import BaseModel, UUID4, field_validator
 
 
 class NotificationType(str, Enum):
-    REVIEW       = "REVIEW"
-    REWARD       = "REWARD"
-    SYSTEM       = "SYSTEM"
-    CELEBRATION  = "CELEBRATION"
+    REVIEW = "REVIEW"
+    REWARD = "REWARD"
+    REWARD_REDEEMED = "REWARD_REDEEMED"
+    POINTS_CREDIT = "POINTS_CREDIT"
+    SYSTEM = "SYSTEM"
+    CELEBRATION = "CELEBRATION"
     ANNOUNCEMENT = "ANNOUNCEMENT"
 
     # ── Legacy values — present in DB rows created before the enum was trimmed.
