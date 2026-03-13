@@ -1,6 +1,9 @@
 # FastAPI and ASGI server
 fastapi>=0.111.0,<1.0.0
-uvicorn[standard]
+uvicorn[standard]; sys_platform == 'win32'
+uvicorn; sys_platform != 'win32'
+uvloop; sys_platform != 'win32'
+httptools; sys_platform != 'win32'
 gunicorn
 
 # Pydantic and Validation
@@ -12,7 +15,7 @@ slack-sdk
 # Database & ORM
 prisma>=0.13.0,<1.0.0
 asyncpg
-redis[asyncio]
+redis
 
 # HTTP Client
 httpx==0.28.0
