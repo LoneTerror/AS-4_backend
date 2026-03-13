@@ -5,7 +5,7 @@ FROM python:3.10-slim AS builder
 
 WORKDIR /app
 
-# Install build dependencies with --no-install-recommends to keep the layer small
+# Added libatomic1 and kept dependencies lean
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev curl ca-certificates libatomic1 \
     nodejs npm && \
@@ -15,26 +15,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# Copy ONLY requirements first to cache the pip install layer
+# UPGRADE PIP: Essential for --require-hashes mode
+RUN pip install --upgrade pip
+
+# Copy ONLY requirements first
 COPY requirements.txt .
+# Pip will now verify hashes for every package
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Prisma CLI (Version 6) and clean npm cache
+# Install Prisma CLI
 RUN npm install -g prisma@6 && npm cache clean --force
 
-# Copy ONLY the Prisma schema first to cache generation
-# (Adjust the path if your schema is in a 'prisma/' directory)
+# Copy schema and generate client
 COPY prisma/schema.prisma ./prisma/
 
-ENV XDG_CACHE_HOME="/app/.cache" \
-    PRISMA_HOME="/app/.prisma" \
-    PRISMA_PY_BINARIES_PATH="/app/prisma_binaries" \
-    PRISMA_BINARY_CACHE_DIR="/app/.cache" \
-    PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
+# Ensure Prisma binaries are accessible
+ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
+RUN prisma generate
 
-RUN prisma generate --no-engine
-
-# Now copy the rest of the application code
+# Copy the rest of the application
 COPY . .
 
 # =========================
@@ -44,36 +43,32 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install ONLY runtime dependencies, add networking tools, and clean apt cache
+# Removed npm from runtime (keeping nodejs for pm2)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 nginx ca-certificates libatomic1 nodejs npm \
+    libpq5 ca-certificates libatomic1 nodejs \
     curl iputils-ping netcat-openbsd dnsutils && \
     rm -rf /var/lib/apt/lists/*
 
-# Install pm2 globally and clean npm cache
-RUN npm install -g pm2 && npm cache clean --force
+# Install pm2 (using a temporary npm install or global copy)
+RUN apt-get install -y npm && \
+    npm install -g pm2 && \
+    apt-get purge -y npm && apt-get autoremove -y && \
+    npm cache clean --force
 
-# Create non-root user
+# Security: Non-root user
 RUN addgroup --system appgroup && adduser --system --group appuser
 
-# Copy application and venv from builder
+# Copy app from builder
 COPY --from=builder --chown=appuser:appgroup /app /app
 
-# CRITICAL FIX: Explicitly create the .pm2 directory and grant ownership
+# Ensure logs and pm2 home exist
 RUN mkdir -p /app/.pm2 /app/logs && chown -R appuser:appgroup /app/.pm2 /app/logs
 
-# Now switch to the non-root user
 USER appuser
-
-# Ensure the Python virtual environment is in the PATH for runtime
 ENV PATH="/app/venv/bin:$PATH"
+ENV PM2_HOME="/app/.pm2"
 
-ENV XDG_CACHE_HOME="/app/.cache" \
-    PRISMA_HOME="/app/.prisma" \
-    PRISMA_PY_BINARIES_PATH="/app/prisma_binaries" \
-    PRISMA_BINARY_CACHE_DIR="/app/.cache" \
-    PM2_HOME="/app/.pm2"
+EXPOSE 8000
 
-EXPOSE 8000 8001 8002 8003 8004 8005 8006 8007 8008
-
-CMD ["pm2-runtime", "start", "/app/ecosystem.config.js"]
+# Using pm2-runtime for Docker-native process management
+CMD ["pm2-runtime", "start", "ecosystem.config.js"]
