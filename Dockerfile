@@ -43,14 +43,12 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Removed npm from runtime (keeping nodejs for pm2)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 ca-certificates libatomic1 nodejs npm \
+    libpq5 ca-certificates libatomic1 nodejs npm nginx procps \
     curl iputils-ping netcat-openbsd dnsutils && \
-    # 2. Install PM2 while npm is definitely present
     npm install -g pm2 && \
-    # 3. Cleanup npm and apt to keep the image small
     npm cache clean --force && \
+    # We keep nginx, but we can remove npm to save space
     apt-get purge -y npm && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
