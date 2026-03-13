@@ -63,7 +63,7 @@ pipeline {
                             bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json || true
                             bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html || true
         
-                            pip-audit --format json --output pip-audit-report.json || true
+                            pip-audit --format html --output pip-audit-report.html || true
 
                             echo "📂 Listing files for debugging:"
                             ls -lh bandit-report.html pip-audit-report.json test-results.xml
@@ -223,6 +223,9 @@ pipeline {
                                 -e FRONTEND_URL='${FRONTEND_URL}' \\
                                 -e ACCESS_TOKEN_EXPIRE_MINUTES='30' \\
                                 -e FRONTEND_CORS_ORIGINS='${FRONTEND_CORS_ORIGINS}' \\
+                                -e OTEL_SERVICE_NAME='rnr-backend' \\
+                                -e OTEL_EXPORTER_OTLP_ENDPOINT='http://host.docker.internal:4317' \\
+                                -e OTEL_EXPORTER_OTLP_INSECURE='true' \\
                                 ${IMAGE}:${TAG}
                                 
                                 docker system prune -f
@@ -246,17 +249,17 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: '**/bandit-report.json, **/bandit-report.html, **/zap-report.html, **/test-results.xml, **/pip-audit-report.json', allowEmptyArchive: true
-            junit testResults: '**/test-results.xml', allowEmptyResults: true
+            archiveArtifacts artifacts: '**/bandit-report.*, **/zap-report.html, **/test-results.xml, **/pip-audit-report.json', allowEmptyArchive: true
             publishHTML([
                 allowMissing: true,
                 alwaysLinkToLastBuild: true,
                 keepAll: true,
                 reportDir: '.',
-                reportFiles: 'bandit-report.html, zap-report.html',
+                reportFiles: 'bandit-report.html, zap-report.html, pip-audit-report.html',
                 reportName: 'Security Dashboard',
-                reportTitles: 'Bandit (SAST), OWASP ZAP (DAST)'
+                reportTitles: 'Bandit (SAST), OWASP ZAP (DAST), Pip Audit Report'
             ])
+            junit testResults: '**/test-results.xml', allowEmptyResults: true
         }
         success {
             withCredentials([
