@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl iputils-ping netcat-openbsd dnsutils && \
     npm install -g pm2 && \
     npm cache clean --force && \
+    # We keep nginx, but we can remove npm to save space
     apt-get purge -y npm && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
