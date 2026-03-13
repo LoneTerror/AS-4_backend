@@ -2,17 +2,13 @@
 test_schemas.py
 Unit tests for src/recognition/schemas.py
 
-FIXED:
-- All create/update payload helpers now use category_ids (plural List[UUID])
-  matching the real ReviewCreateRequest field. The old tests used category_id
-  (singular UUID) which no longer exists in the schema.
+UPDATED:
+- Removed 'rating' field from all request and response schemas as it was replaced 
+  by multi-category support (category_ids / category_tags).
+- All create/update payload helpers now use category_ids (plural List[UUID]).
 - Added tests for category_ids list validation: min 1, max 5, unique, valid UUIDs.
-- ReviewUpdateRequest tests now use category_ids (plural list).
 - ReviewResponse tests updated to match the new multi-category response shape:
-  category_tags, category_ids, category_codes instead of category_id/code fields.
-- Removed tests for effective_points/category_multiplier/reviewer_weight/
-  seasonal_multiplier — these fields were removed from ReviewResponse in the
-  multi-category refactor; raw_points is the only points field that remains.
+  category_tags, category_ids, category_codes instead of the old rating field.
 """
 
 import os
@@ -51,14 +47,11 @@ LONG_URL       = "https://cdn.example.com/" + "x" * 490  # > 500 chars total
 
 def valid_create_payload(**overrides):
     """
-    FIXED: category_ids is a List of UUIDs (1–5), not a single UUID.
-    The real ReviewCreateRequest declares:
-        category_ids: List[UUID] = Field(..., min_length=1, max_length=5)
+    category_ids is a List of UUIDs (1–5), not a single UUID.
     """
     base = dict(
         receiver_id=VALID_UUID,
-        rating=4,
-        category_ids=[VALID_CAT_UUID],   # FIXED: plural list
+        category_ids=[VALID_CAT_UUID],
         comment="Great performance across all metrics.",
         image_url=None,
         video_url=None,
@@ -72,7 +65,6 @@ def valid_response_payload(**overrides):
         review_id=uuid4(),
         reviewer_id=uuid4(),
         receiver_id=uuid4(),
-        rating=4,
         comment="Good work",
         image_url=None,
         video_url=None,
@@ -95,27 +87,11 @@ class TestReviewCreateRequest:
 
     def test_valid_payload_accepted(self):
         req = ReviewCreateRequest(**valid_create_payload())
-        assert req.rating == 4
+        assert str(req.receiver_id) == VALID_UUID
 
     def test_receiver_id_must_be_valid_uuid(self):
         with pytest.raises(ValidationError):
             ReviewCreateRequest(**valid_create_payload(receiver_id="not-a-uuid"))
-
-    def test_rating_minimum_is_1(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(rating=0))
-
-    def test_rating_maximum_is_5(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(rating=6))
-
-    def test_rating_exactly_1_is_valid(self):
-        req = ReviewCreateRequest(**valid_create_payload(rating=1))
-        assert req.rating == 1
-
-    def test_rating_exactly_5_is_valid(self):
-        req = ReviewCreateRequest(**valid_create_payload(rating=5))
-        assert req.rating == 5
 
     def test_comment_minimum_length_10(self):
         with pytest.raises(ValidationError):
@@ -168,10 +144,6 @@ class TestReviewCreateRequest:
     def test_all_required_fields_missing_raises(self):
         with pytest.raises(ValidationError):
             ReviewCreateRequest()
-
-    def test_rating_float_is_rejected(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(rating=3.5))
 
     def test_comment_cannot_be_none(self):
         with pytest.raises(ValidationError):
@@ -236,35 +208,23 @@ class TestReviewCreateRequest:
 
 class TestReviewUpdateRequest:
 
-    def test_only_rating_is_valid(self):
-        req = ReviewUpdateRequest(rating=3)
-        assert req.rating == 3
-
     def test_only_comment_is_valid(self):
         req = ReviewUpdateRequest(comment="An updated comment for the review.")
         assert req.comment == "An updated comment for the review."
 
     def test_all_fields_at_once_is_valid(self):
         req = ReviewUpdateRequest(
-            rating=5,
             comment="Updated rating and comment.",
             image_url=SHORT_URL,
             video_url=SHORT_URL,
+            category_ids=[VALID_CAT_UUID]
         )
-        assert req.rating == 5
+        assert req.comment == "Updated rating and comment."
 
     def test_empty_request_raises_at_least_one_field(self):
         with pytest.raises(ValidationError) as exc_info:
             ReviewUpdateRequest()
         assert "At least one field" in str(exc_info.value)
-
-    def test_rating_below_1_rejected(self):
-        with pytest.raises(ValidationError):
-            ReviewUpdateRequest(rating=0)
-
-    def test_rating_above_5_rejected(self):
-        with pytest.raises(ValidationError):
-            ReviewUpdateRequest(rating=6)
 
     def test_comment_too_short_rejected(self):
         with pytest.raises(ValidationError):
@@ -284,12 +244,11 @@ class TestReviewUpdateRequest:
 
     def test_extra_fields_forbidden(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(rating=3, unknown_field="x")
+            ReviewUpdateRequest(comment="valid comment", unknown_field="x")
 
     def test_all_fields_none_explicit_raises(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(rating=None, comment=None,
-                                image_url=None, video_url=None)
+            ReviewUpdateRequest(comment=None, image_url=None, video_url=None, category_ids=None)
 
     def test_only_image_url_is_valid(self):
         req = ReviewUpdateRequest(image_url=SHORT_URL)
@@ -306,11 +265,6 @@ class TestReviewUpdateRequest:
         req = ReviewUpdateRequest(category_ids=[VALID_CAT_UUID])
         assert isinstance(req.category_ids, list)
         assert isinstance(req.category_ids[0], UUID)
-
-    def test_category_ids_with_rating_is_valid(self):
-        req = ReviewUpdateRequest(rating=5, category_ids=[VALID_CAT_UUID])
-        assert req.rating == 5
-        assert len(req.category_ids) == 1
 
     def test_category_ids_must_be_valid_uuids(self):
         with pytest.raises(ValidationError):
@@ -358,10 +312,6 @@ class TestReviewResponse:
         resp = ReviewResponse(**valid_response_payload())
         for field in ("review_at", "created_at", "updated_at"):
             assert isinstance(getattr(resp, field), datetime)
-
-    def test_rating_preserved(self):
-        resp = ReviewResponse(**valid_response_payload(rating=2))
-        assert resp.rating == 2
 
     def test_comment_preserved(self):
         resp = ReviewResponse(**valid_response_payload(comment="Specific comment text"))
