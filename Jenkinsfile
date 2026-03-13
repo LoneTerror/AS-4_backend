@@ -11,10 +11,6 @@ pipeline {
         githubPush() 
     }
 
-    triggers {
-        githubPush() 
-    }
-
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         disableConcurrentBuilds()
@@ -196,7 +192,7 @@ pipeline {
                             string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
                             string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME'),
                             string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
-                            string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'), // Fixed variable names to match shell below
+                            string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'), 
                             string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL'),
                             string(credentialsId: 'rr-backend-cors-origins', variable: 'FRONTEND_CORS_ORIGINS'),
                             string(credentialsId: 'rr-backend-frontend-url', variable: 'FRONTEND_URL')
