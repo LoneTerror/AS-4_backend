@@ -2,15 +2,15 @@
 test_router.py
 Unit tests for src/recognition/router.py
 
-FIXED:
+UPDATED:
+- Removed 'rating' field from all request and response mocks as it was replaced 
+  by multi-category support (category_ids / category_tags).
 - _valid_body() now uses category_ids (plural list) matching the real
-  ReviewCreateRequest schema. Old tests used category_id (singular) which
-  no longer exists and caused every POST to return 422 before the service
-  was even called.
+  ReviewCreateRequest schema.
 - Removed quarters_elapsed / apply_decay stubs — they don't exist in
   points_engine.py.
 - Added stubs for ReviewCategoryCreateRequest and ReviewCategoryUpdateRequest
-  so router.py can be imported (it imports both from src.recognition.schemas).
+  so router.py can be imported.
 - test_create_review_missing_category_ids_returns_422 replaces the old
   singular category_id version.
 - test_create_review_invalid_category_id_uuid_returns_422 updated to use
@@ -43,8 +43,6 @@ for _p in [
     sys.modules.setdefault(_p, types.ModuleType(_p))
 
 # Load the REAL points_engine.
-# FIXED: points_engine.py only exports calculate_points and PointsResult.
-# quarters_elapsed and apply_decay do NOT exist — remove those assignments.
 import pathlib as _pathlib_pe
 _pe_mod_path = _pathlib_pe.Path(__file__).parent.parent / "points_engine.py"
 import importlib.util as _ilu_pe
@@ -103,8 +101,6 @@ if _PaginatedReviewCategoryResponse is None:
         data:       _List[_ReviewCategoryResponse] = []
         pagination: dict = {}
 
-# FIXED: router.py also imports ReviewCategoryCreateRequest and
-# ReviewCategoryUpdateRequest — stub them so the import doesn't fail.
 _ReviewCategoryCreateRequest = getattr(_schemas, "ReviewCategoryCreateRequest", None)
 if _ReviewCategoryCreateRequest is None:
     class _ReviewCategoryCreateRequest(_BM):
@@ -188,7 +184,6 @@ def _review_json(**kw):
         review_id=str(uuid4()),
         reviewer_id=str(uuid4()),
         receiver_id=str(uuid4()),
-        rating=4,
         comment="Good work done here",
         image_url=None,
         video_url=None,
@@ -328,13 +323,11 @@ class TestCreateReviewRoute:
     def _valid_body(self, **kw):
         """
         FIXED: The real ReviewCreateRequest uses category_ids: List[UUID]
-        (plural list), not category_id: UUID (singular). Sending a single
-        UUID string caused every POST to 422 before the service was called.
+        (plural list).
         """
         base = dict(
             receiver_id=str(uuid4()),
-            rating=4,
-            category_ids=[str(uuid4())],   # FIXED: plural list with one UUID
+            category_ids=[str(uuid4())],
             comment="Outstanding performance throughout the quarter.",
         )
         base.update(kw)
@@ -344,12 +337,6 @@ class TestCreateReviewRoute:
         _service.create_review = AsyncMock(return_value=_review_json())
         resp = client.post("/v1/reviews", json=self._valid_body())
         assert resp.status_code == 201
-
-    def test_create_review_missing_rating_returns_422(self):
-        body = self._valid_body()
-        del body["rating"]
-        resp = client.post("/v1/reviews", json=body)
-        assert resp.status_code == 422
 
     def test_create_review_missing_comment_returns_422(self):
         body = self._valid_body()
@@ -364,7 +351,6 @@ class TestCreateReviewRoute:
         assert resp.status_code == 422
 
     def test_create_review_missing_category_ids_returns_422(self):
-        """FIXED: field is category_ids (plural list), not category_id."""
         body = self._valid_body()
         del body["category_ids"]
         resp = client.post("/v1/reviews", json=body)
@@ -373,10 +359,6 @@ class TestCreateReviewRoute:
     def test_create_review_empty_category_ids_returns_422(self):
         """An empty list violates min_length=1 on category_ids."""
         resp = client.post("/v1/reviews", json=self._valid_body(category_ids=[]))
-        assert resp.status_code == 422
-
-    def test_create_review_rating_out_of_range_returns_422(self):
-        resp = client.post("/v1/reviews", json=self._valid_body(rating=6))
         assert resp.status_code == 422
 
     def test_create_review_comment_too_short_returns_422(self):
@@ -408,7 +390,6 @@ class TestCreateReviewRoute:
         assert _service.create_review.called
 
     def test_create_review_invalid_category_id_in_list_returns_422(self):
-        """FIXED: category_ids must be a list of valid UUIDs."""
         resp = client.post("/v1/reviews", json=self._valid_body(
             category_ids=["not-a-uuid"]
         ))
@@ -431,11 +412,11 @@ class TestUpdateReviewRoute:
     def test_update_review_returns_200(self):
         uid = str(uuid4())
         _service.update_review = AsyncMock(return_value=_review_json())
-        resp = client.put(f"/v1/reviews/{uid}", json={"rating": 5})
+        resp = client.put(f"/v1/reviews/{uid}", json={"comment": "New valid comment length"})
         assert resp.status_code == 200
 
     def test_update_review_invalid_uuid_returns_422(self):
-        resp = client.put("/v1/reviews/not-a-uuid", json={"rating": 5})
+        resp = client.put("/v1/reviews/not-a-uuid", json={"comment": "Valid length comment"})
         assert resp.status_code == 422
 
     def test_update_review_empty_body_returns_422(self):
@@ -446,14 +427,9 @@ class TestUpdateReviewRoute:
     def test_update_review_passes_id_as_string_to_service(self):
         uid = str(uuid4())
         _service.update_review = AsyncMock(return_value=_review_json())
-        client.put(f"/v1/reviews/{uid}", json={"rating": 3})
+        client.put(f"/v1/reviews/{uid}", json={"comment": "Valid length comment"})
         args = _service.update_review.call_args[0]
         assert args[0] == uid
-
-    def test_update_review_rating_out_of_range_returns_422(self):
-        uid = str(uuid4())
-        resp = client.put(f"/v1/reviews/{uid}", json={"rating": 10})
-        assert resp.status_code == 422
 
     def test_update_review_service_403_propagates(self):
         from fastapi import HTTPException
@@ -461,7 +437,7 @@ class TestUpdateReviewRoute:
         _service.update_review = AsyncMock(
             side_effect=HTTPException(status_code=403, detail="Not allowed")
         )
-        resp = client.put(f"/v1/reviews/{uid}", json={"rating": 3})
+        resp = client.put(f"/v1/reviews/{uid}", json={"comment": "Valid length comment"})
         assert resp.status_code == 403
 
     def test_update_review_service_404_propagates(self):
@@ -470,7 +446,7 @@ class TestUpdateReviewRoute:
         _service.update_review = AsyncMock(
             side_effect=HTTPException(status_code=404, detail="Review not found")
         )
-        resp = client.put(f"/v1/reviews/{uid}", json={"rating": 3})
+        resp = client.put(f"/v1/reviews/{uid}", json={"comment": "Valid length comment"})
         assert resp.status_code == 404
 
     def test_update_review_comment_only_accepted(self):
@@ -482,11 +458,10 @@ class TestUpdateReviewRoute:
 
     def test_update_review_extra_field_rejected(self):
         uid = str(uuid4())
-        resp = client.put(f"/v1/reviews/{uid}", json={"rating": 3, "hack": "x"})
+        resp = client.put(f"/v1/reviews/{uid}", json={"comment": "Valid length comment", "hack": "x"})
         assert resp.status_code == 422
 
     def test_update_review_category_ids_only_accepted(self):
-        """FIXED: field is category_ids (plural list), not category_id."""
         uid = str(uuid4())
         _service.update_review = AsyncMock(return_value=_review_json())
         resp = client.put(f"/v1/reviews/{uid}",
@@ -494,7 +469,6 @@ class TestUpdateReviewRoute:
         assert resp.status_code == 200
 
     def test_update_review_invalid_category_ids_returns_422(self):
-        """FIXED: category_ids list element must be a valid UUID."""
         uid = str(uuid4())
         resp = client.put(f"/v1/reviews/{uid}",
                           json={"category_ids": ["bad-uuid"]})
