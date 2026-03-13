@@ -40,6 +40,8 @@ pipeline {
                     }
                     steps {
                         sh '''
+                            apt-get update && apt-get install -y libatomic1
+                            
                             python -m venv venv
                             . venv/bin/activate
                             pip install --upgrade pip
