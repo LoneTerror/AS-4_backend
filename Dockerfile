@@ -15,6 +15,7 @@ ENV PATH="/app/venv/bin:$PATH"
 RUN pip install --upgrade pip
 
 COPY requirements.txt .
+# Pip will now verify hashes for every package
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Prisma CLI

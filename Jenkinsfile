@@ -12,8 +12,6 @@ pipeline {
     }
 
     triggers {
-        // Triggers the build automatically when a push or PR is made
-        // Note: Requires GitHub/GitLab webhook pointing to your Jenkins URL
         githubPush() 
     }
 
@@ -36,7 +34,6 @@ pipeline {
                     agent {
                         docker {
                             image 'python:3.10-slim'
-                            // REMOVE the -v and -w flags, keep only the user flag
                             args '-u 0:0' 
                         }
                     }
@@ -76,6 +73,7 @@ pipeline {
                             ls -lh bandit-report.html pip-audit-report.json test-results.xml
                         '''
                     }
+                }
             }
         }
 
