@@ -131,18 +131,26 @@ pipeline {
                                         sh """
                                         docker run --rm --network zap-net alpine sh -c '
                                             for i in \$(seq 1 30); do
-                                                nc -z target-app 8000 && exit 0
-                                                echo "Waiting for target-app..."
+                                                if nc -z target-app 8000; then
+                                                    echo "Success: target-app is UP"
+                                                    exit 0
+                                                fi
+                                                echo "Waiting for target-app... (Check logs if this repeats)"
                                                 sleep 2
                                             done
                                             exit 1'
                                         """
                                         sh """
                                         docker run --rm --user 0 --network zap-net \
-                                          -v \$(pwd):/zap/wrk/:rw \
-                                          ghcr.io/zaproxy/zaproxy:stable \
-                                          zap-baseline.py -t http://target-app:8000 -r zap-report.html -I
+                                            -v \$(pwd):/zap/wrk/:rw \
+                                            ghcr.io/zaproxy/zaproxy:stable \
+                                            zap-baseline.py -t http://target-app:8000 -r zap-report.html -I
                                         """
+                                    }
+                                    catch (Exception e) {
+                                        echo "Printing target-app logs because it failed to start:"
+                                        sh 'docker logs target-app || true'
+                                        throw e
                                     } finally {
                                         sh 'docker stop target-app || true'
                                         sh 'docker rm target-app || true'
