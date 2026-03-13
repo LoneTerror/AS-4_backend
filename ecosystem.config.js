@@ -24,7 +24,7 @@ const pythonServices = [
 const apps = [
   {
     name: "nginx",
-    script: "/usr/sbin/nginx",
+    script: "nginx",
     args: "-c /app/nginx.conf -g 'daemon off;'",
     interpreter: "none",
     autorestart: true,
