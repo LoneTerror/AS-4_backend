@@ -43,11 +43,11 @@ pipeline {
                             python -m venv venv
                             . venv/bin/activate
                             pip install --upgrade pip
-                            pip install -r requirements.txt 
+                            pip install pip-tools
+                            pip-sync requirements.txt
                             pip install pytest bandit pip-audit
-        
                             echo "🧪 Running Unit Tests..."
-                            pytest tests/ --disable-warnings --junitxml=test-results.xml
+                            pytest src/ --disable-warnings --junitxml=test-results.xml
         
                             echo "🔒 Running Static Security Scans..."
                             # We use '|| true' so the pipeline doesn't stop before archiving the reports
@@ -55,6 +55,9 @@ pipeline {
                             bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html || true
         
                             pip-audit --format json --output pip-audit-report.json || true
+
+                            echo "📂 Listing files for debugging:"
+                            ls -lh bandit-report.html pip-audit-report.json
                             '''
                         }
                     }
@@ -100,22 +103,22 @@ pipeline {
                                         docker run -d \
                                         --name target-app \
                                         --network zap-net \
-                                        -e DATABASE_URL="${DATABASE_URL}" \
-                                        -e REDIS_URL="${REDIS_URL}" \
-                                        -e SECRET_KEY="${SECRET_KEY}" \
-                                        -e ALGORITHM="${ALGORITHM}" \
-                                        -e AUTH_SERVICE_URL="${AUTH_SERVICE_URL}" \
-                                        -e SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN}" \
-                                        -e SLACK_DEFAULT_CHANNEL_ID="${SLACK_DEFAULT_CHANNEL_ID}" \
-                                        -e SMTP_PASSWORD="${SMTP_PASSWORD}" \
-                                        -e SMTP_USERNAME="${SMTP_USERNAME}" \
+                                        -e DATABASE_URL="$DATABASE_URL" \
+                                        -e REDIS_URL="$REDIS_URL" \
+                                        -e SECRET_KEY="$SECRET_KEY" \
+                                        -e ALGORITHM="$ALGORITHM" \
+                                        -e AUTH_SERVICE_URL="$AUTH_SERVICE_URL" \
+                                        -e SLACK_BOT_TOKEN="$SLACK_BOT_TOKEN" \
+                                        -e SLACK_DEFAULT_CHANNEL_ID="$SLACK_DEFAULT_CHANNEL_ID" \
+                                        -e SMTP_PASSWORD="$SMTP_PASSWORD" \
+                                        -e SMTP_USERNAME="$SMTP_USERNAME" \
                                         -e SMTP_HOST="smtp.gmail.com" \
                                         -e SMTP_PORT="587" \
-                                        -e SMTP_FROM_EMAIL="${SMTP_FROM_EMAIL}"\
+                                        -e SMTP_FROM_EMAIL="$SMTP_FROM_EMAIL"\
                                         -e SMTP_USE_TLS="true" \
                                         -e SMTP_USE_SSL="false" \
-                                        -e FRONTEND_URL="${FRONTEND_URL}" \
-                                        -e FRONTEND_CORS_ORIGINS="${FRONTEND_CORS_ORIGINS}" \
+                                        -e FRONTEND_URL="$FRONTEND_URL" \
+                                        -e FRONTEND_CORS_ORIGINS="$FRONTEND_CORS_ORIGINS" \
                                         -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
                                         ${IMAGE}:${TAG}
                                         """

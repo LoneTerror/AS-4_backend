@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
-from jose import jwt, JWTError
+import jwt  
+from jwt.exceptions import PyJWTError  
 import bcrypt
 import os
 import hashlib
@@ -65,9 +66,6 @@ def verify_refresh_token(token: str, stored_hash: str) -> bool:
 # ================================
 
 def create_access_token(data: dict) -> str:
-    """
-    Create JWT access token.
-    """
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
@@ -81,13 +79,9 @@ def create_access_token(data: dict) -> str:
 
 
 def decode_token(token: str):
-    """
-    Decode JWT token.
-    Returns payload or None.
-    """
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
+    except PyJWTError:
         return None
 
 
@@ -96,10 +90,6 @@ def decode_token(token: str):
 # ================================
 
 def create_reset_token(employee_id: str, email: str) -> str:
-    """
-    Create short-lived JWT token for password reset.
-    Valid for 15 minutes only.
-    """
     to_encode = {
         "sub": employee_id,
         "email": email,
@@ -112,17 +102,12 @@ def create_reset_token(employee_id: str, email: str) -> str:
 
 
 def decode_reset_token(token: str):
-    """
-    Decode and validate password reset token.
-    Returns payload if valid, None otherwise.
-    """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         
-        # Validate purpose
         if payload.get("purpose") != "password_reset":
             return None
             
         return payload
-    except JWTError:
+    except PyJWTError:
         return None

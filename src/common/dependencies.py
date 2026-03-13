@@ -10,7 +10,8 @@ from fastapi.routing import APIRoute
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from prisma import Prisma
-from jose import jwt, JWTError, ExpiredSignatureError
+import jwt  
+from jwt.exceptions import PyJWTError, ExpiredSignatureError
 
 from src.prisma.client import db
 from src.common.cache import cache_get, cache_set
@@ -219,7 +220,7 @@ async def get_current_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token has expired",
             )
-        except JWTError:
+        except PyJWTError: 
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token signature",
