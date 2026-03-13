@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from prisma.errors import UniqueViolationError
 from starlette import status
 
 # --- IMPORT LOGGER ---
@@ -55,6 +56,25 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "error": {
                 "code": map_status_to_error_code(exc.status_code),
                 "message": exc.detail,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "path": request.url.path,
+                "request_id": request_id
+            }
+        }
+    )
+
+async def prisma_unique_violation_handler(request: Request, exc: UniqueViolationError):
+    request_id = getattr(request.state, "request_id", "unknown")
+    
+    # Log the conflict
+    logger.warning(f"[{request_id}] Unique Constraint Violation at {request.url.path}: {str(exc)}")
+
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "error": {
+                "code": "CONFLICT",
+                "message": "A record with this unique identifier already exists.",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "path": request.url.path,
                 "request_id": request_id

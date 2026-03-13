@@ -1,9 +1,21 @@
 import uvicorn
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
+from fastapi.exceptions import RequestValidationError
+from prisma.errors import UniqueViolationError
+
+from src.common.middleware import (
+    request_rate_limit_middleware,
+    http_exception_handler,
+    validation_exception_handler,
+    generic_exception_handler,
+    prisma_unique_violation_handler
+)
+
+# --- OpenTelemetry Imports ---
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -126,6 +138,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, generic_exception_handler)
 
 app.include_router(router)
 

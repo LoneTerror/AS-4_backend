@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from prisma.errors import UniqueViolationError
 from contextlib import asynccontextmanager
 
 # --- OpenTelemetry Imports ---
@@ -20,7 +21,8 @@ from src.common.middleware import (
     request_rate_limit_middleware,
     http_exception_handler,
     validation_exception_handler,
-    generic_exception_handler
+    generic_exception_handler,
+    prisma_unique_violation_handler
 )
 from . import router as rewards_router
 from src.core.logger import logger
@@ -138,6 +140,7 @@ app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
+app.add_exception_handler(UniqueViolationError,prisma_unique_violation_handler)
 
 app.include_router(rewards_router.router)
 

@@ -146,6 +146,11 @@ def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
     seen: set[tuple[str, str]] = set()
     results: list[tuple[str, str]] = []
 
+    results = []
+    
+    # 1. Grab the root_path defined in your FastAPI app (e.g., "/v1/rewards")
+    root = app.root_path.rstrip("/") if app.root_path else ""
+
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue

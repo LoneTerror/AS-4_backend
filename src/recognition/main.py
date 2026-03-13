@@ -4,6 +4,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from prisma.errors import UniqueViolationError
 from contextlib import asynccontextmanager
 
 # --- OpenTelemetry Imports ---
@@ -28,6 +29,7 @@ from src.common.middleware import (
     http_exception_handler,
     validation_exception_handler,
     generic_exception_handler,
+    prisma_unique_violation_handler
 )
 from src.common.route_registry import register_app_routes
 
@@ -130,6 +132,7 @@ app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(UniqueViolationError,prisma_unique_violation_handler)
 
 # Grab the env var, default to localhost for local dev fallback
 cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS")
