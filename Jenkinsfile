@@ -46,6 +46,10 @@ pipeline {
                             pip install pip-tools
                             pip-sync requirements.txt
                             pip install pytest bandit pip-audit
+
+                            echo "Generate Prisma Client..."
+                            prisma generate
+
                             echo "🧪 Running Unit Tests..."
                             pytest src/ --disable-warnings --junitxml=test-results.xml
         
