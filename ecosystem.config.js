@@ -41,7 +41,7 @@ const pythonApps = pythonServices.map((svc) => ({
   name: svc.name,
   script: "bash",
   // TRICK: Use bash 'sleep' to stagger initial boot, then 'exec' to hand the PID to Gunicorn
-  args: `-c 'sleep ${svc.delay} && exec /app/venv/bin/gunicorn src.${svc.name}.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${svc.port} --workers 1 --timeout 120 --graceful-timeout 60 --worker-tmp-dir /tmp'`,
+  args: `-c 'sleep ${svc.delay} && exec /app/venv/bin/python -m gunicorn src.${svc.name}.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${svc.port} --workers 1 --timeout 120'`,
   cwd: "/app",
   interpreter: "none",
   autorestart: true,

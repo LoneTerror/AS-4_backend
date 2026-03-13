@@ -1,9 +1,13 @@
 # FastAPI and ASGI server
 fastapi>=0.111.0,<1.0.0
-uvicorn[standard]; sys_platform == 'win32'
-uvicorn; sys_platform != 'win32'
+# Base uvicorn for all platforms
+uvicorn
+# High-performance extras for Linux/Production only
 uvloop; sys_platform != 'win32'
 httptools; sys_platform != 'win32'
+# Standard extras for Windows/Local development only
+watchfiles; sys_platform == 'win32'
+colorama; sys_platform == 'win32'
 gunicorn
 
 # Pydantic and Validation
