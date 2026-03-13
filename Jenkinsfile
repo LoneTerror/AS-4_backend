@@ -148,8 +148,9 @@ pipeline {
                                         """
                                     }
                                     catch (Exception e) {
-                                        echo "Printing target-app logs because it failed to start:"
-                                        sh 'docker logs target-app || true'
+                                        echo "ERROR: target-app failed to start. Fetching logs..."
+                                        sh 'docker inspect target-app' 
+                                        sh 'docker logs target-app'    
                                         throw e
                                     } finally {
                                         sh 'docker stop target-app || true'
