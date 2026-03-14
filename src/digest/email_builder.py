@@ -1,15 +1,21 @@
 """
 digest/email_builder.py
 ────────────────────────
-Builds the branded HTML digest email.
-Reuses the _email_shell, _BRAND, and _ordinal helpers from
-notifications/email_sender.py — copy the import path to match your project.
+Builds the weekly recognition digest email.
+
+Design: matches the HDFC-style template used by notifications/email_sender.py.
+  - Same _shell wrapper (navy header band, red stripe, footer)
+  - Same _B palette (#E31837 red / #004C8F navy)
+  - Arial only — no Segoe UI, no gradients, no pill badges
+  - Points formula: sum(category_multipliers) × reviewer_weight
+    (rating and seasonal_multiplier have been removed)
 """
 
-from datetime import datetime
+from __future__ import annotations
+
 from typing import Optional
 
-from src.notifications.email_sender import _email_shell, _BRAND
+from src.notifications.email_sender import _B, _shell, _sanitise
 
 from .schemas import TopPerformer, WeeklyDigestData
 
@@ -18,164 +24,280 @@ def build_digest_html(data: WeeklyDigestData) -> tuple[str, str]:
     """
     Returns (subject, html_body) for the weekly digest email.
     """
-    b = _BRAND
+    b = _B
 
     week_label = (
-        f"{data.week_start.strftime('%b %d')} – {data.week_end.strftime('%b %d, %Y')}"
+        f"{data.week_start.strftime('%d %b')} "
+        f"– {data.week_end.strftime('%d %b %Y')}"
     )
-    subject = f"Weekly Recognition Digest · {week_label}"
+    subject   = f"Weekly Recognition Digest — {week_label} | Aabhar"
     preheader = (
-        f"{data.total_recognitions} recognition{'s' if data.total_recognitions != 1 else ''} "
-        f"this week · {data.unique_givers} giver{'s' if data.unique_givers != 1 else ''} · "
-        f"{data.unique_receivers} receiver{'s' if data.unique_receivers != 1 else ''}"
+        f"{data.total_recognitions} "
+        f"recognition{'s' if data.total_recognitions != 1 else ''} this week · "
+        f"{data.unique_givers} giver{'s' if data.unique_givers != 1 else ''} · "
+        f"{data.unique_receivers} "
+        f"receiver{'s' if data.unique_receivers != 1 else ''}"
     )
 
-    # ── Stat cards ──────────────────────────────────────────────────────────
-    def stat_card(value: str, label: str, accent: str) -> str:
+    # ── Stat cards ─────────────────────────────────────────────────────────
+    # Four equal-width cells in one row, each a navy-accented number + label.
+    def _stat_cell(value: str, label: str, accent: str) -> str:
         return f"""
-        <td align="center" style="padding:0 8px;">
-          <table cellpadding="0" cellspacing="0"
-                 style="background:{b['body_bg']};border-radius:10px;
-                        border:1px solid {b['border']};width:130px;">
-            <tr>
-              <td align="center" style="padding:18px 12px 14px;">
-                <p style="margin:0;font-size:30px;font-weight:700;line-height:1;
-                           color:{accent};font-family:'Segoe UI',Arial,sans-serif;">
-                  {value}
-                </p>
-                <p style="margin:6px 0 0;font-size:11px;font-weight:600;
-                           text-transform:uppercase;letter-spacing:.07em;
-                           color:{b['text_muted']};font-family:'Segoe UI',Arial,sans-serif;">
-                  {label}
-                </p>
-              </td>
-            </tr>
-          </table>
-        </td>"""
+              <td align="center" style="padding:0 6px;">
+                <table role="presentation" cellpadding="0" cellspacing="0"
+                       style="width:116px;background:{b['card_bg']};
+                              border:1px solid {b['border']};border-radius:2px;
+                              border-top:3px solid {accent};">
+                  <tr>
+                    <td align="center" style="padding:16px 8px 14px;">
+                      <span style="display:block;font-family:Arial,sans-serif;
+                                   font-size:28px;font-weight:700;line-height:1;
+                                   color:{accent};">
+                        {value}
+                      </span>
+                      <span style="display:block;margin-top:6px;
+                                   font-family:Arial,sans-serif;font-size:9.5px;
+                                   font-weight:700;letter-spacing:1.2px;
+                                   text-transform:uppercase;color:{b['txt_muted']};">
+                        {label}
+                      </span>
+                    </td>
+                  </tr>
+                </table>
+              </td>"""
 
     stats_row = f"""
-      <tr>
-        <td style="padding:28px 40px 0;">
-          <table cellpadding="0" cellspacing="0" width="100%">
-            <tr>
-              {stat_card(str(data.total_recognitions), "Recognitions",   b['violet'])}
-              {stat_card(str(data.unique_givers),      "Givers",          b['gradient_mid'])}
-              {stat_card(str(data.unique_receivers),   "Receivers",       b['pink'])}
-              {stat_card(str(int(data.total_points_awarded)), "Points",   "#B45309")}
-            </tr>
-          </table>
-        </td>
-      </tr>"""
+        <!-- Stat cards -->
+        <tr>
+          <td style="padding:24px 26px 0;">
+            <table role="presentation" width="100%"
+                   cellpadding="0" cellspacing="0">
+              <tr>
+                {_stat_cell(str(data.total_recognitions),        "Recognitions", b["navy"])}
+                {_stat_cell(str(data.unique_givers),             "Givers",       b["navy"])}
+                {_stat_cell(str(data.unique_receivers),          "Receivers",    b["red"])}
+                {_stat_cell(str(int(data.total_points_awarded)), "Points",       b["red"])}
+              </tr>
+            </table>
+          </td>
+        </tr>"""
 
-    # ── Top performer rows ───────────────────────────────────────────────────
-    def performer_row(label: str, person: Optional[TopPerformer], accent: str) -> str:
+    # ── Top performers table ────────────────────────────────────────────────
+    def _performer_row(badge: str, badge_bg: str, person: Optional[TopPerformer]) -> str:
         if person is None:
             return ""
         unit = "recognition" if person.count == 1 else "recognitions"
+        name = _sanitise(person.username)
         return f"""
-          <tr>
-            <td style="padding:10px 0;border-bottom:1px solid {b['border']};">
-              <table cellpadding="0" cellspacing="0" width="100%">
-                <tr>
-                  <td>
-                    <span style="display:inline-block;padding:3px 10px;
-                                 background:{accent};border-radius:99px;
-                                 font-size:10px;font-weight:700;
-                                 text-transform:uppercase;letter-spacing:.08em;
-                                 color:#fff;font-family:'Segoe UI',Arial,sans-serif;">
-                      {label}
-                    </span>
-                    <span style="margin-left:10px;font-size:15px;font-weight:600;
-                                 color:{b['text_primary']};
-                                 font-family:'Segoe UI',Arial,sans-serif;">
-                      {person.username}
-                    </span>
-                  </td>
-                  <td align="right">
-                    <span style="font-size:13px;color:{b['text_secondary']};
-                                 font-family:'Segoe UI',Arial,sans-serif;">
-                      {person.count} {unit}
-                    </span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>"""
+              <tr>
+                <td style="padding:11px 0;border-bottom:1px solid {b['divider']};">
+                  <table role="presentation" width="100%"
+                         cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td valign="middle">
+                        <!-- Badge -->
+                        <table role="presentation" cellpadding="0"
+                               cellspacing="0" style="display:inline-table;">
+                          <tr>
+                            <td style="background-color:{badge_bg};
+                                       padding:3px 10px 4px;border-radius:2px;">
+                              <span style="font-family:Arial,sans-serif;
+                                           font-size:8.5px;font-weight:700;
+                                           letter-spacing:1.2px;
+                                           text-transform:uppercase;color:#FFFFFF;">
+                                {badge}
+                              </span>
+                            </td>
+                          </tr>
+                        </table>
+                        <!-- Name -->
+                        <span style="margin-left:10px;font-family:Arial,sans-serif;
+                                     font-size:13.5px;font-weight:600;
+                                     color:{b['txt_head']};">
+                          {name}
+                        </span>
+                      </td>
+                      <td align="right" valign="middle">
+                        <span style="font-family:Arial,sans-serif;font-size:12.5px;
+                                     color:{b['txt_muted']};">
+                          {person.count}&nbsp;{unit}
+                        </span>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>"""
 
-    performers_block = ""
-    has_performers = data.top_giver or data.top_receiver
-    if has_performers:
-        performers_block = f"""
-      <tr>
-        <td style="padding:24px 40px 0;">
-          <p style="margin:0 0 12px;font-size:12px;font-weight:700;
-                    text-transform:uppercase;letter-spacing:.08em;
-                    color:{b['text_muted']};font-family:'Segoe UI',Arial,sans-serif;">
-            Top Performers
-          </p>
-          <table cellpadding="0" cellspacing="0" width="100%">
-            {performer_row("Top Giver",    data.top_giver,    b['violet'])}
-            {performer_row("Top Receiver", data.top_receiver, b['pink'])}
-          </table>
-        </td>
-      </tr>"""
+    performers_html = ""
+    if data.top_giver or data.top_receiver:
+        rows = (
+            _performer_row("Top Giver",    b["navy"], data.top_giver)
+            + _performer_row("Top Receiver", b["red"],  data.top_receiver)
+        )
+        performers_html = f"""
+        <!-- Top performers -->
+        <tr>
+          <td style="padding:22px 26px 0;">
+            <p style="margin:0 0 10px;font-family:Arial,sans-serif;font-size:9.5px;
+                      font-weight:700;letter-spacing:1.3px;text-transform:uppercase;
+                      color:{b['txt_muted']};">
+              Top Performers This Week
+            </p>
+            <table role="presentation" width="100%"
+                   cellpadding="0" cellspacing="0">
+              {rows}
+            </table>
+          </td>
+        </tr>"""
 
-    # ── Empty-week state ─────────────────────────────────────────────────────
-    empty_block = ""
+    # ── Empty-week notice ───────────────────────────────────────────────────
+    empty_html = ""
     if data.total_recognitions == 0:
-        empty_block = f"""
-      <tr>
-        <td style="padding:24px 40px 0;text-align:center;">
-          <p style="margin:0;font-size:14px;color:{b['text_muted']};
-                    font-style:italic;font-family:'Segoe UI',Arial,sans-serif;">
-            No recognitions were given this week. Encourage your team to start recognising!
-          </p>
-        </td>
-      </tr>"""
+        empty_html = f"""
+        <tr>
+          <td style="padding:22px 26px 0;">
+            <table role="presentation" width="100%" cellpadding="0"
+                   cellspacing="0"
+                   style="background-color:{b['navy_light']};
+                          border-left:4px solid {b['navy']};border-radius:2px;">
+              <tr>
+                <td style="padding:14px 16px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:13px;
+                            line-height:1.65;color:{b['txt_body']};">
+                    No recognitions were submitted this week. We encourage managers
+                    to promote the use of the Aabhar Recognition Platform and
+                    foster a culture of peer acknowledgement within their teams.
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>"""
 
-    # ── Header ───────────────────────────────────────────────────────────────
-    header_html = f"""
-      <tr>
-        <td style="padding:30px 40px 20px;border-bottom:1px solid {b['border']};">
-          <span style="display:inline-block;padding:4px 14px;
-                       background:linear-gradient(135deg,{b['gradient_start']},{b['gradient_end']});
-                       border-radius:99px;font-size:11px;font-weight:700;
-                       text-transform:uppercase;letter-spacing:.08em;color:#fff;
-                       font-family:'Segoe UI',Arial,sans-serif;">
-            Weekly Digest
-          </span>
-          <h1 style="margin:14px 0 4px;font-size:21px;font-weight:700;line-height:1.35;
-                     color:{b['text_primary']};font-family:'Segoe UI',Arial,sans-serif;">
-            Recognition Summary
-          </h1>
-          <p style="margin:0;font-size:13px;color:{b['text_muted']};
-                    font-family:'Segoe UI',Arial,sans-serif;">
-            {week_label}
-          </p>
-        </td>
-      </tr>"""
+    # ── Points note ─────────────────────────────────────────────────────────
+    points_note = ""
+    if data.total_recognitions > 0:
+        points_note = f"""
+        <tr>
+          <td style="padding:20px 26px 0;">
+            <table role="presentation" width="100%" cellpadding="0"
+                   cellspacing="0"
+                   style="background-color:{b['navy_light']};
+                          border-left:4px solid {b['navy']};border-radius:2px;">
+              <tr>
+                <td style="padding:12px 16px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;
+                            line-height:1.65;color:{b['txt_body']};">
+                    <strong style="color:{b['navy']};">Points Methodology:&nbsp;</strong>
+                    All recognition points are calculated as
+                    <em>sum of selected category multipliers &times; reviewer weight</em>.
+                    Multipliers are frozen as snapshots at the time of submission
+                    to ensure historical totals remain reproducible.
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>"""
 
-    # ── Body ─────────────────────────────────────────────────────────────────
-    body_html = f"""
-      {stats_row}
-      {performers_block}
-      {empty_block}
-      <tr>
-        <td style="padding:28px 40px 36px;">
-          <table width="100%" cellpadding="0" cellspacing="0">
-            <tr>
-              <td width="56" height="3" style="border-radius:2px;
-                   background:linear-gradient(90deg,{b['gradient_start']},{b['gradient_end']});">
-                &nbsp;
-              </td>
-              <td height="3" style="background:{b['border']};"></td>
-            </tr>
-          </table>
-        </td>
-      </tr>"""
+    # ── Sign-off ────────────────────────────────────────────────────────────
+    signoff_html = f"""
+        <tr>
+          <td style="padding:26px 26px 32px;">
+            <!-- Thin divider rule -->
+            <table role="presentation" width="100%"
+                   cellpadding="0" cellspacing="0"
+                   style="margin-bottom:22px;">
+              <tr>
+                <td style="border-top:1px solid {b['divider']};
+                           height:0;font-size:0;line-height:0;">&nbsp;</td>
+              </tr>
+            </table>
 
-    return subject, _email_shell(
+            <p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13.5px;
+                      line-height:1.8;color:{b['txt_body']};">
+              Dear Manager,
+            </p>
+            <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13.5px;
+                      line-height:1.8;color:{b['txt_body']};">
+              Please find enclosed the weekly recognition summary for the period
+              <strong>{week_label}</strong>. This digest is generated automatically
+              every Monday and delivered to all managers on the Aabhar platform.
+            </p>
+            <p style="margin:0 0 22px;font-family:Arial,sans-serif;font-size:13.5px;
+                      line-height:1.8;color:{b['txt_body']};">
+              For a full breakdown of individual recognitions, category details,
+              and employee point balances, please log in to the
+              Aabhar Employee Recognition &amp; Rewards Platform.
+            </p>
+
+            <!-- Navy callout -->
+            <table role="presentation" width="100%" cellpadding="0"
+                   cellspacing="0"
+                   style="margin:0 0 24px;background-color:{b['navy_light']};
+                          border-left:4px solid {b['navy']};border-radius:2px;">
+              <tr>
+                <td style="padding:13px 16px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:13px;
+                            line-height:1.65;color:{b['txt_body']};">
+                    <strong style="color:{b['navy']};">Action Required:&nbsp;</strong>
+                    Log in to Aabhar to review this week's recognitions in full,
+                    manage team point allocations, and take any pending actions.
+                  </p>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:13.5px;
+                      line-height:1.8;color:{b['txt_body']};">
+              Yours sincerely,<br/>
+              <strong style="color:{b['txt_head']};">
+                Aabhar Recognition Platform
+              </strong>
+            </p>
+          </td>
+        </tr>"""
+
+    # ── Content assembly ────────────────────────────────────────────────────
+    content_html = f"""
+        <!-- ═══ DIGEST HEADER ═══════════════════════════════════════════ -->
+        <tr>
+          <td style="padding:26px 26px 20px;
+                     border-bottom:2px solid {b['divider']};">
+            <!-- Badge -->
+            <table role="presentation" cellpadding="0" cellspacing="0"
+                   style="margin-bottom:12px;">
+              <tr>
+                <td style="background-color:{b['navy']};
+                           padding:4px 13px 5px;border-radius:2px;">
+                  <span style="font-family:Arial,sans-serif;font-size:9px;
+                               font-weight:700;letter-spacing:1.4px;
+                               text-transform:uppercase;color:#FFFFFF;">
+                    Weekly Digest
+                  </span>
+                </td>
+              </tr>
+            </table>
+            <!-- Title -->
+            <h1 style="margin:0 0 5px;font-family:Arial,sans-serif;
+                       font-size:19px;font-weight:700;line-height:1.3;
+                       color:{b['txt_head']};">
+              Weekly Recognition Summary
+            </h1>
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;
+                      color:{b['txt_muted']};letter-spacing:0.2px;">
+              {week_label}
+            </p>
+          </td>
+        </tr>
+
+        {stats_row}
+        {performers_html}
+        {empty_html}
+        {points_note}
+        {signoff_html}"""
+
+    return subject, _shell(
         preheader=preheader,
-        header_html=header_html,
-        body_html=body_html,
+        content_html=content_html,
     )
