@@ -1,8 +1,7 @@
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Any
 from uuid import UUID
-from datetime import datetime, date
-from decimal import Decimal
+from datetime import datetime
 
 
 # ─────────────────────────────────────────────
@@ -235,33 +234,3 @@ class AuditLogResponse(BaseModel):
 class AuditLogListResponse(BaseModel):
     data: List[AuditLogResponse]
     pagination: PaginationMeta
-
-
-# ─────────────────────────────────────────────
-# 5.7 Seasonal Multiplier Schemas
-# ─────────────────────────────────────────────
-
-class SeasonalMultiplierResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    seasonal_multiplier_id: UUID
-    quarter: int
-    label: str
-    multiplier: Decimal
-    effective_from: Optional[date] = None
-    effective_to: Optional[date] = None
-    created_at: datetime
-
-
-class CreateSeasonalMultiplierRequest(BaseModel):
-    quarter: int = Field(..., ge=1, le=4)
-    label: str = Field(..., max_length=50)
-    multiplier: Decimal = Field(..., gt=0)
-    effective_from: Optional[date] = None
-    effective_to: Optional[date] = None
-
-
-class UpdateSeasonalMultiplierRequest(BaseModel):
-    label: Optional[str] = Field(None, max_length=50)
-    multiplier: Optional[Decimal] = Field(None, gt=0)
-    effective_from: Optional[date] = None
-    effective_to: Optional[date] = None

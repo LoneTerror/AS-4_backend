@@ -42,17 +42,13 @@ logger = logging.getLogger(__name__)
 
 
 # ── OpenTelemetry setup ───────────────────────────────────────────────────────
-# Mirrors analytics/main.py exactly:
-#   - Always create provider + resource
-#   - Only attach OTLP exporter when OTEL_EXPORTER_OTLP_ENDPOINT is set
-#   - Never crashes locally when Jaeger is not running
 resource = Resource.create({"service.name": "rnr-employees"})
 provider = TracerProvider(resource=resource)
 
 otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 if otlp_endpoint:
     try:
-        otlp_exporter = OTLPSpanExporter()   # reads endpoint from env automatically
+        otlp_exporter = OTLPSpanExporter()
         provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
         logger.info("OpenTelemetry: OTLP exporter → %s", otlp_endpoint)
     except Exception as exc:
@@ -151,11 +147,6 @@ async def lifespan(app: FastAPI):
     else:
         print("Employee Service: ⚠️  Workers not started — Redis unavailable")
 
-    # ── 6. Yield — app is live, /health is reachable ──────────────────────────
-    #
-    # register_app_routes runs AFTER yield in a background task so it never
-    # blocks startup. Until it completes, check_route_permission falls back
-    # to default_roles — the same safe default it has always used.
     print("Employee Service: 🟢 Service is live")
 
     route_registry_task = asyncio.create_task(
@@ -250,10 +241,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.middleware("http")(request_rate_limit_middleware)
+
 app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
+
 
 @app.get("/health", tags=["System"])
 async def health_check():

@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi.exceptions import RequestValidationError
 from prisma.errors import UniqueViolationError
 from src.common.middleware import (
+    request_rate_limit_middleware,
     http_exception_handler,
     validation_exception_handler,
     generic_exception_handler,
@@ -105,6 +106,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.middleware("http")(request_rate_limit_middleware)
 
 app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)

@@ -1,6 +1,6 @@
 # src/organization/router.py
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
@@ -12,7 +12,6 @@ designations_router = APIRouter()
 department_types_router = APIRouter()
 statuses_router = APIRouter()
 audit_logs_router = APIRouter()
-seasonal_multipliers_router = APIRouter()
 
 
 # ══════════════════════════════════════════════
@@ -177,52 +176,3 @@ async def list_audit_logs(
 async def get_audit_log(audit_id: str, current_user: CurrentUser = Depends(check_route_permission)):
     """Returns full detail of a single audit log entry. SUPER_ADMIN only."""
     return await service.get_audit_log(audit_id)
-
-
-# ══════════════════════════════════════════════
-#  5.7 SEASONAL MULTIPLIERS ROUTES
-# ══════════════════════════════════════════════
-
-@seasonal_multipliers_router.get("/active", response_model=schemas.SeasonalMultiplierResponse)
-async def get_active_multiplier(current_user: CurrentUser = Depends(check_route_permission)):
-    """Returns the single currently active seasonal multiplier."""
-    return await service.get_active_seasonal_multiplier()
-
-
-@seasonal_multipliers_router.get("", response_model=list[schemas.SeasonalMultiplierResponse])
-async def list_seasonal_multipliers(
-    quarter: Optional[int] = Query(None, ge=1, le=4),
-    active_only: bool = Query(False),
-    current_user: CurrentUser = Depends(check_route_permission),
-):
-    """Returns all seasonal multipliers ordered by quarter and effective_from."""
-    return await service.list_seasonal_multipliers(quarter, active_only)
-
-
-@seasonal_multipliers_router.post("", response_model=schemas.SeasonalMultiplierResponse, status_code=201)
-async def create_seasonal_multiplier(
-    payload: schemas.CreateSeasonalMultiplierRequest,
-    current_user: CurrentUser = Depends(check_route_permission),
-):
-    """Creates a new seasonal multiplier. SUPER_ADMIN only."""
-    return await service.create_seasonal_multiplier(payload, current_user.id)
-
-
-@seasonal_multipliers_router.put("/{mult_id}", response_model=schemas.SeasonalMultiplierResponse)
-async def update_seasonal_multiplier(
-    mult_id: str,
-    payload: schemas.UpdateSeasonalMultiplierRequest,
-    current_user: CurrentUser = Depends(check_route_permission),
-):
-    """Updates a seasonal multiplier. SUPER_ADMIN only."""
-    return await service.update_seasonal_multiplier(mult_id, payload, current_user.id)
-
-
-@seasonal_multipliers_router.patch("/{mult_id}", status_code=204)
-async def patch_seasonal_multiplier(
-    mult_id: str,
-    current_user: CurrentUser = Depends(check_route_permission),
-):
-    """Deletes a future seasonal multiplier only. SUPER_ADMIN only."""
-    await service.patch_seasonal_multiplier(mult_id)
-    return Response(status_code=204)

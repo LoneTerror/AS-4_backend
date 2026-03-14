@@ -2,7 +2,7 @@
 import math
 from typing import Optional
 from uuid import UUID
-from datetime import datetime, date
+from datetime import datetime
 from fastapi import HTTPException
 from src.prisma.client import db
 
@@ -30,7 +30,6 @@ def _key_dept(dept_id: str)                        -> str: return f"org:departme
 def _key_desigs(page, limit, is_active)            -> str:
     return f"org:designations:{page}:{limit}:{is_active}"
 def _key_desig(desig_id: str)                      -> str: return f"org:designation:{desig_id}"
-def _key_mult(mult_id: str)                        -> str: return f"org:seasonal_multiplier:{mult_id}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -646,124 +645,3 @@ async def get_audit_log(audit_id: str) -> schemas.AuditLogResponse:
         ip_address=log.ip_address,
         user_agent=log.user_agent,
     )
-
-
-# ══════════════════════════════════════════════
-#  5.7 SEASONAL MULTIPLIERS SERVICE
-# ══════════════════════════════════════════════
-
-def _to_mult_response(m) -> schemas.SeasonalMultiplierResponse:
-    return schemas.SeasonalMultiplierResponse(
-        seasonal_multiplier_id=m.seasonal_multiplier_id,
-        quarter=m.quarter,
-        label=m.label,
-        multiplier=m.multiplier,
-        effective_from=m.effective_from,
-        effective_to=m.effective_to,
-        created_at=m.created_at,
-    )
-
-
-async def list_seasonal_multipliers(
-    quarter: Optional[int] = None,
-    active_only: bool = False,
-) -> list[schemas.SeasonalMultiplierResponse]:
-    where: dict = {}
-    if quarter:
-        where["quarter"] = quarter
-    if active_only:
-        today = date.today()
-        where["effective_from"] = {"lte": today}
-        where["effective_to"] = {"gte": today}
-
-    mults = await db.seasonal_multipliers.find_many(
-        where=where,
-        order=[{"quarter": "asc"}, {"effective_from": "asc"}],
-    )
-    return [_to_mult_response(m) for m in mults]
-
-
-async def get_active_seasonal_multiplier() -> schemas.SeasonalMultiplierResponse:
-    today = date.today()
-    m = await db.seasonal_multipliers.find_first(
-        where={"effective_from": {"lte": today}, "effective_to": {"gte": today}},
-        order={"effective_from": "desc"},
-    )
-    if not m:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "NOT_FOUND", "message": "No active seasonal multiplier for the current date."},
-        )
-    return _to_mult_response(m)
-
-
-async def create_seasonal_multiplier(
-    data: schemas.CreateSeasonalMultiplierRequest, created_by_id: str
-) -> schemas.SeasonalMultiplierResponse:
-    if data.effective_from and data.effective_to:
-        overlap = await db.seasonal_multipliers.find_first(
-            where={
-                "quarter": data.quarter,
-                "OR": [
-                    {
-                        "effective_from": {"lte": data.effective_to},
-                        "effective_to": {"gte": data.effective_from},
-                    }
-                ],
-            }
-        )
-        if overlap:
-            raise HTTPException(status_code=409, detail="CONFLICT – Overlapping effective dates for the same quarter")
-
-    now = datetime.now()
-    new_m = await db.seasonal_multipliers.create(
-        data={
-            "quarter": data.quarter,
-            "label": data.label,
-            "multiplier": str(data.multiplier),
-            "effective_from": data.effective_from,
-            "effective_to": data.effective_to,
-            "created_by": created_by_id,
-            "updated_by": created_by_id,
-            "updated_at": now,
-        }
-    )
-    return _to_mult_response(new_m)
-
-
-async def update_seasonal_multiplier(
-    mult_id: str, data: schemas.UpdateSeasonalMultiplierRequest, updated_by_id: str
-) -> schemas.SeasonalMultiplierResponse:
-    existing = await db.seasonal_multipliers.find_unique(where={"seasonal_multiplier_id": mult_id})
-    if not existing:
-        raise HTTPException(status_code=404, detail="Multiplier not found")
-
-    update_data = data.model_dump(exclude_unset=True)
-    if "multiplier" in update_data:
-        update_data["multiplier"] = str(update_data["multiplier"])
-    update_data["updated_by"] = updated_by_id
-    update_data["updated_at"] = datetime.now()
-
-    updated = await db.seasonal_multipliers.update(
-        where={"seasonal_multiplier_id": mult_id}, data=update_data
-    )
-    return _to_mult_response(updated)
-
-
-async def patch_seasonal_multiplier(mult_id: str) -> None:
-    existing = await db.seasonal_multipliers.find_unique(where={"seasonal_multiplier_id": mult_id})
-    if not existing:
-        raise HTTPException(status_code=404, detail="NOT_FOUND – Multiplier not found")
-
-    today = date.today()
-    if existing.effective_from and existing.effective_from <= today:
-        raise HTTPException(
-            status_code=400,
-            detail="VALIDATION_ERROR – Cannot delete a currently active or past multiplier",
-        )
-
-    await db.seasonal_multipliers.delete(where={"seasonal_multiplier_id": mult_id})
-
-    # BUG FIX 4: was incorrectly using designation cache keys instead of seasonal multiplier keys
-    await cache_delete(_key_mult(mult_id))
-    await invalidate_pattern("org:seasonal_multiplier*")
