@@ -34,7 +34,6 @@ from src.organization.router import (
     department_types_router,
     statuses_router,
     audit_logs_router,
-    seasonal_multipliers_router,
 )
 from src.common.route_registry import register_app_routes
 
@@ -57,12 +56,6 @@ ROLE_OVERRIDES: dict[str, list[str]] = {
     "GET:/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN", "HR_ADMIN"],
     "POST:/v1/organizations/statuses":                              ["SUPER_ADMIN"],
     "PUT:/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN"],
-    # Seasonal Multipliers
-    "GET:/v1/organizations/seasonal-multipliers":                   ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/organizations/seasonal-multipliers/active":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/organizations/seasonal-multipliers":                  ["SUPER_ADMIN"],
-    "PUT:/v1/organizations/seasonal-multipliers/{mult_id}":         ["SUPER_ADMIN"],
-    "DELETE:/v1/organizations/seasonal-multipliers/{mult_id}":      ["SUPER_ADMIN"],
     # Audit Logs
     "GET:/v1/organizations/audit-logs":                             ["SUPER_ADMIN", "HR_ADMIN"],
     "GET:/v1/organizations/audit-logs/{audit_id}":                  ["SUPER_ADMIN", "HR_ADMIN"],
@@ -90,12 +83,6 @@ ROUTE_TITLES: dict[str, str] = {
     "GET:/v1/organizations/statuses/{status_id}":                   "Get Status Details",
     "POST:/v1/organizations/statuses":                              "Create Status",
     "PUT:/v1/organizations/statuses/{status_id}":                   "Update Status",
-    # Seasonal Multipliers
-    "GET:/v1/organizations/seasonal-multipliers":                   "List Seasonal Multipliers",
-    "GET:/v1/organizations/seasonal-multipliers/active":            "Get Active Seasonal Multiplier",
-    "POST:/v1/organizations/seasonal-multipliers":                  "Create Seasonal Multiplier",
-    "PUT:/v1/organizations/seasonal-multipliers/{mult_id}":         "Update Seasonal Multiplier",
-    "DELETE:/v1/organizations/seasonal-multipliers/{mult_id}":      "Delete Seasonal Multiplier",
     # Audit Logs
     "GET:/v1/organizations/audit-logs":                             "List Audit Logs",
     "GET:/v1/organizations/audit-logs/{audit_id}":                  "Get Audit Log Details",
@@ -164,6 +151,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.middleware("http")(request_rate_limit_middleware)
+
 app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
@@ -180,7 +169,6 @@ app.include_router(designations_router,         prefix="/designations",         
 app.include_router(department_types_router,     prefix="/department-types",     tags=["Department Types"])
 app.include_router(statuses_router,             prefix="/statuses",             tags=["Status Master"])
 app.include_router(audit_logs_router,           prefix="/audit-logs",           tags=["Audit Logs"])
-app.include_router(seasonal_multipliers_router, prefix="/seasonal-multipliers", tags=["Seasonal Multipliers"])
 
 
 # ── OpenAPI schema ────────────────────────────────────────────────────────────
