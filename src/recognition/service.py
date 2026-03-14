@@ -283,14 +283,17 @@ class RecognitionService:
     # =========================================================
     @staticmethod
     async def get_review(review_id: str, current_user: CurrentUser):
+        # 1. Fetch from DB
         review = await db.reviews.find_unique(
             where={"review_id": review_id},
             include={"review_category_tags": True},
         )
 
+        # 2. Priority: If it doesn't exist, it's a 404, not a permission issue
         if not review:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
 
+        # 3. Then check permissions
         is_admin = any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
         is_owner = review.reviewer_id == current_user.id or review.receiver_id == current_user.id
 

@@ -1,10 +1,9 @@
 const commonEnv = {
   PYTHONPATH: "/app",
+  // Match the path in the Dockerfile
+  PRISMA_BINARY_CACHE_DIR: "/app/.cache/prisma-python", 
   XDG_CACHE_HOME: "/app/.cache",
   PRISMA_HOME: "/app/.prisma",
-  PRISMA_PY_BINARIES_PATH: "/app/prisma_binaries",
-  PRISMA_BINARY_CACHE_DIR: "/app/.cache",
-  // 1. Force PM2 and Python to keep ANSI color codes in the Docker stream
   FORCE_COLOR: "1" 
 };
 
@@ -24,41 +23,28 @@ const pythonServices = [
 const apps = [
   {
     name: "nginx",
-    script: "/usr/sbin/nginx",
+    script: "nginx",
+    // Ensure Nginx uses the config and stays in foreground for PM2
     args: "-c /app/nginx.conf -g 'daemon off;'",
     interpreter: "none",
     autorestart: true,
-    watch: false,
-    kill_timeout: 5000,
-    // 2. Stop PM2 from writing duplicate logs to the container's virtual disk
     out_file: "/dev/null",   
     error_file: "/dev/null"  
   }
 ];
 
-// 2. Map over the array to generate the staggered PM2 configurations
 const pythonApps = pythonServices.map((svc) => ({
   name: svc.name,
   script: "bash",
-  // TRICK: Use bash 'sleep' to stagger initial boot, then 'exec' to hand the PID to Gunicorn
-  args: `-c 'sleep ${svc.delay} && exec /app/venv/bin/gunicorn src.${svc.name}.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${svc.port} --workers 1 --timeout 120 --graceful-timeout 60 --worker-tmp-dir /tmp'`,
+  // Using 'python -m gunicorn' is safer for finding modules like 'uvicorn'
+  args: `-c 'sleep ${svc.delay} && exec /app/venv/bin/python -m gunicorn src.${svc.name}.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${svc.port} --workers 1 --timeout 120'`,
   cwd: "/app",
   interpreter: "none",
   autorestart: true,
-  watch: false,
-  wait_ready: false,      // <-- CRITICAL: Do NOT wait for Node IPC signals
-  min_uptime: 5000,       // Consider it "online" if it survives for 5 seconds
-  kill_timeout: 5000,
-  restart_delay: 5000,    // If the app crashes, wait 5 seconds before restarting
-  
-  // 3. Bypass disk logging so Dozzle gets the pure stdout stream from PM2-runtime
+  env: commonEnv, // Apply the cache paths here
   out_file: "/dev/null",   
   error_file: "/dev/null", 
-  
-  env: commonEnv,
 }));
 
-// Push all Python services into the array after Nginx
 apps.push(...pythonApps);
-
 module.exports = { apps };

@@ -4,7 +4,11 @@ pipeline {
     environment {
         IMAGE = "mrmonster786/rnr-backend"
         TAG = "${env.BUILD_NUMBER}"
-        TARGET_EC2_HOST="test.aabhar.top"
+        TARGET_EC2_HOST="backend.aabhar.top"
+    }
+
+    triggers {
+        githubPush() 
     }
 
     options {
@@ -14,12 +18,11 @@ pipeline {
     }
 
     stages {
-        // 1. Parallelize Static Scans (Gitleaks + Python Audit)
         stage('Static Analysis & Security') {
             parallel {
                 stage('Secrets Scan (Gitleaks)') {
                     steps {
-                        sh 'gitleaks detect --source . --report-format json --report-path gitleaks-report.json --exit-code 0'
+                        sh 'gitleaks detect --source . --report-format json --report-path gitleaks-report.json --exit-code 1'
                     }
                 }
 
@@ -32,35 +35,55 @@ pipeline {
                     }
                     steps {
                         sh '''
-                        python -m venv venv
-                        . venv/bin/activate
-                        pip install --upgrade pip
-                        pip install bandit pip-audit
-                        
-                        # Running Bandit and Pip-Audit in background to save time
-                        bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json &
-                        bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html &
-                        pip-audit --format json --output pip-audit-report.json &
-                        wait
+                            # 1. Install system dependencies required for Prisma binaries in slim image
+                            apt-get update && apt-get install -y --no-install-recommends libatomic1
+                            
+                            # 2. Setup environment
+                            python -m venv venv
+                            . venv/bin/activate
+                            
+                            # 3. Upgrade pip to support --require-hashes accurately
+                            pip install --upgrade pip
+                            pip install pip-tools
+                            
+                            # 4. Sync dependencies from the hashed requirements.txt
+                            pip-sync requirements.txt
+                            
+                            # 5. Install tools needed for this specific stage
+                            pip install pytest bandit pip-audit
+
+                            # 6. Generate Prisma Client (Matching the Builder Stage in Dockerfile)
+                            echo "Generate Prisma Client..."
+                            prisma generate
+
+                            echo "🧪 Running Unit Tests..."
+                            pytest src/ --disable-warnings --junitxml=test-results.xml
+        
+                            echo "🔒 Running Static Security Scans..."
+                            bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json || true
+                            bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html || true
+        
+                            pip-audit --format html --output pip-audit-report.html || true
+
+                            echo "📂 Listing files for debugging:"
+                            ls -lh bandit-report.html pip-audit-report.json test-results.xml
                         '''
                     }
                 }
             }
         }
 
-        // 2. Build Stage (Now uses Multi-Stage Dockerfile with Node.js pre-installed)
         stage('Build Docker Image') {
             steps { 
                 sh 'docker build -t $IMAGE:$TAG .' 
             }
         }
 
-        // 3. Parallelize Container Scan and DAST
         stage('Dynamic Analysis') {
             parallel {
                 stage('Container Scan - Trivy') {
                     steps {
-                        sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --format json --output trivy-report.json $IMAGE:$TAG || true'
+                       sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format json --output trivy-report.json $IMAGE:$TAG'
                     }
                 }
 
@@ -83,36 +106,52 @@ pipeline {
                                 string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_DEFAULT_CHANNEL_ID'),
                                 ]) {
                                     try {
+                                        // Use double quotes for shell variable expansion, single quotes for the sh block
                                         sh """
-                                        docker run -d \
-                                        --name target-app \
-                                        --network zap-net \
-                                        -e DATABASE_URL="${DATABASE_URL}" \
-                                        -e REDIS_URL="${REDIS_URL}" \
-                                        -e SECRET_KEY="${SECRET_KEY}" \
-                                        -e ALGORITHM="${ALGORITHM}" \
-                                        -e AUTH_SERVICE_URL="${AUTH_SERVICE_URL}" \
-                                        -e SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN}" \
-                                        -e SLACK_DEFAULT_CHANNEL_ID="${SLACK_DEFAULT_CHANNEL_ID}" \
-                                        -e SMTP_PASSWORD="${SMTP_PASSWORD}" \
-                                        -e SMTP_USERNAME="${SMTP_USERNAME}" \
+                                        docker run -d --name target-app --network zap-net \
+                                        -e DATABASE_URL="$DATABASE_URL" \
+                                        -e REDIS_URL="$REDIS_URL" \
+                                        -e SECRET_KEY="$SECRET_KEY" \
+                                        -e ALGORITHM="$ALGORITHM" \
+                                        -e AUTH_SERVICE_URL="$AUTH_SERVICE_URL" \
+                                        -e SLACK_BOT_TOKEN="$SLACK_BOT_TOKEN" \
+                                        -e SLACK_DEFAULT_CHANNEL_ID="$SLACK_DEFAULT_CHANNEL_ID" \
+                                        -e SMTP_PASSWORD="$SMTP_PASSWORD" \
+                                        -e SMTP_USERNAME="$SMTP_USERNAME" \
                                         -e SMTP_HOST="smtp.gmail.com" \
                                         -e SMTP_PORT="587" \
-                                        -e SMTP_FROM_EMAIL="${SMTP_FROM_EMAIL}"\
+                                        -e SMTP_FROM_EMAIL="$SMTP_FROM_EMAIL"\
                                         -e SMTP_USE_TLS="true" \
                                         -e SMTP_USE_SSL="false" \
-                                        -e FRONTEND_URL="${FRONTEND_URL}" \
-                                        -e FRONTEND_CORS_ORIGINS="${FRONTEND_CORS_ORIGINS}" \
+                                        -e FRONTEND_URL="$FRONTEND_URL" \
+                                        -e FRONTEND_CORS_ORIGINS="$FRONTEND_CORS_ORIGINS" \
                                         -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
                                         ${IMAGE}:${TAG}
                                         """
-                                        sh 'sleep 10'
+                                        sh """
+                                        docker run --rm --network zap-net alpine sh -c '
+                                            for i in \$(seq 1 30); do
+                                                if nc -z target-app 8000; then
+                                                    echo "Success: target-app is UP"
+                                                    exit 0
+                                                fi
+                                                echo "Waiting for target-app... (Check logs if this repeats)"
+                                                sleep 2
+                                            done
+                                            exit 1'
+                                        """
                                         sh """
                                         docker run --rm --user 0 --network zap-net \
-                                        -v \$(pwd):/zap/wrk/:rw \
-                                        ghcr.io/zaproxy/zaproxy:stable \
-                                        zap-baseline.py -t http://target-app:8000 -r zap-report.html || true
+                                            -v \$(pwd):/zap/wrk/:rw \
+                                            ghcr.io/zaproxy/zaproxy:stable \
+                                            zap-baseline.py -t http://target-app:8000 -r zap-report.html -I
                                         """
+                                    }
+                                    catch (Exception e) {
+                                        echo "ERROR: target-app failed to start. Fetching logs..."
+                                        sh 'docker inspect target-app' 
+                                        sh 'docker logs target-app'    
+                                        throw e
                                     } finally {
                                         sh 'docker stop target-app || true'
                                         sh 'docker rm target-app || true'
@@ -138,7 +177,6 @@ pipeline {
                 }
             }
         } 
-        
 
         stage('Deploy to EC2 (AWS)') {
             when { branch 'pipeline-branch' } 
@@ -154,8 +192,8 @@ pipeline {
                             string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
                             string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME'),
                             string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
-                            string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_BOT_TOKEN'),
-                            string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_DEFAULT_CHANNEL_ID'),
+                            string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'), 
+                            string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL'),
                             string(credentialsId: 'rr-backend-cors-origins', variable: 'FRONTEND_CORS_ORIGINS'),
                             string(credentialsId: 'rr-backend-frontend-url', variable: 'FRONTEND_URL')
                         ]) {
@@ -163,10 +201,6 @@ pipeline {
                             ssh -o StrictHostKeyChecking=no ubuntu@${TARGET_EC2_HOST} "
                                 docker stop rnr-backend-test || true
                                 docker rm rnr-backend-test || true
-                                
-                                # Pull the latest image if you are pushing to a registry like Docker Hub
-                                # docker pull ${IMAGE}:${TAG} 
-                                
                                 docker run -d \\
                                 --name rnr-backend-test \\
                                 --restart always \\
@@ -177,8 +211,8 @@ pipeline {
                                 -e REDIS_URL='${REDIS_URL}' \\
                                 -e SECRET_KEY='${SECRET_KEY}' \\
                                 -e AUTH_SERVICE_URL='${AUTH_SERVICE_URL}' \\
-                                -e SLACK_BOT_TOKEN='${SLACK_BOT_TOKEN}' \\
-                                -e SLACK_DEFAULT_CHANNEL_ID='${SLACK_DEFAULT_CHANNEL_ID}' \\
+                                -e SLACK_BOT_TOKEN='${SLACK_TOKEN}' \\
+                                -e SLACK_DEFAULT_CHANNEL_ID='${SLACK_CHANNEL}' \\
                                 -e SMTP_PASSWORD='${SMTP_PASSWORD}' \\
                                 -e SMTP_USERNAME='${SMTP_USERNAME}' \\
                                 -e SMTP_HOST='smtp.gmail.com' \\
@@ -188,35 +222,26 @@ pipeline {
                                 -e SMTP_USE_SSL='false' \\
                                 -e FRONTEND_URL='${FRONTEND_URL}' \\
                                 -e ACCESS_TOKEN_EXPIRE_MINUTES='30' \\
-                                -e OTEL_SERVICE_NAME='rnr-backend' \\
-                                -e OTEL_EXPORTER_OTLP_ENDPOINT='http://172.17.0.1:4317' \\
-                                -e OTEL_EXPORTER_OTLP_INSECURE='true' \\
                                 -e FRONTEND_CORS_ORIGINS='${FRONTEND_CORS_ORIGINS}' \\
+                                -e OTEL_SERVICE_NAME='rnr-backend' \\
+                                -e OTEL_EXPORTER_OTLP_ENDPOINT='http://host.docker.internal:4317' \\
+                                -e OTEL_EXPORTER_OTLP_INSECURE='true' \\
                                 ${IMAGE}:${TAG}
-
-                                echo '🧹 Running DevSecOps cleanup: Removing old containers and images...'
+                                
                                 docker system prune -f
-                                docker image prune -af --filter 'until=24h'
                             "
                             """
                         }
                     }
-                    echo "🚀 Application deployed successfully. Traffic handled by Nginx." 
-                    // Active Health Check Observation via the secure domain
-                    echo "⏳ Waiting for staggered services to boot..."
+                    // Wait for staggered boot
                     timeout(time: 3, unit: 'MINUTES') { 
                         waitUntil {
                             script {
-                                // Pinging through the public Nginx gateway instead of localhost
                                 def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://${TARGET_EC2_HOST}/v1/auth/health || true", returnStdout: true).trim()
-                                if (r != "200") {
-                                    echo "Still waiting for Auth Service... HTTP Code: ${r}"
-                                }
                                 return (r == "200")
                             }
                         }
                     }
-                    echo "✅ Application is fully booted and responding!"
                 }
             }
         }
@@ -224,16 +249,17 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: '**/*.json, **/*.html', allowEmptyArchive: true
+            archiveArtifacts artifacts: '**/bandit-report.*, **/zap-report.html, **/test-results.xml, **/pip-audit-report.json', allowEmptyArchive: true
             publishHTML([
-                allowMissing: false,
+                allowMissing: true,
                 alwaysLinkToLastBuild: true,
                 keepAll: true,
                 reportDir: '.',
-                reportFiles: 'bandit-report.html, zap-report.html',
+                reportFiles: 'bandit-report.html, zap-report.html, pip-audit-report.html',
                 reportName: 'Security Dashboard',
-                reportTitles: 'Bandit (SAST), OWASP ZAP (DAST)'
+                reportTitles: 'Bandit (SAST), OWASP ZAP (DAST), Pip Audit Report'
             ])
+            junit testResults: '**/test-results.xml', allowEmptyResults: true
         }
         success {
             withCredentials([
@@ -247,7 +273,7 @@ pipeline {
                 -d @- <<EOF
                 {
                     "channel": "$SLACK_CHANNEL",
-                    "text": "✅ *Success*: Build #$BUILD_NUMBER of rnr-backend deployed to AWS successfully.\\n🔍 <$BUILD_URL|View Jenkins Logs> | 📊 <https://$TARGET_EC2_HOST/jaeger/|View Live Traces in Jaeger>"
+                    "text": "✅ *Success*: Build #$BUILD_NUMBER of rnr-backend deployed successfully.\\n🔍 <$BUILD_URL|Logs>"
                 }
 EOF
                 '''
@@ -265,7 +291,7 @@ EOF
                 -d @- <<EOF
                 {
                     "channel": "$SLACK_CHANNEL",
-                    "text": "❌ *Failure*: Build #$BUILD_NUMBER of rnr-backend failed.\\n🔍 <$BUILD_URL|Check Jenkins Logs immediately>"
+                    "text": "❌ *Failure*: Build #$BUILD_NUMBER failed.\\n🔍 <$BUILD_URL|Check Logs>"
                 }
 EOF
                 '''
