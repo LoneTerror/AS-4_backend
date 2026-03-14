@@ -93,7 +93,7 @@ async def get_recent_reviews_list(employee_id: str) -> List[RecentReview]:
         out.append(RecentReview(
             review_id=r.review_id,
             reviewer_name=reviewer.username if reviewer else "Unknown",
-            rating=r.rating,
+            tags=[t.category_code_snapshot for t in (r.review_category_tags or [])],
             comment=r.comment,
             review_at=r.review_at,
         ))

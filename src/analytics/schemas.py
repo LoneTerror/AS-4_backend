@@ -24,7 +24,7 @@ class RecentReview(BaseModel):
 
     review_id: UUID
     reviewer_name: str
-    rating: int
+    tags: List[str]
     comment: str
     review_at: datetime
 
