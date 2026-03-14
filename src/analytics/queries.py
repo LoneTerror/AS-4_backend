@@ -29,7 +29,10 @@ async def get_employee_with_details(employee_id: str):
 async def get_recent_reviews(employee_id: str, limit: int = 5):
     return await db.reviews.find_many(
         where={"receiver_id": employee_id},
-        include={"employees_reviews_reviewer_idToemployees": True},
+        include={
+            "employees_reviews_reviewer_idToemployees": True,
+            "review_category_tags": True,
+        },
         order={"review_at": "desc"},
         take=limit,
     )
