@@ -28,10 +28,17 @@ class WeeklyDigestData(BaseModel):
 class DigestEmailRequest(BaseModel):
     """
     Trigger a weekly digest email for a specific manager.
-    week_start defaults to last Monday (UTC) if omitted.
+
+    manager_id  — the employee UUID of the manager whose team to scope the
+                  digest to. Only reviews where the receiver reports to this
+                  manager (employees.manager_id == manager_id) are included.
+                  When omitted the digest covers the whole platform.
+
+    week_start  — defaults to last completed Monday (UTC) if omitted.
     """
     manager_email: EmailStr
-    week_start: Optional[datetime] = None
+    manager_id:    Optional[UUID4] = None
+    week_start:    Optional[datetime] = None
 
 
 # ── Response ───────────────────────────────────────────────────────────────────
