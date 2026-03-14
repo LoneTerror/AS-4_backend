@@ -14,14 +14,6 @@ class NotificationType(str, Enum):
     CELEBRATION = "CELEBRATION"
     ANNOUNCEMENT = "ANNOUNCEMENT"
 
-    # ── Legacy values — present in DB rows created before the enum was trimmed.
-    # Kept here as a secondary safety net so that if any slip past the DB-level
-    # filter in service.py they don't cause a Pydantic ValidationError → 500.
-    # They are NOT valid for new notification creation (see restrict_manual_types).
-    REWARD_REDEEMED = "REWARD_REDEEMED"
-    POINTS_CREDIT   = "POINTS_CREDIT"
-
-
 class CelebrationType(str, Enum):
     BIRTHDAY         = "BIRTHDAY"
     WORK_ANNIVERSARY = "WORK_ANNIVERSARY"
