@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr, StringConstraints, field_validator
 from typing import Optional, List, Annotated
 from uuid import UUID
+from datetime import date
 
 
 class SignUpRequest(BaseModel):
@@ -16,6 +17,7 @@ class SignUpRequest(BaseModel):
     designation_id: UUID
     department_id: UUID
     manager_id: Optional[UUID] = None
+    date_of_birth: Optional[date] = None
 
 
 # --- Shared Models ---

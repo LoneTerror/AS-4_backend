@@ -2,7 +2,7 @@ import logging
 import math
 from typing import List, Optional
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 from passlib.context import CryptContext
 from fastapi import HTTPException, status
 from src.prisma.client import db
@@ -277,7 +277,8 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
                     "username":        data.username,
                     "email":           data.email,
                     "password_hash":   hashed_pwd,
-                    "date_of_joining": datetime.combine(data.date_of_joining, datetime.min.time()),
+                    "date_of_joining": datetime.combine(data.date_of_joining, datetime.min.time()).replace(tzinfo=timezone.utc),
+                    "date_of_birth":   datetime.combine(data.date_of_birth, datetime.min.time()).replace(tzinfo=timezone.utc) if data.date_of_birth else None,
                     "updated_at":      now,
                     "designation_id":  str(data.designation_id),
                     "department_id":   str(data.department_id),
@@ -377,6 +378,13 @@ async def update_employee(
     for key in ["designation_id", "department_id", "manager_id", "status_id"]:
         if key in update_data and update_data[key]:
             update_data[key] = str(update_data[key])
+
+    if "date_of_birth" in update_data:
+        dob = update_data["date_of_birth"]
+        update_data["date_of_birth"] = (
+            datetime.combine(dob, datetime.min.time()).replace(tzinfo=timezone.utc)
+            if dob else None
+        )
 
     update_data["updated_by"] = updated_by_id
     update_data["updated_at"] = datetime.now()
