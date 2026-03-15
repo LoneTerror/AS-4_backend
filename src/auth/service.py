@@ -184,9 +184,6 @@ async def refresh_access_token(client_refresh_token: str):
     user = stored_token.employees
 
     # 3. Fetch current roles
-    # FIX: was `roles = ["EMPLOYEE"]` here, then immediately overwritten by the
-    #      list comprehension result — so an empty DB result would wipe the default.
-    #      Now we set the fallback AFTER the query.
     roles = []
     try:
         roles_relation = await db.employee_roles.find_many(
@@ -302,6 +299,10 @@ async def create_employee(payload, current_user_id: str):
     hashed_pwd = hash_password(payload.password)
 
     # Create employee
+    # FIX: date_of_birth must be a full timezone-aware datetime, NOT a bare date
+    # string. Prisma's DateTime field rejects "2026-03-10" (ISO date-only) with
+    # "not a valid ISO-8601 DateTime". datetime.combine() + replace(tzinfo=utc)
+    # produces "2026-03-10T00:00:00+00:00" which Prisma accepts correctly.
     new_emp = await db.employees.create(
         data={
             "username": payload.username,
@@ -311,6 +312,11 @@ async def create_employee(payload, current_user_id: str):
             "department_id": str(payload.department_id),
             "manager_id": str(payload.manager_id) if payload.manager_id else None,
             "date_of_joining": _now(),
+            "date_of_birth": (
+                datetime.combine(payload.date_of_birth, datetime.min.time())
+                .replace(tzinfo=timezone.utc)
+                if payload.date_of_birth else None
+            ),
             "status_id": active_status.status_id,
             "created_by": current_user_id,
             "updated_by": current_user_id,
@@ -447,4 +453,4 @@ async def reset_password(token: str, new_password: str):
 
     return {
         "message": "Password reset successful. Please login with your new password."
-    }                                                                                                                           
+    }

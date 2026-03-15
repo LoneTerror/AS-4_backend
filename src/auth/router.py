@@ -91,6 +91,7 @@ def _row_to_signup(row: dict) -> tuple[Optional[SignUpRequest], Optional[str]]:
             designation_id=UUID(row["designation_id"]),
             department_id=UUID(row["department_id"]),
             manager_id=UUID(row["manager_id"]) if row.get("manager_id") else None,
+            date_of_birth=row["date_of_birth"] if row.get("date_of_birth") else None,
         ), None
     except Exception as e:
         return None, str(e)

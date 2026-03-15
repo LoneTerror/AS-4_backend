@@ -62,6 +62,7 @@ class EmployeeCreatedResponse(BaseModel):
     department_id: UUID
     manager_id: UUID
     date_of_joining: date
+    date_of_birth: Optional[date] = None
     status_id: UUID
     is_active: bool
     wallet: Optional[WalletResponse] = None
@@ -77,6 +78,7 @@ class EmployeeDetailResponse(BaseModel):
     department: Optional[DepartmentResponse] = None
     manager: Optional[ManagerResponse] = None
     date_of_joining: date
+    date_of_birth: Optional[date] = None
     status: Optional[StatusResponse] = None
     is_active: bool
     wallet: Optional[WalletResponse] = None
@@ -126,7 +128,15 @@ class CreateEmployeeRequest(BaseModel):
     department_id: UUID
     manager_id: UUID
     date_of_joining: date
+    date_of_birth: Optional[date] = None
     status_id: UUID
+
+    @field_validator('date_of_birth')
+    @classmethod
+    def validate_dob(cls, v: Optional[date]) -> Optional[date]:
+        if v is not None and v >= datetime.now().date():
+            raise ValueError('Date of birth must be in the past')
+        return v
 
     @field_validator('password')
     @classmethod
@@ -155,3 +165,4 @@ class UpdateEmployeeRequest(BaseModel):
     department_id: Optional[UUID] = None
     manager_id: Optional[UUID] = None
     status_id: Optional[UUID] = None
+    date_of_birth: Optional[date] = None
