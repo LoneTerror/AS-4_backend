@@ -14,6 +14,7 @@ from .service import DigestService
 
 router = APIRouter(prefix="/digest", tags=["Weekly Digest"])
 
+_ADMIN_ROLES = {"SUPER_ADMIN", "HR_ADMIN"}
 
 # ── Dependency factories ───────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ async def get_weekly_digest(
         default=None,
         description=(
             "Scope digest to direct reports of this manager UUID. "
-            "Defaults to the calling user's own employee_id for manager/admin roles."
+            "Omit to get platform-wide totals (admins) or your own team (managers)."
         ),
     ),
     current_user: CurrentUser = Depends(check_route_permission),
@@ -54,19 +55,20 @@ async def get_weekly_digest(
     """
     Return a week's recognition summary as JSON (for the dashboard preview).
 
-    FIX: When manager_id is omitted the endpoint now defaults to scoping the
-    digest to current_user's own team rather than returning platform-wide
-    totals. This prevents any authenticated user from reading org-wide data
-    simply by omitting the query parameter.
-
-    Admins may still pass an explicit manager_id to view another team's digest.
+    Scoping rules:
+      - explicit manager_id supplied → always scope to that manager's team
+      - no manager_id, caller is SUPER_ADMIN or HR_ADMIN → platform-wide (no filter)
+      - no manager_id, caller is MANAGER/EMPLOYEE → scope to their own team
     """
-    # Default to the calling user's own team so a manager always sees their
-    # own team without having to supply their own ID explicitly, and so that
-    # omitting the param never leaks platform-wide data to non-admins.
-    effective_manager_id: Optional[str] = (
-        str(manager_id) if manager_id else str(current_user.employee_id)
-    )
+    if manager_id:
+        # Explicit manager selected — scope to that team.
+        effective_manager_id: Optional[str] = str(manager_id)
+    elif any(r in _ADMIN_ROLES for r in current_user.roles):
+        # Admin with no manager selected → platform-wide, no filter.
+        effective_manager_id = None
+    else:
+        # Non-admin with no manager selected → default to own team.
+        effective_manager_id = current_user.id
 
     return await svc.get_digest_data(
         week_start=week_start,

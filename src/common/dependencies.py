@@ -147,7 +147,7 @@ async def get_current_user(
                 from src.common.cache import cache_delete
                 await cache_delete(cache_key)
             else:
-                return CurrentUser(**cached)
+                return CurrentUser(**{k: v for k, v in cached.items() if k in CurrentUser.model_fields})
     except Exception as cache_err:
         from src.core.logger import logger
         logger.debug(f"[{request_id}] Cache lookup skipped/failed: {cache_err}")
