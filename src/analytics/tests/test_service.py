@@ -47,8 +47,8 @@ class TestGetRecentReviewsList:
     @pytest.mark.asyncio
     async def test_returns_mapped_reviews(self):
         raw = [
-            make_raw_review(reviewer_username="alice", rating=5, comment="Excellent"),
-            make_raw_review(reviewer_username="bob", rating=3, comment="OK"),
+            make_raw_review(reviewer_username="alice", tags=["COOL"], comment="Excellent"),
+            make_raw_review(reviewer_username="bob", tags=["OK"], comment="OK"),
         ]
 
         with patch(f"{SVC}.get_recent_reviews", AsyncMock(return_value=raw)):
@@ -56,10 +56,10 @@ class TestGetRecentReviewsList:
 
         assert len(result) == 2
         assert result[0].reviewer_name == "alice"
-        assert result[0].rating == 5
+        assert result[0].tags == ["COOL"]
         assert result[0].comment == "Excellent"
         assert result[1].reviewer_name == "bob"
-        assert result[1].rating == 3
+        assert result[1].tags == ["OK"]
 
     @pytest.mark.asyncio
     async def test_empty_reviews_returns_empty_list(self):
@@ -73,7 +73,7 @@ class TestGetRecentReviewsList:
         review_id = str(uuid4())
         review_at = datetime(2026, 1, 20, 8, 30, tzinfo=timezone.utc)
         raw = [make_raw_review(
-            review_id=review_id, rating=2,
+            review_id=review_id, tags=["HELPFUL"],
             comment="Needs improvement", review_at=review_at,
         )]
 
@@ -81,7 +81,7 @@ class TestGetRecentReviewsList:
             result = await get_recent_reviews_list("emp-1")
 
         assert str(result[0].review_id) == review_id
-        assert result[0].rating == 2
+        assert result[0].tags == ["HELPFUL"]
         assert result[0].comment == "Needs improvement"
         assert result[0].review_at == review_at
 
