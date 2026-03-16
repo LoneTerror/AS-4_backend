@@ -63,8 +63,11 @@ pipeline {
                             echo "🔒 Running Static Security Scans..."
                             bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json || true
                             bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html || true
+
+                            mkdir -p reports
+                            bandit -r . -f html -o reports/bandit-report.html || true
         
-                            pip-audit --format html --output pip-audit-report.html || true
+                            pip-audit --format json --output pip-audit-report.json || true
 
                             echo "📂 Listing files for debugging:"
                             ls -lh bandit-report.html pip-audit-report.json test-results.xml
@@ -255,8 +258,8 @@ pipeline {
                 allowMissing: true,
                 alwaysLinkToLastBuild: true,
                 keepAll: true,
-                reportDir: '.',
-                reportFiles: 'bandit-report.html, zap-report.html, pip-audit-report.html',
+                reportDir: 'reports',
+                reportFiles: 'bandit-report.html, zap-report.html',
                 reportName: 'Security Dashboard',
                 reportTitles: 'Bandit (SAST), OWASP ZAP (DAST), Pip Audit Report'
             ])
