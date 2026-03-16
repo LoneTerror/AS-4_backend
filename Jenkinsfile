@@ -35,42 +35,27 @@ pipeline {
                         }
                     }
                     steps {
-                        sh '''
-                            # 1. Install system dependencies required for Prisma binaries in slim image
+                            sh '''
                             apt-get update && apt-get install -y --no-install-recommends libatomic1
-                            
-                            # 2. Setup environment
                             python -m venv venv
                             . venv/bin/activate
-                            
-                            # 3. Upgrade pip to support --require-hashes accurately
-                            pip install --upgrade pip
-                            pip install pip-tools
-                            
-                            # 4. Sync dependencies from the hashed requirements.txt
+                            pip install --upgrade pip pip-tools
                             pip-sync requirements.txt
-                            
-                            # 5. Install tools needed for this specific stage
                             pip install pytest bandit pip-audit
 
-                            # 6. Generate Prisma Client (Matching the Builder Stage in Dockerfile)
-                            echo "Generate Prisma Client..."
+                            # Generate Prisma Client
                             prisma generate
 
-                            echo "🧪 Running Unit Tests..."
+                            # 1. Run Tests
                             pytest src/ --disable-warnings --junitxml=test-results.xml
-        
-                            echo "🔒 Running Static Security Scans..."
-                            bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json || true
-                            bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html || true
 
-                            mkdir -p reports
-                            bandit -r . -f html -o reports/bandit-report.html || true
-        
+                            # 2. Bandit: Exclude venv explicitly and fix report generation
+                            # We use -x to exclude the venv directory from the scan
+                            bandit -r . -x ./venv -lll -iii -f html -o bandit-report.html || true
+                            bandit -r . -x ./venv -lll -iii -f json -o bandit-report.json || true
+
+                            # 3. Pip-Audit: Use JSON (standard) or skip HTML if not supported
                             pip-audit --format json --output pip-audit-report.json || true
-
-                            echo "📂 Listing files for debugging:"
-                            ls -lh bandit-report.html pip-audit-report.json test-results.xml
                         '''
                     }
                 }
@@ -253,18 +238,21 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: '**/bandit-report.*, **/zap-report.html, **/test-results.xml, **/pip-audit-report.json', allowEmptyArchive: true
-            publishHTML([
-                allowMissing: true,
-                alwaysLinkToLastBuild: true,
-                keepAll: true,
-                reportDir: 'reports',
-                reportFiles: 'bandit-report.html, zap-report.html',
-                reportName: 'Security Dashboard',
-                reportTitles: 'Bandit (SAST), OWASP ZAP (DAST), Pip Audit Report'
-            ])
-            junit testResults: '**/test-results.xml', allowEmptyResults: true
-        }
+        // Archive everything found for debugging
+        archiveArtifacts artifacts: '*.html, *.json, *.xml', allowEmptyArchive: true
+        
+        publishHTML([
+            allowMissing: true,
+            alwaysLinkToLastBuild: true,
+            keepAll: true,
+            reportDir: '.',
+            // Only include reports known to be valid HTML
+            reportFiles: 'bandit-report.html, zap-report.html', 
+            reportName: 'Security Dashboard',
+            reportTitles: 'Bandit (SAST), OWASP ZAP (DAST)'
+        ])
+        junit testResults: 'test-results.xml', allowEmptyResults: true
+    }
         success {
             withCredentials([
                 string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'),
