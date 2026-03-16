@@ -295,12 +295,11 @@ class RewardItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class AddStockRequest(BaseModel):
-    amount: int = Field(..., gt=0, description="Amount of new stock to add")
+    amount: StrictInt = Field(..., gt=0, description="Amount of new stock to add")
 
     @field_validator('amount')
     @classmethod
     def check_reasonable_amount(cls, v: int) -> int:
-        # Example business logic: Prevent accidental massive restocks
         max_restock_limit = 10000 
         if v > max_restock_limit:
             raise ValueError(f'Cannot add more than {max_restock_limit} items in a single transaction.')

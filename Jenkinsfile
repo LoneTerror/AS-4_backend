@@ -4,7 +4,8 @@ pipeline {
     environment {
         IMAGE = "mrmonster786/rnr-backend"
         TAG = "${env.BUILD_NUMBER}"
-        TARGET_EC2_HOST="backend.aabhar.top"
+        TARGET_EC2_HOST="bn1.aabhar.top"
+        DOCKER_BUILDKIT = "1"
     }
 
     triggers {
