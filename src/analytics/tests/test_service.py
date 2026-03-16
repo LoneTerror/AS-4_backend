@@ -396,3 +396,228 @@ class TestGetPlatformStats:
              patch(f"{SVC}.get_active_users_count_last_month", AsyncMock(return_value=0)):
             with pytest.raises(ConnectionError, match="lost connection"):
                 await get_platform_stats("emp-1")
+
+# ===========================================================================
+# EXTENDED SERVICE TESTS (Appended)
+# ===========================================================================
+
+from src.analytics.service import (
+    invalidate_reviews,
+    invalidate_leaderboard,
+    invalidate_teams,
+    get_teams_summary,
+    get_team_report,
+    get_participation_overview,
+    get_recognition_trend,
+    get_recognition_users,
+    get_recognition_teams,
+    _compute_scores,
+    _range_start
+)
+from src.analytics.tests.conftest import make_department
+from dateutil.relativedelta import relativedelta
+
+# Grab the globally mocked Prisma client from conftest
+mock_prisma_client = sys.modules["src.prisma.client"]
+
+class TestAnalyticsServiceExtended:
+
+    # --- Cache Invalidation Helpers ---
+    @pytest.mark.asyncio
+    async def test_invalidate_reviews(self):
+        with patch(f"{SVC}.cache_delete", AsyncMock()) as mock_delete:
+            await invalidate_reviews("emp-1")
+            assert mock_delete.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_invalidate_leaderboard(self):
+        with patch(f"{SVC}.cache_delete", AsyncMock()) as mock_delete:
+            await invalidate_leaderboard()
+            mock_delete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_invalidate_teams(self):
+        with patch(f"{SVC}.cache_delete", AsyncMock()) as mock_delete, \
+             patch(f"{SVC}.invalidate_pattern", AsyncMock()) as mock_pattern:
+            await invalidate_teams()
+            mock_delete.assert_called_once()
+            mock_pattern.assert_called_once_with("dashboard:team:*")
+
+    # --- Synchronous Helpers ---
+    def test_compute_scores(self):
+        assert _compute_scores([]) == []
+        
+        raw = [
+            {"total_earned_points": 100, "reviews_received": 10},
+            {"total_earned_points": 50, "reviews_received": 5}
+        ]
+        scored = _compute_scores(raw)
+        # Max points = 100, Max reviews = 10
+        # Emp 1: (0.7 * 100/100) + (0.3 * 10/10) = 1.0 * 100 = 100.0
+        assert scored[0]["performance_score"] == 100.0
+        # Emp 2: (0.7 * 50/100) + (0.3 * 5/10) = (0.35 + 0.15) * 100 = 50.0
+        assert scored[1]["performance_score"] == 50.0
+
+    def test_range_start(self):
+        now = datetime(2026, 1, 15, tzinfo=timezone.utc)
+        assert _range_start(now, "week") == now - relativedelta(weeks=1)
+        assert _range_start(now, "month") == now - relativedelta(months=1)
+        assert _range_start(now, "quarter") == now - relativedelta(months=3)
+        assert _range_start(now, "year") == now - relativedelta(years=1)
+        assert _range_start(now, "unknown") == now - relativedelta(months=1) # Fallback
+
+    # --- Team Reports ---
+    @pytest.mark.asyncio
+    async def test_get_teams_summary_cached(self):
+        cached_data = [{"department_id": str(uuid4()), "department_name": "HR", "total_members": 5, "total_points": 100, "avg_performance_score": 85.0}]
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=cached_data)):
+            result = await get_teams_summary()
+            assert len(result) == 1
+            assert result[0].department_name == "HR"
+
+    @pytest.mark.asyncio
+    async def test_get_teams_summary_live(self):
+        dept = make_department(name="Sales")
+        dept.department_id = str(uuid4())
+        
+        mock_scored_member = {"total_earned_points": 500, "performance_score": 90.0}
+        
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=None)), \
+             patch(f"{SVC}.get_all_departments", AsyncMock(return_value=[dept])), \
+             patch(f"{SVC}.get_credit_type_ids", AsyncMock(return_value=[1])), \
+             patch(f"{SVC}._dept_members", AsyncMock(return_value=[mock_scored_member])), \
+             patch(f"{SVC}.cache_set", AsyncMock()):
+            
+            result = await get_teams_summary()
+            assert len(result) == 1
+            assert result[0].department_name == "Sales"
+            assert result[0].total_members == 1
+            assert result[0].total_points == 500
+            assert result[0].avg_performance_score == 90.0
+
+    @pytest.mark.asyncio
+    async def test_get_team_report_not_found(self):
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=None)), \
+             patch(f"{SVC}.get_department_by_id", AsyncMock(return_value=None)):
+            result = await get_team_report(str(uuid4()))
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_team_report_empty(self):
+        dept = make_department(name="Empty Dept")
+        # IMPORTANT: Assign a valid UUID string so Pydantic doesn't reject it
+        dept.department_id = str(uuid4())
+        
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=None)), \
+             patch(f"{SVC}.get_department_by_id", AsyncMock(return_value=dept)), \
+             patch(f"{SVC}.get_credit_type_ids", AsyncMock(return_value=[])), \
+             patch(f"{SVC}._dept_members", AsyncMock(return_value=[])), \
+             patch(f"{SVC}.cache_set", AsyncMock()):
+            
+            result = await get_team_report(str(uuid4()))
+            assert result.total_members == 0
+            assert result.avg_performance_score == 0.0
+
+    # --- Participation Overview ---
+    @pytest.mark.asyncio
+    async def test_get_participation_overview(self):
+        mock_emp = MagicMock()
+        mock_emp.employee_id = "e1"
+        mock_emp.department_id = "d1"
+        
+        mock_rev = MagicMock()
+        mock_rev.reviewer_id = "e1"
+        mock_rev.receiver_id = "e2"
+        mock_rev.review_at = datetime.now(timezone.utc)
+        
+        mock_dept = MagicMock()
+        mock_dept.department_id = "d1"
+        mock_dept.department_name = "IT"
+
+        # FETCH FRESH: Grab the live mock from sys.modules right as the test starts
+        mock_prisma = sys.modules["src.prisma.client"]
+        mock_prisma.db.employees.find_many = AsyncMock(return_value=[mock_emp])
+        mock_prisma.db.reviews.find_many = AsyncMock(return_value=[mock_rev])
+        mock_prisma.db.departments.find_many = AsyncMock(return_value=[mock_dept])
+
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=None)), \
+             patch(f"{SVC}.cache_set", AsyncMock()):
+            
+            result = await get_participation_overview()
+            assert result.stats.total_employees == 1
+            assert len(result.by_department) == 1
+
+    # --- Recognition Trend ---
+    @pytest.mark.asyncio
+    async def test_get_recognition_trend_3m(self):
+        mock_rev = MagicMock()
+        mock_rev.reviewer_id = "e1"
+        mock_rev.review_at = datetime.now(timezone.utc)
+        
+        # FETCH FRESH
+        sys.modules["src.prisma.client"].db.reviews.find_many = AsyncMock(return_value=[mock_rev])
+
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=None)), \
+             patch(f"{SVC}.cache_set", AsyncMock()):
+            
+            result = await get_recognition_trend("3m")
+            assert len(result.data) == 12
+
+    @pytest.mark.asyncio
+    async def test_get_recognition_trend_6m(self):
+        # FETCH FRESH
+        sys.modules["src.prisma.client"].db.reviews.find_many = AsyncMock(return_value=[])
+
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=None)), \
+             patch(f"{SVC}.cache_set", AsyncMock()):
+            
+            result = await get_recognition_trend("6m")
+            assert len(result.data) == 6
+
+    # --- Recognition Users/Teams ---
+    @pytest.mark.asyncio
+    async def test_get_recognition_users(self):
+        mock_emp = MagicMock()
+        mock_emp.employee_id = "e1"
+        mock_emp.username = "user1"
+        mock_emp.department_id = "d1"
+        
+        mock_dept = MagicMock()
+        mock_dept.department_id = "d1"
+        mock_dept.department_name = "IT"
+
+        # FETCH FRESH
+        mock_prisma = sys.modules["src.prisma.client"]
+        mock_prisma.db.employees.find_many = AsyncMock(return_value=[mock_emp])
+        mock_prisma.db.reviews.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.departments.find_many = AsyncMock(return_value=[mock_dept])
+
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=None)), \
+             patch(f"{SVC}.cache_set", AsyncMock()):
+            
+            result = await get_recognition_users("month", 1, 10)
+            assert result.total == 1
+            assert result.items[0].username == "user1"
+
+    @pytest.mark.asyncio
+    async def test_get_recognition_teams(self):
+        mock_emp = MagicMock()
+        mock_emp.employee_id = "e1"
+        mock_emp.department_id = "d1"
+        
+        mock_dept = MagicMock()
+        mock_dept.department_id = "d1"
+        mock_dept.department_name = "IT"
+
+        # FETCH FRESH
+        mock_prisma = sys.modules["src.prisma.client"]
+        mock_prisma.db.departments.find_many = AsyncMock(return_value=[mock_dept])
+        mock_prisma.db.employees.find_many = AsyncMock(return_value=[mock_emp])
+        mock_prisma.db.reviews.find_many = AsyncMock(return_value=[])
+
+        with patch(f"{SVC}.cache_get", AsyncMock(return_value=None)), \
+             patch(f"{SVC}.cache_set", AsyncMock()):
+            
+            result = await get_recognition_teams("month", 1, 10)
+            assert result.total == 1
+            assert result.items[0].name == "IT"
