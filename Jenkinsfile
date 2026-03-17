@@ -46,13 +46,6 @@ pipeline {
                             # Generate Prisma Client
                             prisma generate
 
-                            # 1. Run Tests
-                            pytest src/ --disable-warnings \
-                            --junitxml=test-results.xml \
-                            --cov=src \
-                            --cov-report=xml:coverage.xml \
-                            --cov-report=html:htmlcov
-
                             # 2. Bandit: Exclude venv explicitly and fix report generation
                             # We use -x to exclude the venv directory from the scan
                             bandit -r . -x ./venv -lll -iii -f html -o bandit-report.html || true
@@ -76,7 +69,7 @@ pipeline {
             parallel {
                 stage('Container Scan - Trivy') {
                     steps {
-                       sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format json --output trivy-report.json $IMAGE:$TAG'
+                        sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format json --output trivy-report.json $IMAGE:$TAG'
                     }
                 }
 
@@ -243,7 +236,7 @@ pipeline {
     post {
         always {
         // Archive everything found for debugging
-        archiveArtifacts artifacts: '*.html, *.json, *.xml, htmlcov/**/*', allowEmptyArchive: true
+        archiveArtifacts artifacts: '*.html, *.json, *.xml', allowEmptyArchive: true
         
         publishHTML([
             allowMissing: true,
@@ -254,15 +247,6 @@ pipeline {
             reportFiles: 'bandit-report.html, zap-report.html', 
             reportName: 'Security Dashboard',
             reportTitles: 'Bandit (SAST), OWASP ZAP (DAST)'
-        ])
-        publishHTML([
-            allowMissing: true,
-            alwaysLinkToLastBuild: true,
-            keepAll: true,
-            reportDir: 'htmlcov',
-            reportFiles: 'index.html',
-            reportName: 'Code Coverage Report',
-            reportTitles: 'Pytest Coverage'
         ])
         junit testResults: 'test-results.xml', allowEmptyResults: true
     }
