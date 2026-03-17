@@ -187,6 +187,7 @@ pipeline {
                             ssh -o StrictHostKeyChecking=no ubuntu@${TARGET_EC2_HOST} "
                                 docker stop rnr-backend-test || true
                                 docker rm rnr-backend-test || true
+                                
                                 docker run -d \\
                                 --name rnr-backend-test \\
                                 --restart always \\
@@ -213,6 +214,12 @@ pipeline {
                                 -e OTEL_EXPORTER_OTLP_ENDPOINT='http://host.docker.internal:4317' \\
                                 -e OTEL_EXPORTER_OTLP_INSECURE='true' \\
                                 ${IMAGE}:${TAG}
+                                
+                                # Give the container 5 seconds to attempt its first boot
+                                sleep 5
+                                
+                                # Force restart to resolve startup race conditions
+                                docker restart rnr-backend-test
                                 
                                 docker system prune -f
                             "
