@@ -142,7 +142,7 @@ class NotificationService:
     # Legacy notification types that existed before the enum was trimmed.
     # These rows are still in the DB and must be excluded at query time to
     # prevent Pydantic ValidationError → 500 when serialising the list.
-    _LEGACY_TYPES = ["REWARD_REDEEMED", "POINTS_CREDIT"]
+    _LEGACY_TYPES = ["REWARD_REDEEMED", "POINTS_CREDIT", "BONUS", "CREDIT"]
 
     async def get_notifications(
         self,

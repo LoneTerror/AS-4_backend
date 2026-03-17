@@ -11,7 +11,6 @@ from src.common.cache import (
 )
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
-from src.recognition.points_engine import calculate_points
 
 logger = logging.getLogger(__name__)
 
@@ -371,57 +370,22 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
         points    = max(1, round(review.raw_points))
         breakdown = {"source": "stored", "raw_points": review.raw_points}
     else:
-        logger.warning(
-            "review %s has no raw_points — recalculating from source tables", review_id
+        # rating and seasonal_multiplier are no longer stored in the DB.
+        # raw_points must always be present on the review — if it is missing,
+        # the review was created by an older code path and cannot be credited safely.
+        logger.error(
+            "review %s has no raw_points and recalculation is no longer supported "
+            "(rating / seasonal_multiplier fields removed from DB)",
+            review_id,
         )
-        tags = getattr(review, "review_category_tags", []) or []
-        total_category_multiplier = (
-            sum(float(t.multiplier_snapshot) for t in tags) if tags else 1.0
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Review {review_id} has no raw_points stored and cannot be "
+                "recalculated because rating/seasonal_multiplier fields have been removed. "
+                "Re-submit the review to generate raw_points."
+            ),
         )
-
-        from src.recognition.service import _ROLE_PRIORITY
-        reviewer_weight = 1.0
-        reviewer = await db.employees.find_unique(
-            where={"employee_id": review.reviewer_id},
-            include={"employee_roles": {"include": {"roles": True}, "where": {"is_active": True}}},
-        )
-        if reviewer and reviewer.employee_roles:
-            active_role_codes = [
-                er.roles.role_code for er in reviewer.employee_roles if er.roles
-            ]
-            for role_code in _ROLE_PRIORITY:
-                if role_code in active_role_codes:
-                    role_row = await db.roles.find_first(where={"role_code": role_code})
-                    if role_row:
-                        reviewer_weight = float(role_row.reviewer_weight)
-                    break
-
-        review_dt = review.review_at or datetime.now(timezone.utc)
-        if review_dt.tzinfo is None:
-            review_dt = review_dt.replace(tzinfo=timezone.utc)
-        quarter = (review_dt.month - 1) // 3 + 1
-        seasonal_row = await db.seasonal_multipliers.find_first(
-            where={
-                "quarter": quarter,
-                "OR": [
-                    {"effective_from": None},
-                    {"effective_from": {"lte": review_dt}},
-                ],
-            },
-            order={"effective_from": "desc"},
-        )
-        seasonal_multiplier = float(seasonal_row.multiplier) if seasonal_row else 1.0
-        category_codes      = ",".join(t.category_code_snapshot for t in tags) if tags else "UNKNOWN"
-
-        pts       = calculate_points(
-            rating                    = review.rating,
-            total_category_multiplier = total_category_multiplier,
-            reviewer_weight           = reviewer_weight,
-            seasonal_multiplier       = seasonal_multiplier,
-            category_code             = category_codes,
-        )
-        points    = max(1, round(pts.raw_points))
-        breakdown = {**pts.as_dict(), "source": "recalculated"}
 
     if points == 0:
         return {"message": "No points awarded for this rating", "credited_points": 0}
@@ -458,7 +422,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                     "amount":              points,
                     "transaction_type_id": txn_type.type_id,
                     "status_id":           status_record.status_id,
-                    "description":         f"{review.rating}★ {category_label} review → {points} pts",
+                    "description":         f"{category_label} review → {points} pts",
                     "reference_number":    reference,
                     "created_by":          created_by,
                     "updated_by":          created_by,
@@ -488,13 +452,11 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
         logger.debug("cache busted wallet key=%s", _wallet_key(employee_id))
 
         try:
-            stars = "⭐" * review.rating
             await _get_notif().create_notification(
                 employee_id = employee_id,
                 title       = f"{points} points credited to your wallet 💰",
                 message     = (
-                    f"You earned {points} pts for a {review.rating}-star "
-                    f"{category_label} review {stars}. "
+                    f"You earned {points} pts for a {category_label} review. "
                     f"New balance: {new_available} pts."
                 ),
                 type = NotificationType.REWARD,
@@ -596,8 +558,7 @@ async def adjust_wallet_for_review_update(
                     "transaction_type_id": txn_type.type_id,
                     "status_id":           status_record.status_id,
                     "description":         (
-                        f"Review update: {review.rating}★ "
-                        f"→ wallet {direction_word}{int_delta:+d} pts "
+                        f"Review update → wallet {direction_word}{int_delta:+d} pts "
                         f"(raw delta={delta_points:+.4f})"
                     ),
                     "reference_number": reference,

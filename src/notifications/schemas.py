@@ -86,15 +86,19 @@ class NotificationResponse(BaseModel):
     @classmethod
     def coerce_legacy_type(cls, v: Any) -> Any:
         """
-        Secondary safety net: if a legacy type value (e.g. REWARD_REDEEMED,
-        POINTS_CREDIT) reaches the serialiser despite the DB-level filter in
-        service.py, remap it to SYSTEM rather than crashing with a 500.
+        Secondary safety net: if a legacy type value reaches the serialiser
+        despite the DB-level filter in service.py, remap it to SYSTEM rather
+        than crashing with a 500.
+
+        Known legacy types:
+          - REWARD_REDEEMED, POINTS_CREDIT — first-generation legacy
+          - BONUS, CREDIT — older pre-enum values found in DB
 
         The primary defence is the `type: {not: {in: _LEGACY_TYPES}}` filter
         in get_notifications() and get_unread_count(). This validator is a
         fallback for any query path that doesn't apply that filter.
         """
-        _LEGACY_REMAP = {"REWARD_REDEEMED", "POINTS_CREDIT"}
+        _LEGACY_REMAP = {"REWARD_REDEEMED", "POINTS_CREDIT", "BONUS", "CREDIT"}
         if isinstance(v, str) and v in _LEGACY_REMAP:
             return "SYSTEM"
         return v
