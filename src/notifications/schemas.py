@@ -98,7 +98,7 @@ class NotificationResponse(BaseModel):
         in get_notifications() and get_unread_count(). This validator is a
         fallback for any query path that doesn't apply that filter.
         """
-        _LEGACY_REMAP = {"REWARD_REDEEMED", "POINTS_CREDIT", "BONUS", "CREDIT"}
+        _LEGACY_REMAP = {"REWARD_REDEEMED", "POINTS_CREDIT", "BONUS", "CREDIT", "REDEMPTION"}
         if isinstance(v, str) and v in _LEGACY_REMAP:
             return "SYSTEM"
         return v
