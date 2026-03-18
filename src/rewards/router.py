@@ -1,6 +1,6 @@
 # src/rewards/router.py
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, status, HTTPException
 from typing import List, Optional
 from prisma import Prisma
 from src.prisma.client import db
@@ -126,13 +126,24 @@ async def restock_item(
 @router.post("/redeem", response_model=schemas.RedemptionResponse, status_code=status.HTTP_201_CREATED)
 async def redeem_reward(
     request: Request,
-    body: schemas.GrantRewardRequest,
+    body: schemas.RedeemRewardRequest, # Use the new schema
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
     logger.info(f"User {current_user.id} attempting to redeem catalog item {body.catalog_id}")
     svc = service.RewardService(db)
-    return await svc.grant_reward(request=body, granted_by_user_id=current_user.id)
+    
+    # Securely map the token's user ID to their wallet ID
+    wallet_id = await svc.get_wallet_id_for_user(current_user.id)
+    if not wallet_id:
+        raise HTTPException(status_code=404, detail="Wallet not found for the authenticated user.")
+
+    # Pass the resolved wallet_id directly to the service
+    return await svc.grant_reward(
+        wallet_id=wallet_id, 
+        request=body, 
+        granted_by_user_id=current_user.id
+    )
 
 
 # --- REWARD HISTORY ENDPOINTS ---

@@ -317,14 +317,13 @@ class AddStockRequest(BaseModel):
 
 # HISTORY/GRANTING SCHEMAS (reward_history)
 
-class GrantRewardRequest(BaseModel):
+class RedeemRewardRequest(BaseModel):
     """
-    Used when a Manager grants a reward to an Employee OR 
-    an Employee claims a specific reward.
+    Used when an Employee claims a specific reward for themselves.
+    (wallet_id is omitted; fetched securely from the auth token)
     """
-    wallet_id: UUID4 
     catalog_id: UUID4
-    points: int = Field(..., strict=True, gt=0, description="Actual points given/redeemed")
+    points: int = Field(..., strict=True, gt=0, description="Actual points redeemed")
     comment: Optional[str] = None
 
 class MinimalCatalogInfo(BaseModel):
