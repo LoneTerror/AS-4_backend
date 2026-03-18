@@ -6,7 +6,7 @@ from prisma import Prisma
 from src.prisma.client import db
 
 from . import schemas, service
-from src.common.dependencies import check_route_permission, CurrentUser
+from src.common.dependencies import check_route_permission, CurrentUser, PaginationParams
 from src.core.logger import logger
 
 
@@ -150,34 +150,34 @@ async def redeem_reward(
 
 @router.get("/history/me", response_model=schemas.PaginatedHistoryResponse)
 async def get_my_history(
-    page: int = Query(1, ge=1, description="Page number, must be 1 or greater"),
-    size: int = Query(10, ge=1, le=100, description="Items per page, maximum 100"),
+    pagination: PaginationParams = Depends(), 
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    """View ONLY my own reward history."""
-    logger.debug(f"User {current_user.id} fetching their personal reward history")
     svc = service.RewardService(db)
-
     my_wallet_id = await svc.get_wallet_id_for_user(current_user.id)
 
     if not my_wallet_id:
-        logger.warning(f"Failed to fetch history: No wallet found for user {current_user.id}")
-        return {"data": [], "total_items": 0, "page": page, "size": size}
+        return {"data": [], "total_items": 0, "page": pagination.page, "size": pagination.size}
 
-    return await svc.get_history(wallet_id=my_wallet_id, page=page, size=size)
+    # Access the validated variables using pagination.page and pagination.size
+    return await svc.get_history(
+        wallet_id=my_wallet_id, 
+        page=pagination.page, 
+        size=pagination.size
+    )
 
 
 @router.get("/history", response_model=schemas.PaginatedHistoryResponse)
 async def get_all_history(
     wallet_id: Optional[str] = None,
-    # Apply the exact same validation here
-    page: int = Query(1, ge=1, description="Page number, must be 1 or greater"),
-    size: int = Query(10, ge=1, le=100, description="Items per page, maximum 100"),
+    pagination: PaginationParams = Depends(), 
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    """Admin View: View history for ALL users, or filter by a specific wallet."""
-    logger.info(f"Admin {current_user.id} fetching global reward history. Filtered by wallet: {wallet_id}")
     svc = service.RewardService(db)
-    return await svc.get_history(wallet_id=wallet_id, page=page, size=size)
+    return await svc.get_history(
+        wallet_id=wallet_id, 
+        page=pagination.page, 
+        size=pagination.size
+    )

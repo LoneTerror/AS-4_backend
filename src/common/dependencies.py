@@ -5,7 +5,7 @@ import uuid
 import hashlib
 import httpx
 from typing import List, Optional
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status, Query
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -299,6 +299,15 @@ async def check_route_permission(
         )
 
     return current_user
+
+class PaginationParams:
+    def __init__(
+        self,
+        page: int = Query(1, ge=1, description="Page number, must be >= 1"),
+        size: int = Query(10, ge=1, le=100, description="Items per page (Max 100)")
+    ):
+        self.page = page
+        self.size = size
 
 
 def get_db() -> Prisma:
