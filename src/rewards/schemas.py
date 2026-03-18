@@ -7,7 +7,7 @@ from datetime import datetime
 class CreateCategoryRequest(BaseModel):
     category_name: str = Field(
         ..., 
-        min_length=1, 
+        min_length=3, 
         max_length=100,
         pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
         description="Name of the category. Alphanumeric and basic punctuation only."
@@ -16,7 +16,7 @@ class CreateCategoryRequest(BaseModel):
     # Strictly limits to UPPERCASE letters, numbers, dashes, and underscores
     category_code: str = Field(
         ..., 
-        min_length=1, 
+        min_length=3, 
         max_length=50, 
         pattern=r'^[A-Z0-9_-]+$',
         description="Unique code (Uppercase alphanumeric, dashes, underscores only) e.g. 'CAT-GIFT'"
@@ -51,7 +51,7 @@ class CreateCategoryRequest(BaseModel):
 class UpdateCategoryRequest(BaseModel):
     category_name: Optional[str] = Field(
         None, 
-        min_length=1, 
+        min_length=3, 
         max_length=100,
         pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
         description="Name of the category. Alphanumeric and basic punctuation only."
@@ -125,7 +125,7 @@ class CreateRewardRequest(BaseModel):
     # Prevent empty strings, restrict to safe characters
     reward_name: str = Field(
         ..., 
-        min_length=1, 
+        min_length=3, 
         max_length=200,
         # Added $, ₹, €, and £ to the allowed character class
         pattern=r'^[a-zA-Z0-9\s\-_&.,()$₹€£]+$',
@@ -135,7 +135,7 @@ class CreateRewardRequest(BaseModel):
     # Strict uppercase alphanumeric and dashes/underscores
     reward_code: str = Field(
         ..., 
-        min_length=1, 
+        min_length=10, 
         max_length=50, 
         pattern=r'^[A-Z0-9_-]+$',
         description="Unique SKU e.g. 'REW-AMZ-50'"
@@ -295,12 +295,11 @@ class RewardItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class AddStockRequest(BaseModel):
-    amount: int = Field(..., gt=0, description="Amount of new stock to add")
+    amount: StrictInt = Field(..., gt=0, description="Amount of new stock to add")
 
     @field_validator('amount')
     @classmethod
     def check_reasonable_amount(cls, v: int) -> int:
-        # Example business logic: Prevent accidental massive restocks
         max_restock_limit = 10000 
         if v > max_restock_limit:
             raise ValueError(f'Cannot add more than {max_restock_limit} items in a single transaction.')
@@ -318,14 +317,13 @@ class AddStockRequest(BaseModel):
 
 # HISTORY/GRANTING SCHEMAS (reward_history)
 
-class GrantRewardRequest(BaseModel):
+class RedeemRewardRequest(BaseModel):
     """
-    Used when a Manager grants a reward to an Employee OR 
-    an Employee claims a specific reward.
+    Used when an Employee claims a specific reward for themselves.
+    (wallet_id is omitted; fetched securely from the auth token)
     """
-    wallet_id: UUID4 
     catalog_id: UUID4
-    points: int = Field(..., gt=0, description="Actual points given/redeemed")
+    points: int = Field(..., strict=True, gt=0, description="Actual points redeemed")
     comment: Optional[str] = None
 
 class MinimalCatalogInfo(BaseModel):

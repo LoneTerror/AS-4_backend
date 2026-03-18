@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, AsyncMock
 from src.rewards.service import RewardService
 from src.rewards.schemas import CreateCategoryRequest, GrantRewardRequest, AddStockRequest
 
-# Generate some valid UUIDs to satisfy Pydantic's strict UUID4 validation
 VALID_WALLET_UUID = str(uuid.uuid4())
 VALID_CATALOG_UUID = str(uuid.uuid4())
 
@@ -268,3 +267,48 @@ async def test_add_stock_success(mock_db, mocker):
     
     # Verify Audit log was called
     service._log_change.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_grant_reward_insufficient_funds(mock_db):
+    service = RewardService(mock_db)
+    
+    # 1. Mock Catalog Item (In stock, costs 100 points)
+    mock_item = MagicMock(is_active=True, available_stock=10, min_points=50, max_points=150)
+    mock_db.reward_catalog.find_unique.return_value = mock_item
+    
+    # 2. Mock Wallet (User only has 20 points!)
+    mock_wallet = MagicMock(available_points=20)
+    mock_db.wallets.find_unique.return_value = mock_wallet
+
+    request_data = GrantRewardRequest(
+        wallet_id=VALID_WALLET_UUID,
+        catalog_id=VALID_CATALOG_UUID,
+        points=100  # Trying to spend 100
+    )
+
+    # 3. Execute and Assert
+    with pytest.raises(HTTPException) as exc:
+        await service.grant_reward(request_data, "emp-123")
+    
+    assert exc.value.status_code == 400
+    assert "Insufficient wallet balance" in exc.value.detail
+
+@pytest.mark.asyncio
+async def test_grant_reward_invalid_points(mock_db):
+    service = RewardService(mock_db)
+    
+    # Item requires exactly 500 points
+    mock_item = MagicMock(is_active=True, available_stock=10, min_points=500, max_points=500)
+    mock_db.reward_catalog.find_unique.return_value = mock_item
+
+    request_data = GrantRewardRequest(
+        wallet_id=VALID_WALLET_UUID,
+        catalog_id=VALID_CATALOG_UUID,
+        points=100  # User tries to cheat and claim it for 100 points
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.grant_reward(request_data, "emp-123")
+    
+    assert exc.value.status_code == 400
+    assert "Points are outside the allowed range" in exc.value.detail

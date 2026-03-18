@@ -91,16 +91,24 @@ def make_raw_review(
     review_id=None,
     reviewer_username="john.doe",
     reviewer=None,
-    rating=4,
     comment="Good job",
     review_at=None,
+    tags=None,
 ):
     """Build a MagicMock that looks like a Prisma reviews row from get_recent_reviews."""
     r = MagicMock()
     r.review_id = review_id or str(uuid4())
-    r.rating = rating
     r.comment = comment
     r.review_at = review_at or datetime(2026, 2, 15, 10, 0, tzinfo=timezone.utc)
+    
+    # Mock tags
+    r.review_category_tags = []
+    if tags:
+        for t_code in tags:
+            t = MagicMock()
+            t.category_code_snapshot = t_code
+            r.review_category_tags.append(t)
+
     if reviewer is not None:
         r.employees_reviews_reviewer_idToemployees = reviewer
     else:

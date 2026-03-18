@@ -271,15 +271,21 @@ class RewardService:
             available_stock=new_item.available_stock,
         )
 
-    async def get_catalog(self, active_only: bool = True, page: int = 1, size: int = 20):
-        key    = _key_catalog(active_only, page, size)
+    async def get_catalog(self, is_active: Optional[bool] = True, page: int = 1, size: int = 20):
+        # 1. Update cache key to safely handle the None/Null state
+        flag = "all" if is_active is None else str(int(is_active))
+        key  = f"rewards:catalog:{flag}:{page}:{size}"
+        
         cached = await cache_get(key, l1_ttl=L1_MEDIUM)
         logger.debug("cache catalog key=%s %s", key, "HIT" if cached is not None else "MISS")
         if cached is not None:
             return cached
 
-        skip        = (page - 1) * size
-        where_clause = {"is_active": True} if active_only else {}
+        skip = (page - 1) * size
+        
+        # 2. Dynamically build the where_clause based on the boolean
+        where_clause = {"is_active": is_active} if is_active is not None else {}
+        
         total_items = await self.db.reward_catalog.count(where=where_clause)
 
         items = await self.db.reward_catalog.find_many(
@@ -494,10 +500,15 @@ class RewardService:
     # ─────────────────────────────────────────────────────────────────────────
     # Redemption
     # ─────────────────────────────────────────────────────────────────────────
-    async def grant_reward(self, request: schemas.GrantRewardRequest, granted_by_user_id: str):
+    async def grant_reward(
+        self, 
+        wallet_id: str, # Added direct parameter
+        request: schemas.RedeemRewardRequest, 
+        granted_by_user_id: str
+    ):
         logger.info(
             "Initiating grant_reward | catalog=%s wallet=%s",
-            request.catalog_id, request.wallet_id,
+            request.catalog_id, wallet_id,
         )
 
         reward_item = await self.db.reward_catalog.find_unique(
@@ -512,7 +523,7 @@ class RewardService:
         if request.points < reward_item.min_points or request.points > reward_item.max_points:
             raise HTTPException(status_code=400, detail="Points are outside the allowed range")
 
-        wallet = await self.db.wallets.find_unique(where={"wallet_id": str(request.wallet_id)})
+        wallet = await self.db.wallets.find_unique(where={"wallet_id": str(wallet_id)})
         if not wallet:
             raise HTTPException(status_code=404, detail="Wallet not found")
 
@@ -527,7 +538,7 @@ class RewardService:
         try:
             async with self.db.tx() as transaction:
                 await transaction.wallets.update(
-                    where={"wallet_id": str(request.wallet_id)},
+                    where={"wallet_id": str(wallet_id)},
                     data={
                         "available_points": {"decrement": request.points},
                         "redeemed_points":  {"increment": request.points},
@@ -556,7 +567,7 @@ class RewardService:
 
                 await transaction.transactions.create(
                     data={
-                        "wallet_id":           str(request.wallet_id),
+                        "wallet_id":           str(wallet_id),
                         "amount":              request.points,
                         "transaction_type_id": type_id,
                         "status_id":           status_id,
@@ -571,7 +582,7 @@ class RewardService:
 
                 history_record = await transaction.reward_history.create(
                     data={
-                        "wallet_id":  str(request.wallet_id),
+                        "wallet_id":  str(wallet_id),
                         "catalog_id": str(request.catalog_id),
                         "points":     request.points,
                         "granted_by": granted_by_user_id,
@@ -584,7 +595,7 @@ class RewardService:
 
             # ── Post-commit: invalidate caches ────────────────────────────────
             await invalidate_catalog()
-            await invalidate_history(str(request.wallet_id))
+            await invalidate_history(str(wallet_id))
             await cache_delete(f"wallets:employee:{wallet.employee_id}")
             from src.analytics.service import invalidate_leaderboard
             await invalidate_leaderboard()
@@ -608,7 +619,7 @@ class RewardService:
                     history_record.history_id,
                 )
 
-            logger.info("Transaction %s completed for wallet %s", ref_number, request.wallet_id)
+            logger.info("Transaction %s completed for wallet %s", ref_number, wallet_id)
             return {
                 "history_id":      history_record.history_id,
                 "points":          history_record.points,
@@ -627,6 +638,14 @@ class RewardService:
     # History
     # ─────────────────────────────────────────────────────────────────────────
     async def get_history(self, wallet_id: Optional[str] = None, page: int = 1, size: int = 10):
+        if wallet_id:
+            wallet_exists = await self.db.wallets.find_unique(where={"wallet_id": wallet_id})
+            if not wallet_exists:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"Wallet not found. Ensure the ID is correct."
+                )
+
         key    = _key_history(wallet_id, page, size)
         cached = await cache_get(key, l1_ttl=L1_VOLATILE)
         logger.debug("cache history key=%s %s", key, "HIT" if cached is not None else "MISS")

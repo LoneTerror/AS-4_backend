@@ -17,7 +17,7 @@ class RecentReview(BaseModel):
         review_id: Unique UUID of the review record.
         reviewer_name: Username of the person who submitted the review.
             Falls back to ``"Unknown"`` if the reviewer relation is missing.
-        rating: Numeric rating (typically 1–5).
+        tags: List of category codes associated with this review.
         comment: Free‑text feedback from the reviewer.
         review_at: Timestamp when the review was created.
     """

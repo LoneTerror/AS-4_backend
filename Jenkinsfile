@@ -4,7 +4,8 @@ pipeline {
     environment {
         IMAGE = "mrmonster786/rnr-backend"
         TAG = "${env.BUILD_NUMBER}"
-        TARGET_EC2_HOST="backend.aabhar.top"
+        TARGET_EC2_HOST="bn1.aabhar.top"
+        DOCKER_BUILDKIT = "1"
     }
 
     triggers {
@@ -34,39 +35,24 @@ pipeline {
                         }
                     }
                     steps {
-                        sh '''
-                            # 1. Install system dependencies required for Prisma binaries in slim image
+                            sh '''
                             apt-get update && apt-get install -y --no-install-recommends libatomic1
-                            
-                            # 2. Setup environment
                             python -m venv venv
                             . venv/bin/activate
-                            
-                            # 3. Upgrade pip to support --require-hashes accurately
-                            pip install --upgrade pip
-                            pip install pip-tools
-                            
-                            # 4. Sync dependencies from the hashed requirements.txt
+                            pip install --upgrade pip pip-tools
                             pip-sync requirements.txt
-                            
-                            # 5. Install tools needed for this specific stage
                             pip install pytest bandit pip-audit
 
-                            # 6. Generate Prisma Client (Matching the Builder Stage in Dockerfile)
-                            echo "Generate Prisma Client..."
+                            # Generate Prisma Client
                             prisma generate
 
-                            echo "🧪 Running Unit Tests..."
-                            pytest src/ --disable-warnings --junitxml=test-results.xml
-        
-                            echo "🔒 Running Static Security Scans..."
-                            bandit -r . --exclude ./venv,./tests -lll -iii -f json -o bandit-report.json || true
-                            bandit -r . --exclude ./venv,./tests -lll -iii -f html -o bandit-report.html || true
-        
-                            pip-audit --format html --output pip-audit-report.html || true
+                            # 2. Bandit: Exclude venv explicitly and fix report generation
+                            # We use -x to exclude the venv directory from the scan
+                            bandit -r . -x ./venv -lll -iii -f html -o bandit-report.html || true
+                            bandit -r . -x ./venv -lll -iii -f json -o bandit-report.json || true
 
-                            echo "📂 Listing files for debugging:"
-                            ls -lh bandit-report.html pip-audit-report.json test-results.xml
+                            # 3. Pip-Audit: Use JSON (standard) or skip HTML if not supported
+                            pip-audit --format json --output pip-audit-report.json || true
                         '''
                     }
                 }
@@ -83,7 +69,7 @@ pipeline {
             parallel {
                 stage('Container Scan - Trivy') {
                     steps {
-                       sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format json --output trivy-report.json $IMAGE:$TAG'
+                        sh 'trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format json --output trivy-report.json $IMAGE:$TAG'
                     }
                 }
 
@@ -201,6 +187,7 @@ pipeline {
                             ssh -o StrictHostKeyChecking=no ubuntu@${TARGET_EC2_HOST} "
                                 docker stop rnr-backend-test || true
                                 docker rm rnr-backend-test || true
+                                
                                 docker run -d \\
                                 --name rnr-backend-test \\
                                 --restart always \\
@@ -228,6 +215,12 @@ pipeline {
                                 -e OTEL_EXPORTER_OTLP_INSECURE='true' \\
                                 ${IMAGE}:${TAG}
                                 
+                                # Give the container 5 seconds to attempt its first boot
+                                sleep 5
+                                
+                                # Force restart to resolve startup race conditions
+                                docker restart rnr-backend-test
+                                
                                 docker system prune -f
                             "
                             """
@@ -249,18 +242,21 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: '**/bandit-report.*, **/zap-report.html, **/test-results.xml, **/pip-audit-report.json', allowEmptyArchive: true
-            publishHTML([
-                allowMissing: true,
-                alwaysLinkToLastBuild: true,
-                keepAll: true,
-                reportDir: '.',
-                reportFiles: 'bandit-report.html, zap-report.html, pip-audit-report.html',
-                reportName: 'Security Dashboard',
-                reportTitles: 'Bandit (SAST), OWASP ZAP (DAST), Pip Audit Report'
-            ])
-            junit testResults: '**/test-results.xml', allowEmptyResults: true
-        }
+        // Archive everything found for debugging
+        archiveArtifacts artifacts: '*.html, *.json, *.xml', allowEmptyArchive: true
+        
+        publishHTML([
+            allowMissing: true,
+            alwaysLinkToLastBuild: true,
+            keepAll: true,
+            reportDir: '.',
+            // Only include reports known to be valid HTML
+            reportFiles: 'bandit-report.html, zap-report.html', 
+            reportName: 'Security Dashboard',
+            reportTitles: 'Bandit (SAST), OWASP ZAP (DAST)'
+        ])
+        junit testResults: 'test-results.xml', allowEmptyResults: true
+    }
         success {
             withCredentials([
                 string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'),

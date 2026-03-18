@@ -86,7 +86,7 @@ class ExactLevelFilter(logging.Filter):
 def setup_logger(name: str = "app_logger"):
     logger = logging.getLogger(name)
 
-    if logger.hasHandlers():
+    if logger.handlers:
         return logger
 
     logger.setLevel(logging.DEBUG)
