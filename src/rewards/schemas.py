@@ -324,7 +324,7 @@ class GrantRewardRequest(BaseModel):
     """
     wallet_id: UUID4 
     catalog_id: UUID4
-    points: int = Field(..., gt=0, description="Actual points given/redeemed")
+    points: int = Field(..., strict=True, gt=0, description="Actual points given/redeemed")
     comment: Optional[str] = None
 
 class MinimalCatalogInfo(BaseModel):
