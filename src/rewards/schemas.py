@@ -7,7 +7,7 @@ from datetime import datetime
 class CreateCategoryRequest(BaseModel):
     category_name: str = Field(
         ..., 
-        min_length=1, 
+        min_length=3, 
         max_length=100,
         pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
         description="Name of the category. Alphanumeric and basic punctuation only."
@@ -16,7 +16,7 @@ class CreateCategoryRequest(BaseModel):
     # Strictly limits to UPPERCASE letters, numbers, dashes, and underscores
     category_code: str = Field(
         ..., 
-        min_length=1, 
+        min_length=3, 
         max_length=50, 
         pattern=r'^[A-Z0-9_-]+$',
         description="Unique code (Uppercase alphanumeric, dashes, underscores only) e.g. 'CAT-GIFT'"
@@ -51,7 +51,7 @@ class CreateCategoryRequest(BaseModel):
 class UpdateCategoryRequest(BaseModel):
     category_name: Optional[str] = Field(
         None, 
-        min_length=1, 
+        min_length=3, 
         max_length=100,
         pattern=r'^[a-zA-Z0-9\s\-_&.,()]+$',
         description="Name of the category. Alphanumeric and basic punctuation only."
@@ -125,7 +125,7 @@ class CreateRewardRequest(BaseModel):
     # Prevent empty strings, restrict to safe characters
     reward_name: str = Field(
         ..., 
-        min_length=1, 
+        min_length=3, 
         max_length=200,
         # Added $, ₹, €, and £ to the allowed character class
         pattern=r'^[a-zA-Z0-9\s\-_&.,()$₹€£]+$',
@@ -135,7 +135,7 @@ class CreateRewardRequest(BaseModel):
     # Strict uppercase alphanumeric and dashes/underscores
     reward_code: str = Field(
         ..., 
-        min_length=1, 
+        min_length=10, 
         max_length=50, 
         pattern=r'^[A-Z0-9_-]+$',
         description="Unique SKU e.g. 'REW-AMZ-50'"

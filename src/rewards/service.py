@@ -271,15 +271,21 @@ class RewardService:
             available_stock=new_item.available_stock,
         )
 
-    async def get_catalog(self, active_only: bool = True, page: int = 1, size: int = 20):
-        key    = _key_catalog(active_only, page, size)
+    async def get_catalog(self, is_active: Optional[bool] = True, page: int = 1, size: int = 20):
+        # 1. Update cache key to safely handle the None/Null state
+        flag = "all" if is_active is None else str(int(is_active))
+        key  = f"rewards:catalog:{flag}:{page}:{size}"
+        
         cached = await cache_get(key, l1_ttl=L1_MEDIUM)
         logger.debug("cache catalog key=%s %s", key, "HIT" if cached is not None else "MISS")
         if cached is not None:
             return cached
 
-        skip        = (page - 1) * size
-        where_clause = {"is_active": True} if active_only else {}
+        skip = (page - 1) * size
+        
+        # 2. Dynamically build the where_clause based on the boolean
+        where_clause = {"is_active": is_active} if is_active is not None else {}
+        
         total_items = await self.db.reward_catalog.count(where=where_clause)
 
         items = await self.db.reward_catalog.find_many(

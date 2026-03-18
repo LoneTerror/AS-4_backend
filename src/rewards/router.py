@@ -96,16 +96,20 @@ async def update_reward_item(
 
 @router.get("/catalog", response_model=schemas.PaginatedCatalogResponse)
 async def view_catalog(
-    active_only: bool = True,
-    page: int = 1,
-    size: int = 20,
+    is_active: Optional[bool] = Query(None, description="True=Active, False=Archived, Null=All"),
+    pagination: PaginationParams = Depends(),
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
     """View the catalog with pagination and nested category details."""
-    logger.debug(f"User {current_user.id} viewing catalog page {page}")
+    logger.debug(f"User {current_user.id} viewing catalog page {pagination.page}")
     svc = service.RewardService(db)
-    return await svc.get_catalog(active_only=active_only, page=page, size=size)
+    
+    return await svc.get_catalog(
+        is_active=is_active, 
+        page=pagination.page, 
+        size=pagination.size
+    )
 
 
 @router.patch("/catalog/{catalog_id}/stock", response_model=schemas.RewardItemResponse)
