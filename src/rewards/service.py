@@ -632,6 +632,14 @@ class RewardService:
     # History
     # ─────────────────────────────────────────────────────────────────────────
     async def get_history(self, wallet_id: Optional[str] = None, page: int = 1, size: int = 10):
+        if wallet_id:
+            wallet_exists = await self.db.wallets.find_unique(where={"wallet_id": wallet_id})
+            if not wallet_exists:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"Wallet not found. Ensure the ID is correct."
+                )
+
         key    = _key_history(wallet_id, page, size)
         cached = await cache_get(key, l1_ttl=L1_VOLATILE)
         logger.debug("cache history key=%s %s", key, "HIT" if cached is not None else "MISS")

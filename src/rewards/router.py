@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, Request, status, HTTPException, Query
 from typing import List, Optional
 from prisma import Prisma
+from pydantic import UUID4
 from src.prisma.client import db
 
 from . import schemas, service
@@ -170,14 +171,20 @@ async def get_my_history(
 
 @router.get("/history", response_model=schemas.PaginatedHistoryResponse)
 async def get_all_history(
-    wallet_id: Optional[str] = None,
-    pagination: PaginationParams = Depends(), 
+    # CHANGE: Update Optional[str] to Optional[UUID4]
+    wallet_id: Optional[UUID4] = None, 
+    pagination: PaginationParams = Depends(),
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
+    """Admin View: View history for ALL users, or filter by a specific wallet."""
+    logger.info(f"Admin {current_user.id} fetching global reward history.")
     svc = service.RewardService(db)
+
+    safe_wallet_id = str(wallet_id) if wallet_id else None
+    
     return await svc.get_history(
-        wallet_id=wallet_id, 
+        wallet_id=safe_wallet_id, 
         page=pagination.page, 
         size=pagination.size
     )
