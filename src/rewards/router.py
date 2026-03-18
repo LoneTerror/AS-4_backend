@@ -1,6 +1,6 @@
 # src/rewards/router.py
 
-from fastapi import APIRouter, Depends, Request, status, HTTPException
+from fastapi import APIRouter, Depends, Request, status, HTTPException, Query
 from typing import List, Optional
 from prisma import Prisma
 from src.prisma.client import db
@@ -150,8 +150,8 @@ async def redeem_reward(
 
 @router.get("/history/me", response_model=schemas.PaginatedHistoryResponse)
 async def get_my_history(
-    page: int = 1,
-    size: int = 10,
+    page: int = Query(1, ge=1, description="Page number, must be 1 or greater"),
+    size: int = Query(10, ge=1, le=100, description="Items per page, maximum 100"),
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
@@ -171,8 +171,9 @@ async def get_my_history(
 @router.get("/history", response_model=schemas.PaginatedHistoryResponse)
 async def get_all_history(
     wallet_id: Optional[str] = None,
-    page: int = 1,
-    size: int = 10,
+    # Apply the exact same validation here
+    page: int = Query(1, ge=1, description="Page number, must be 1 or greater"),
+    size: int = Query(10, ge=1, le=100, description="Items per page, maximum 100"),
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
