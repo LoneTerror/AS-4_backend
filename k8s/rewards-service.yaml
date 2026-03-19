@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rewards-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rewards-service
+  template:
+    metadata:
+      labels:
+        app: rewards-service
+    spec:
+      containers:
+      - name: rewards-service
+        image: mrmonster786/rnr-backend-base:latest
+        command: ["uvicorn", "src.rewards.main:app", "--host", "0.0.0.0", "--port", "8006", "--reload"]
+        ports:
+        - containerPort: 8006
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
+        env:
+        - name: REDIS_URL
+          value: "redis://redis:6379/0"
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service:8001/v1/auth/validate"
+        - name: WALLET_SERVICE_URL
+          value: "http://wallet-service:8004"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rewards-service
+spec:
+  selector:
+    app: rewards-service
+  ports:
+    - protocol: TCP
+      port: 8006
+      targetPort: 8006

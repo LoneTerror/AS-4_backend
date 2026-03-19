@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: employees-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: employees-service
+  template:
+    metadata:
+      labels:
+        app: employees-service
+    spec:
+      containers:
+      - name: employees-service
+        image: mrmonster786/rnr-backend-base:latest
+        command: ["uvicorn", "src.employees.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"]
+        ports:
+        - containerPort: 8003
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: employees-service
+spec:
+  selector:
+    app: employees-service
+  ports:
+    - protocol: TCP
+      port: 8003
+      targetPort: 8003

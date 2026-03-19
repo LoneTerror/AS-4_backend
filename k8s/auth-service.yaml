@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+      - name: auth-service
+        image: mrmonster786/rnr-backend-base:latest 
+        command: ["uvicorn", "src.auth.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+        ports:
+        - containerPort: 8001
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - protocol: TCP
+      port: 8001
+      targetPort: 8001
