@@ -14,6 +14,26 @@ services:
     command: uvicorn src.auth.main:app --host 0.0.0.0 --port 8001 --reload
     depends_on:
       - redis
+      
+  # 7. The Roles & Permissions Microservice
+  roles-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-roles
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      # Networking overrides for service discovery & cache
+      - REDIS_URL=redis://redis:6379/0
+      # Overriding standard database URL if necessary for Docker internal network
+      - DATABASE_URL=postgresql://user:password@rnr-db:5432/rnr_db?schema=public
+      # - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+    depends_on:
+      - redis
+    command: uvicorn src.roles.main:app --host 0.0.0.0 --port 8002 --reload
 
   # 2. The Employees Microservice
   employees-service:
