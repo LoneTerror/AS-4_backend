@@ -29,6 +29,25 @@ services:
     depends_on:
       - redis
 
+  # 6. The Recognition Microservice
+  recognition-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-recognition
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    environment:
+      # Networking overrides for service-to-service communication
+      - REDIS_URL=redis://redis:6379/0
+      - AUTH_SERVICE_URL=http://auth-service:8001/v1/auth/validate
+    depends_on:
+      - redis
+      - auth-service
+    command: uvicorn src.recognition.main:app --host 0.0.0.0 --port 8005 --reload
+
   # 3. The Analytics Microservice (New)
   analytics-service:
     build:
