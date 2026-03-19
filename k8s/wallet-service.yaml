@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: wallet-service
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: wallet-service
@@ -13,19 +13,17 @@ spec:
         app: wallet-service
     spec:
       containers:
-      - name: wallet-service
-        image: mrmonster786/rnr-backend-base:latest
-        command: ["uvicorn", "src.wallet.main:app", "--host", "0.0.0.0", "--port", "8004", "--reload"]
+      - name: wallet-container
+        image: mrmonster786/rnr-wallet:latest
         ports:
         - containerPort: 8004
-        envFrom:
-        - secretRef:
-            name: rnr-secrets
-        env:
-        - name: REDIS_URL
-          value: "redis://redis:6379/0"
-        - name: AUTH_SERVICE_URL
-          value: "http://auth-service:8001"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
 ---
 apiVersion: v1
 kind: Service

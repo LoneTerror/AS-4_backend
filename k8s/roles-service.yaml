@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: roles-service
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: roles-service
@@ -13,19 +13,17 @@ spec:
         app: roles-service
     spec:
       containers:
-      - name: roles-service
-        image: mrmonster786/rnr-backend-base:latest
-        command: ["uvicorn", "src.roles.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+      - name: roles-container
+        image: mrmonster786/rnr-roles:latest
         ports:
         - containerPort: 8002
-        envFrom:
-        - secretRef:
-            name: rnr-secrets
-        env:
-        - name: REDIS_URL
-          value: "redis://redis:6379/0"
-        - name: DATABASE_URL
-          value: "postgresql://user:password@rnr-db:5432/rnr_db?schema=public"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
 ---
 apiVersion: v1
 kind: Service

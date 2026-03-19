@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: analytics-service
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: analytics-service
@@ -13,21 +13,17 @@ spec:
         app: analytics-service
     spec:
       containers:
-      - name: analytics-service
-        image: mrmonster786/rnr-backend-base:latest
-        command: ["uvicorn", "src.analytics.main:app", "--host", "0.0.0.0", "--port", "8008", "--reload"]
+      - name: analytics-container
+        image: mrmonster786/rnr-analytics:latest
         ports:
         - containerPort: 8008
-        envFrom:
-        - secretRef:
-            name: rnr-secrets
-        env:
-        - name: REDIS_URL
-          value: "redis://redis:6379/0"
-        - name: AUTH_SERVICE_URL
-          value: "http://auth-service:8001"
-        - name: EMPLOYEES_SERVICE_URL
-          value: "http://employees-service:8003"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
 ---
 apiVersion: v1
 kind: Service

@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: organization-service
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: organization-service
@@ -13,19 +13,17 @@ spec:
         app: organization-service
     spec:
       containers:
-      - name: organization-service
-        image: mrmonster786/rnr-backend-base:latest
-        command: ["uvicorn", "src.organization.main:app", "--host", "0.0.0.0", "--port", "8007", "--reload"]
+      - name: organization-container
+        image: mrmonster786/rnr-organization:latest
         ports:
         - containerPort: 8007
-        envFrom:
-        - secretRef:
-            name: rnr-secrets
-        env:
-        - name: AUTH_SERVICE_URL
-          value: "http://auth-service:8001/v1/auth/validate"
-        - name: REDIS_URL
-          value: "redis://redis:6379/0"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
 ---
 apiVersion: v1
 kind: Service

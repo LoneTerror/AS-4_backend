@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: recognition-service
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: recognition-service
@@ -13,19 +13,17 @@ spec:
         app: recognition-service
     spec:
       containers:
-      - name: recognition-service
-        image: mrmonster786/rnr-backend-base:latest
-        command: ["uvicorn", "src.recognition.main:app", "--host", "0.0.0.0", "--port", "8005", "--reload"]
+      - name: recognition-container
+        image: mrmonster786/rnr-recognition:latest
         ports:
         - containerPort: 8005
-        envFrom:
-        - secretRef:
-            name: rnr-secrets
-        env:
-        - name: REDIS_URL
-          value: "redis://redis:6379/0"
-        - name: AUTH_SERVICE_URL
-          value: "http://auth-service:8001/v1/auth/validate"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
 ---
 apiVersion: v1
 kind: Service
