@@ -14,7 +14,7 @@ services:
     command: uvicorn src.auth.main:app --host 0.0.0.0 --port 8001 --reload
     depends_on:
       - redis
-      
+
   # 7. The Roles & Permissions Microservice
   roles-service:
     build:
@@ -48,6 +48,27 @@ services:
     command: uvicorn src.employees.main:app --host 0.0.0.0 --port 8003 --reload
     depends_on:
       - redis
+
+  wallet-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-wallet
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    environment:
+      # Internal service discovery for the Docker network
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://user:password@rnr-db:5432/rnr_db?schema=public
+      # Added for internal API communication if needed
+      - AUTH_SERVICE_URL=http://auth-service:8001
+    depends_on:
+      - redis
+      - rnr-db
+    # Wallet service starts 3 Redis Stream consumers via lifespan in main.py
+    command: uvicorn src.wallet.main:app --host 0.0.0.0 --port 8004 --reload
 
   # 6. The Recognition Microservice
   recognition-service:
