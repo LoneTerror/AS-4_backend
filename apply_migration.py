@@ -77,7 +77,7 @@ async def run():
     url = re.sub(r"[?&]$", "", url)
 
     print(f"\nConnecting to Neon...")
-    conn = await asyncpg.connect(url, ssl="require", timeout=30)
+    conn = await asyncpg.connect(url, ssl=False, timeout=30)
     print("Connected.\n")
 
     try:

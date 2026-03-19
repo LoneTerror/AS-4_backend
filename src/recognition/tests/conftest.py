@@ -1,365 +1,302 @@
 """
-conftest.py — shared fixtures, stubs, and helpers for all test files.
+src/recognition/tests/conftest.py
+───────────────────────────────────
+Self-contained pytest config for the Recognition service.
 
-FIXED:
-- ReviewCreateRequest/UpdateRequest stubs now use category_ids (plural List)
-  matching the real schema. The old stubs used category_id (singular UUID)
-  which caused `for cid in payload.category_ids` in service.py to fail.
-- Removed stubs for quarters_elapsed / apply_decay — these functions do not
-  exist in points_engine.py and caused AttributeError on module load.
-- Added src.wallet, src.wallet.service stubs so service.py inline imports
-  (credit_wallet_from_review, adjust_wallet_for_review_update) don't crash.
-- Fixed _FakeNotificationService to expose create_notification() — the method
-  service.py actually calls on _notif.
-- make_review() now sets review_category_tags=[] (plain list, not MagicMock)
-  so _build_review_dict() can iterate over it without errors.
-- Added src.digest / src.notifications.email_sender stubs for main.py tests.
+Run from the project root:
+    pytest src/recognition/tests/
+
+No database, Redis, or auth service required.
+
+Stub ordering (must be exact):
+  1. Env vars
+  2. sys.path  →  project root
+  3. Third-party stubs (prisma, opentelemetry)
+  4. src.* parent packages WITH __path__  (before sub-module stubs)
+  5. src.* sub-module stubs
+  6. DB mock  →  injected into src.prisma.client stub
+  7. Force-load real src.common.dependencies
+  8. Data factories + fixtures
 """
+from __future__ import annotations
 
+import importlib
+import importlib.util as _ilu
+import os
 import sys
 import types
-import pytest
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
-from pydantic import BaseModel
-from typing import List, Optional
 
-# ---------------------------------------------------------------------------
-# 1. Surgically stub only the external dependencies (No root folder faking!)
-# ---------------------------------------------------------------------------
+import pytest
 
-# Fake the Prisma database client
-_prisma_stub = types.ModuleType("src.prisma.client")
-sys.modules["src.prisma.client"] = _prisma_stub
-_prisma_stub.db = MagicMock()
-_prisma_stub.connect_with_retry = AsyncMock()
-fake_db = _prisma_stub.db
+# ── 0. Env vars ───────────────────────────────────────────────────────────────
+os.environ.setdefault("DATABASE_URL",          "postgresql://test:test@localhost/testdb")
+os.environ.setdefault("SECRET_KEY",            "test-secret-key-32-chars-long!!!")
+os.environ.setdefault("ALGORITHM",             "HS256")
+os.environ.setdefault("AUTH_SERVICE_URL",      "http://auth-service/validate")
+os.environ.setdefault("FRONTEND_CORS_ORIGINS", "http://localhost:3000")
 
-# Ensure common DB methods are AsyncMocks
-_prisma_stub.db.find_many = AsyncMock()
-_prisma_stub.db.find_unique = AsyncMock()
-_prisma_stub.db.find_first = AsyncMock()
-_prisma_stub.db.create = AsyncMock()
-_prisma_stub.db.update = AsyncMock()
-_prisma_stub.db.delete = AsyncMock()
-_prisma_stub.db.count = AsyncMock()
-_prisma_stub.db.update_many = AsyncMock()
-_prisma_stub.db.delete_many = AsyncMock()
-_prisma_stub.db.tx = AsyncMock()
+# ── 1. sys.path ───────────────────────────────────────────────────────────────
+# __file__ = <root>/src/recognition/tests/conftest.py  →  root is 3 levels up
+_THIS_DIR     = os.path.dirname(os.path.abspath(__file__))      # src/recognition/tests/
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_THIS_DIR)))  # <root>/
+# safety: also handle if tests/ is run from inside src/recognition/
+if not os.path.isdir(os.path.join(_PROJECT_ROOT, "src")):
+    _PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))  # one level less
 
-# Ensure specific table methods are AsyncMocks (preserved from original)
-fake_db.reviews.find_many = AsyncMock()
-fake_db.reviews.find_unique = AsyncMock()
-fake_db.reviews.create = AsyncMock()
-fake_db.reviews.update = AsyncMock()
-fake_db.reviews.delete = AsyncMock()
-fake_db.reviews.count = AsyncMock()
-fake_db.employees.find_unique = AsyncMock()
-fake_db.employees.find_many = AsyncMock()
-fake_db.status_master.find_first = AsyncMock()
-fake_db.status_master.find_unique = AsyncMock()
-fake_db.review_categories.find_unique = AsyncMock()
-fake_db.review_categories.find_many = AsyncMock()
-fake_db.review_category_tags.create_many = AsyncMock()
-fake_db.review_category_tags.delete_many = AsyncMock()
-fake_db.roles.find_first = AsyncMock()
-fake_db.seasonal_multipliers.find_first = AsyncMock()
-fake_db.wallets.find_unique = AsyncMock()
-fake_db.transaction_types.find_unique = AsyncMock()
-fake_db.transactions.create = AsyncMock()
-fake_db.wallets.update_many = AsyncMock()
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-# Fake the Redis cache so it doesn't try to connect to a real Redis server
-_cache_stub = types.ModuleType("src.common.cache")
-sys.modules["src.common.cache"] = _cache_stub
-_cache_stub.cache_get = AsyncMock(return_value=None)
-_cache_stub.cache_set = AsyncMock()
-_cache_stub.cache_delete = AsyncMock()
-_cache_stub.invalidate_pattern = AsyncMock()
-
-# TTL and L1 constants
-_cache_stub.TTL_VOLATILE = 60
-_cache_stub.L1_VOLATILE = 30
-_cache_stub.TTL_SHORT = 300
-_cache_stub.L1_SHORT = 60
-_cache_stub.TTL_MEDIUM = 3600
-_cache_stub.L1_MEDIUM = 300
-_cache_stub.TTL_PERMANENT = 86400
-_cache_stub.L1_PERMANENT = 3600
-
-# Stub other external-ish things
-_notif_redis_stub = types.ModuleType("src.notifications.redis_client")
-sys.modules["src.notifications.redis_client"] = _notif_redis_stub
-_notif_redis_stub.connect_redis = AsyncMock()
-_notif_redis_stub.disconnect_redis = AsyncMock()
-
-# For internal modules, we avoid replacing them if possible, 
-# but if we must, we ensure they are not blank.
-# However, many recognition tests depend on these being mocked.
-
-def ensure_real_or_stub(mod_name):
-    if mod_name in sys.modules:
-        return sys.modules[mod_name]
-    try:
-        import importlib
-        return importlib.import_module(mod_name)
-    except Exception:
-        mod = types.ModuleType(mod_name)
-        sys.modules[mod_name] = mod
-        return mod
-
-_notif_svc_stub = ensure_real_or_stub("src.notifications.service")
-_wallet_svc_stub = ensure_real_or_stub("src.wallet.service")
-_notif_email_stub = ensure_real_or_stub("src.notifications.email_sender")
-_digest_router_stub = ensure_real_or_stub("src.digest.router")
-_digest_worker_stub = ensure_real_or_stub("src.digest.worker")
-_notif_schemas_stub = ensure_real_or_stub("src.notifications.schemas")
-
-# Stub NotificationService — service.py calls _notif.create_notification()
-class _FakeNotificationService:
-    def __init__(self, *args, **kwargs):
-        pass
-    async def create_notification(self, *args, **kwargs):
-        pass
-
-_notif_svc_stub.NotificationService = _FakeNotificationService
-
-# Stub wallet functions (imported inline inside service.py)
-async def _fake_credit_wallet(*args, **kwargs):
-    return {"credited_points": 0, "new_balance": 0}
-
-async def _fake_adjust_wallet(*args, **kwargs):
-    return {"new_balance": 0}
-
-_wallet_svc_stub.credit_wallet_from_review = _fake_credit_wallet
-_wallet_svc_stub.adjust_wallet_for_review_update = _fake_adjust_wallet
-
-# Stub EmailSender / SMTPConfig for main.py import
-class _FakeSMTPConfig:
-    @classmethod
-    def from_env(cls):
-        return cls()
-
-class _FakeEmailSender:
-    def __init__(self, *args, **kwargs):
-        pass
-
-_notif_email_stub.SMTPConfig  = _FakeSMTPConfig
-_notif_email_stub.EmailSender = _FakeEmailSender
-
-# Stub digest router + worker
-from fastapi import APIRouter as _APIRouter
-_digest_router_stub.router = _APIRouter()
-
-async def _fake_digest_worker(*args, **kwargs):
-    pass
-
-_digest_worker_stub.digest_worker_loop = _fake_digest_worker
-
-# Stub NotificationType enum
-import enum as _enum
-
-class _NotificationType(_enum.Enum):
-    REVIEW = "REVIEW"
-    REWARD = "REWARD"
-    SYSTEM = "SYSTEM"
-
-_notif_schemas_stub.NotificationType = _NotificationType
-
-# ---------------------------------------------------------------------------
-# 2. Load REAL points_engine
-# ---------------------------------------------------------------------------
-import importlib.util as _ilu, pathlib as _pl
-
-_pe_path = _pl.Path(__file__).parent.parent / "points_engine.py"
-_pe_spec = _ilu.spec_from_file_location("_real_points_engine", _pe_path)
-_real_pe = _ilu.module_from_spec(_pe_spec)
-_pe_spec.loader.exec_module(_real_pe)
-
-_pe_stub = ensure_real_or_stub("src.recognition.points_engine")
-_pe_stub.calculate_points = _real_pe.calculate_points
-_pe_stub.PointsResult     = _real_pe.PointsResult
-
-# ---------------------------------------------------------------------------
-# 3. CurrentUser model
-# ---------------------------------------------------------------------------
-class CurrentUser(BaseModel):
-    id:            str
-    email:         str
-    roles:         List[str]
-    department_id: Optional[str] = None
-
-_deps_stub = ensure_real_or_stub("src.recognition.dependencies")
-_deps_stub.CurrentUser = CurrentUser
-
-# ---------------------------------------------------------------------------
-# 4. Schema stubs — use category_ids (plural List) to match real schemas.py
-# ---------------------------------------------------------------------------
-class ReviewCreateRequest(BaseModel):
-    receiver_id:  object
-    rating:       int
-    comment:      str
-    category_ids: List[object]           # FIXED: plural list
-    image_url:    object = None
-    video_url:    object = None
-
-class ReviewUpdateRequest(BaseModel):
-    rating:       Optional[int]           = None
-    comment:      Optional[str]           = None
-    category_ids: Optional[List[object]]  = None  # FIXED: plural, optional
-    image_url:    object                  = None
-    video_url:    object                  = None
-
-_schemas_stub = ensure_real_or_stub("src.recognition.schemas")
-_schemas_stub.ReviewCreateRequest = ReviewCreateRequest
-_schemas_stub.ReviewUpdateRequest = ReviewUpdateRequest
-
-# ---------------------------------------------------------------------------
-# 6. Factory helpers
-# ---------------------------------------------------------------------------
-
-def make_user(user_id="user-1", roles=None, email="user@test.com", dept=None):
-    return CurrentUser(
-        id=user_id,
-        email=email,
-        roles=roles or ["EMPLOYEE"],
-        department_id=dept,
-    )
+_src_dir           = os.path.join(_PROJECT_ROOT, "src")
+_common_dir        = os.path.join(_src_dir, "common")
+_recognition_dir   = os.path.join(_src_dir, "recognition")
+_prisma_src_dir    = os.path.join(_src_dir, "prisma")
+_core_dir          = os.path.join(_src_dir, "core")
+_notifications_dir = os.path.join(_src_dir, "notifications")
+_digest_dir        = os.path.join(_src_dir, "digest")
 
 
-def make_review(**kwargs):
-    """
-    Build a MagicMock resembling a Prisma reviews row.
+# ── 2. Stub helpers ───────────────────────────────────────────────────────────
 
-    FIXED: review_category_tags is a plain empty list so _build_review_dict()
-    can iterate it without hitting MagicMock iteration errors.
-    raw_points is a plain float so float() calls in the service don't fail.
-    __dict__ is populated so vars(review) works in _build_review_dict().
-    """
-    uid = "990e8400-e29b-41d4-a716-446655440004"
-    defaults = dict(
-        review_id=uid,
-        reviewer_id="880e8400-e29b-41d4-a716-446655440000",
-        receiver_id="550e8400-e29b-41d4-a716-446655440000",
-        rating=4,
-        comment="Good job",
-        image_url=None,
-        video_url=None,
-        status_id="aa0e8400-e29b-41d4-a716-446655440005",
-        review_at=datetime.now(timezone.utc),
-        created_at=datetime.now(timezone.utc),
-        created_by="880e8400-e29b-41d4-a716-446655440000",
-        updated_at=datetime.now(timezone.utc),
-        updated_by="user-1",
-        raw_points=8.0,
-        review_category_tags=[],  # FIXED: plain list, not MagicMock
-    )
-    defaults.update(kwargs)
-    obj = MagicMock()
-    for k, v in defaults.items():
-        setattr(obj, k, v)
-    # _build_review_dict calls vars(review) — populate __dict__ so it works
-    obj.__dict__.update({k: v for k, v in defaults.items()
-                         if not k.startswith("_")})
-    return obj
+def _stub(name: str) -> types.ModuleType:
+    m = types.ModuleType(name)
+    sys.modules[name] = m
+    return m
 
-def make_category_tag_row(category_id=None, category_code="TAG", multiplier=1.0):
-    """Mimics a row from the review_category_tags table."""
-    row = MagicMock()
-    row.category_id = category_id or "770e8400-e29b-41d4-a716-446655440001"
-    row.category_code = category_code
-    row.multiplier_snapshot = multiplier
-    return row
+def _pkg(name: str, real_path: str | None = None) -> types.ModuleType:
+    m = _stub(name)
+    m.__path__    = [real_path] if real_path else []  # type: ignore[attr-defined]
+    m.__package__ = name
+    return m
 
 
-def make_active_employee():
-    status = MagicMock()
-    status.status_code = "ACTIVE"
-    emp = MagicMock()
-    emp.status_master_employees_status_idTostatus_master = status
-    return emp
+# ── 3. Third-party stubs ──────────────────────────────────────────────────────
+
+_pp = _pkg("prisma")
+_pp.Prisma = MagicMock()                                                          # type: ignore
+_pe = _stub("prisma.errors")
+_pe.UniqueViolationError = type("UniqueViolationError", (Exception,), {})         # type: ignore
+
+for _on in [
+    "opentelemetry", "opentelemetry.trace",
+    "opentelemetry.exporter", "opentelemetry.exporter.otlp",
+    "opentelemetry.exporter.otlp.proto", "opentelemetry.exporter.otlp.proto.grpc",
+    "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
+    "opentelemetry.instrumentation", "opentelemetry.instrumentation.fastapi",
+    "opentelemetry.sdk", "opentelemetry.sdk.resources",
+    "opentelemetry.sdk.trace", "opentelemetry.sdk.trace.export",
+]:
+    _pkg(_on)
+
+sys.modules["opentelemetry.trace"].set_tracer_provider = MagicMock()                                 # type: ignore
+sys.modules["opentelemetry.exporter.otlp.proto.grpc.trace_exporter"].OTLPSpanExporter = MagicMock()  # type: ignore
+sys.modules["opentelemetry.instrumentation.fastapi"].FastAPIInstrumentor = MagicMock()                # type: ignore
+sys.modules["opentelemetry.sdk.resources"].Resource = MagicMock()                                    # type: ignore
+sys.modules["opentelemetry.sdk.trace"].TracerProvider = MagicMock()                                  # type: ignore
+sys.modules["opentelemetry.sdk.trace.export"].BatchSpanProcessor = MagicMock()                       # type: ignore
 
 
-def make_inactive_employee():
-    status = MagicMock()
-    status.status_code = "INACTIVE"
-    emp = MagicMock()
-    emp.status_master_employees_status_idTostatus_master = status
-    return emp
+# ── 4. src.* parent packages (WITH __path__ so sub-imports resolve) ───────────
+importlib.import_module("src")   # loads real src/__init__.py from disk
+_src_mod = sys.modules["src"]
+
+# Register each sub-package AND attach it as an attribute on the src module
+# object. Without this, patch("src.common.X") fails on Python 3.10 because
+# mock._importer traverses getattr(src, "common") — which is None if the
+# real src package was imported before our stubs registered.
+def _pkg_and_attach(name: str, real_path: str | None = None) -> types.ModuleType:
+    m = _pkg(name, real_path)
+    # attach the last component as an attribute on the parent module
+    parts = name.split(".")
+    if len(parts) == 2:                          # e.g. src.common → src
+        setattr(_src_mod, parts[1], m)
+    return m
+
+_pkg_and_attach("src.common",        _common_dir)
+_pkg_and_attach("src.recognition",   _recognition_dir)
+_pkg_and_attach("src.prisma",        _prisma_src_dir)
+_pkg_and_attach("src.core",          _core_dir)
+_pkg_and_attach("src.notifications", _notifications_dir)
+_pkg_and_attach("src.digest",        _digest_dir)
 
 
-def make_employee_no_status():
-    emp = MagicMock()
-    emp.status_master_employees_status_idTostatus_master = None
-    return emp
+# ── 5. src.* sub-module stubs ─────────────────────────────────────────────────
+# Each stub is also attached as an attribute on its parent package module so
+# that patch("src.common.X") can traverse src → common → X via getattr().
+
+_src_common      = sys.modules["src.common"]
+_src_recognition = sys.modules["src.recognition"]
+
+_cache = _stub("src.common.cache")
+_cache.cache_get    = AsyncMock(return_value=None)  # type: ignore
+_cache.cache_set    = AsyncMock(return_value=True)  # type: ignore
+_cache.cache_delete = AsyncMock(return_value=True)  # type: ignore
+_cache.TTL_MEDIUM   = 300                           # type: ignore
+_cache.L1_MEDIUM    = 60                            # type: ignore
+_src_common.cache = _cache                          # type: ignore[attr-defined]
+
+_mid = _stub("src.common.middleware")
+for _fn in ["generic_exception_handler", "http_exception_handler",
+            "prisma_unique_violation_handler", "request_rate_limit_middleware",
+            "validation_exception_handler"]:
+    setattr(_mid, _fn, AsyncMock())
+_src_common.middleware = _mid                       # type: ignore[attr-defined]
+
+_reg = _stub("src.common.route_registry")
+_reg.register_app_routes = AsyncMock()              # type: ignore
+_src_common.route_registry = _reg                  # type: ignore[attr-defined]
+
+_aud = _stub("src.common.audit")
+_src_common.audit = _aud                           # type: ignore[attr-defined]
+
+_ev = _stub("src.common.event_publisher")
+_ev.publish = AsyncMock()                          # type: ignore
+_src_common.event_publisher = _ev                  # type: ignore[attr-defined]
+
+_src_core          = sys.modules["src.core"]
+_src_notifications = sys.modules["src.notifications"]
+_src_digest        = sys.modules["src.digest"]
+_src_prisma        = sys.modules["src.prisma"]
+
+_clog = _stub("src.core.logger")
+_clog.logger = MagicMock()  # type: ignore
+_src_core.logger = _clog    # type: ignore[attr-defined]
+
+_email = _stub("src.notifications.email_sender")
+_email.EmailSender = MagicMock()   # type: ignore
+_email.SMTPConfig  = MagicMock()   # type: ignore
+_src_notifications.email_sender = _email  # type: ignore[attr-defined]
+
+_redisstub = _stub("src.notifications.redis_client")
+_redisstub.connect_redis    = AsyncMock()  # type: ignore
+_redisstub.disconnect_redis = AsyncMock()  # type: ignore
+_src_notifications.redis_client = _redisstub  # type: ignore[attr-defined]
+
+_dr = _stub("src.digest.router")
+_dr.router = MagicMock()   # type: ignore
+_src_digest.router = _dr   # type: ignore[attr-defined]
+
+_dw = _stub("src.digest.worker")
+_dw.digest_worker_loop = AsyncMock()  # type: ignore
+_src_digest.worker = _dw              # type: ignore[attr-defined]
 
 
-def make_review_status(status_id="status-active"):
-    s = MagicMock()
-    s.status_id = status_id
-    return s
+# ── 6. DB mock → src.prisma.client ────────────────────────────────────────────
+
+_db_mock = MagicMock()
+for _tbl in [
+    "reviews", "review_categories", "review_category_tags",
+    "employee_roles", "employees", "departments", "status_master",
+    "route_permissions",
+]:
+    _tm = MagicMock()
+    _tm.find_many   = AsyncMock(return_value=[])
+    _tm.find_first  = AsyncMock(return_value=None)
+    _tm.find_unique = AsyncMock(return_value=None)
+    _tm.count       = AsyncMock(return_value=0)
+    _tm.create      = AsyncMock(return_value=MagicMock())
+    _tm.create_many = AsyncMock(return_value=MagicMock(count=0))
+    _tm.update      = AsyncMock(return_value=MagicMock())
+    _tm.delete      = AsyncMock(return_value=MagicMock())
+    _tm.delete_many = AsyncMock(return_value=MagicMock())
+    setattr(_db_mock, _tbl, _tm)
+
+_pclient = _stub("src.prisma.client")
+_pclient.db                 = _db_mock     # type: ignore
+_pclient.connect_with_retry = AsyncMock()  # type: ignore
+_pclient.set_audit_context  = AsyncMock()  # type: ignore
+_src_prisma.client = _pclient              # type: ignore[attr-defined]
 
 
-def make_category_row(
-    category_id="cat-1",
-    category_code="TEAMWORK",
-    multiplier=1.0,
-    is_active=True,
-):
-    row = MagicMock()
-    row.category_id   = category_id
-    row.category_code = category_code
-    row.multiplier    = multiplier
-    row.is_active     = is_active
-    return row
+# ── 7. Force-load real src.common.dependencies ────────────────────────────────
+
+_dep_spec = _ilu.spec_from_file_location(
+    "src.common.dependencies",
+    os.path.join(_common_dir, "dependencies.py"),
+)
+_dep_mod = _ilu.module_from_spec(_dep_spec)            # type: ignore[arg-type]
+sys.modules["src.common.dependencies"] = _dep_mod
+_dep_spec.loader.exec_module(_dep_mod)                 # type: ignore[union-attr]
+_dep_mod.db = _db_mock                                 # type: ignore[attr-defined]
+_src_common.dependencies = _dep_mod                    # type: ignore[attr-defined]
 
 
-def make_role_row(reviewer_weight=1.0):
-    row = MagicMock()
-    row.reviewer_weight = reviewer_weight
-    return row
+# ── 8. Data factories ─────────────────────────────────────────────────────────
+
+def make_uuid() -> str:
+    return str(uuid.uuid4())
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+def _fake_review(
+    review_id:   str | None = None,
+    reviewer_id: str | None = None,
+    receiver_id: str | None = None,
+    raw_points:  float = 2.6,
+    tags: list | None = None,
+) -> MagicMock:
+    r = MagicMock()
+    r.review_id   = review_id   or make_uuid()
+    r.reviewer_id = reviewer_id or make_uuid()
+    r.receiver_id = receiver_id or make_uuid()
+    r.comment     = "Great work on the project!"
+    r.image_url   = None
+    r.video_url   = None
+    r.status_id   = make_uuid()
+    r.review_at   = utcnow()
+    r.created_at  = utcnow()
+    r.created_by  = r.reviewer_id
+    r.updated_at  = utcnow()
+    r.updated_by  = r.reviewer_id
+    r.raw_points  = raw_points
+    r.review_category_tags = tags if tags is not None else []
+    return r
+
+def _fake_category(
+    category_id: str | None = None,
+    code:        str   = "INNOVATION",
+    name:        str   = "Innovation",
+    multiplier:  float = 1.4,
+    is_active:   bool  = True,
+) -> MagicMock:
+    c = MagicMock()
+    c.category_id   = category_id or make_uuid()
+    c.category_code = code
+    c.category_name = name
+    c.multiplier    = multiplier
+    c.description   = "Recognises creative problem-solving"
+    c.is_active     = is_active
+    c.created_at    = utcnow()
+    c.updated_at    = utcnow()
+    c.created_by    = make_uuid()
+    c.updated_by    = make_uuid()
+    return c
+
+def _fake_tag(
+    category_id:         str | None = None,
+    code_snapshot:       str   = "INNOVATION",
+    multiplier_snapshot: float = 1.4,
+) -> MagicMock:
+    t = MagicMock()
+    t.category_id            = category_id or make_uuid()
+    t.category_code_snapshot = code_snapshot
+    t.multiplier_snapshot    = multiplier_snapshot
+    return t
 
 
-def make_seasonal_row(multiplier=1.0):
-    row = MagicMock()
-    row.multiplier = multiplier
-    return row
-
-
-def make_points_config_row(config_value=0.9):
-    """
-    Kept for backward compatibility. The current service.py no longer queries
-    points_config, but this helper is still imported by some test files.
-    """
-    row = MagicMock()
-    row.config_value = config_value
-    return row
-
-
-# ---------------------------------------------------------------------------
-# 7. pytest fixtures
-# ---------------------------------------------------------------------------
+# ── 9. Fixtures ───────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def employee_user():
-    return make_user(user_id="user-1", roles=["EMPLOYEE"])
+def fake_review():
+    return _fake_review
 
 @pytest.fixture
-def manager_user():
-    return make_user(user_id="mgr-1", roles=["MANAGER"])
+def fake_category():
+    return _fake_category
 
 @pytest.fixture
-def hr_admin_user():
-    return make_user(user_id="hr-1", roles=["HR_ADMIN"])
-
-@pytest.fixture
-def super_admin_user():
-    return make_user(user_id="sadmin", roles=["SUPER_ADMIN"])
-
-@pytest.fixture
-def sample_review():
-    return make_review()
-
-@pytest.fixture
-def db_patch():
-    return fake_db
+def fake_tag():
+    return _fake_tag

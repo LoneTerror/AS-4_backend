@@ -265,14 +265,16 @@ async def clean_db():
       Step 3 — Delete employees (non-sentinel only).
       Step 4 — Delete the remaining lookup tables (departments, designations,
                 department_types, status_master) which are now safe.
+
+    NOTE: status_master, departments, designations, and department_types are
+    seeded with upsert, so even if Step 4 fails because the sentinel still
+    holds FK references to them, the seed will not crash — upsert will just
+    update the existing rows instead of inserting new ones.
     """
     print("🧹 Cleaning existing data...")
 
     # ── Step 1: NULL out all created_by / updated_by back-references ──────────
-    # Every table that has a created_by or updated_by FK to employees must be
-    # cleared here before we can delete any employee rows.
     null_refs = [
-        # (table,                  columns with FK to employees)
         ("audit_log",              ["performed_by"]),
         ("department_types",       ["created_by", "updated_by"]),
         ("departments",            ["created_by", "updated_by"]),
@@ -289,7 +291,7 @@ async def clean_db():
         ("transactions",           ["created_by", "updated_by"]),
         ("reward_history",         ["granted_by", "created_by", "updated_by"]),
         ("reviews",                ["reviewer_id", "receiver_id", "created_by", "updated_by"]),
-        ("refresh_tokens",         []),   # no created_by — employee_id is cascade-deleted
+        ("refresh_tokens",         []),
     ]
 
     for table, cols in null_refs:
@@ -304,7 +306,6 @@ async def clean_db():
     print("   ✓ Nulled all created_by/updated_by back-references")
 
     # ── Step 2: Delete leaf tables (strict dependency order) ──────────────────
-    # These have no other tables pointing into them (or their FKs are now NULL).
     leaf_deletes = [
         "audit_log",
         "notifications",
@@ -331,8 +332,6 @@ async def clean_db():
     print("   ✓ Deleted leaf tables")
 
     # ── Step 3: Delete non-sentinel employees ─────────────────────────────────
-    # The sentinel (00000000-...) must stay if it exists — it was created by
-    # the audit migration and the triggers FK into it.
     try:
         await db.execute_raw(
             f"DELETE FROM employees WHERE employee_id != '{SYSTEM_SENTINEL_ID}'"
@@ -341,14 +340,19 @@ async def clean_db():
     except Exception as ex:
         print(f"   ⚠ Could not delete employees: {ex}")
 
-    # ── Step 4: Delete lookup tables (now safe — no employee refs remain) ─────
+    # ── Step 4: Delete lookup tables ──────────────────────────────────────────
+    # These may fail if the sentinel employee still holds FK references to them
+    # (status_id, designation_id, department_id are non-nullable on employees).
+    # That is fine — seed_status_master, seed_designations, seed_departments,
+    # and seed_department_types all use upsert, so they will update existing
+    # rows rather than failing on duplicate key violations.
     for table in ["designations", "departments", "department_types", "status_master"]:
         try:
             await db.execute_raw(f"DELETE FROM {table}")
         except Exception as ex:
-            print(f"   ⚠ Could not delete {table}: {ex}")
+            print(f"   ⚠ Could not delete {table} (sentinel FK — upsert will handle it): {ex}")
 
-    print("   ✓ Deleted lookup tables")
+    print("   ✓ Lookup table cleanup attempted (upsert covers any leftovers)")
     print("   ✓ Clean complete (sentinel preserved if present)\n")
 
 
@@ -362,6 +366,8 @@ async def seed_status_master():
     # │  S_EMP_ACTIVE MUST have entity_type='EMPLOYEE' status_code='ACTIVE' │
     # │  The migration.sql sentinel INSERT queries this exact combination.   │
     # └─────────────────────────────────────────────────────────────────────┘
+    # Uses upsert so re-runs are idempotent even when the sentinel employee
+    # holds a non-nullable FK into status_master preventing deletion.
     rows = [
         # Employee statuses — entity_type = 'EMPLOYEE'
         (S_EMP_ACTIVE,   "ACTIVE",         "Active",      "EMPLOYEE",    "Employee is active and operational"),
@@ -377,14 +383,26 @@ async def seed_status_master():
         (S_REV_DELETED,  "REVIEW_DELETED", "Deleted",     "REVIEW",      "Review has been soft-deleted"),
     ]
     for status_id, code, name, entity, desc in rows:
-        await db.status_master.create(data={
-            "status_id":   status_id,
-            "status_code": code,
-            "status_name": name,
-            "entity_type": entity,
-            "description": desc,
-            "updated_at":  NOW,
-        })
+        await db.status_master.upsert(
+            where={"status_id": status_id},
+            data={
+                "create": {
+                    "status_id":   status_id,
+                    "status_code": code,
+                    "status_name": name,
+                    "entity_type": entity,
+                    "description": desc,
+                    "updated_at":  NOW,
+                },
+                "update": {
+                    "status_code": code,
+                    "status_name": name,
+                    "entity_type": entity,
+                    "description": desc,
+                    "updated_at":  NOW,
+                },
+            }
+        )
     print(f"   ✅ Seeded {len(rows)} status rows")
     print(f"   ℹ  S_EMP_ACTIVE ({S_EMP_ACTIVE}) → entity_type=EMPLOYEE status_code=ACTIVE")
     print(f"      ↳ Migration sentinel will use this row\n")
@@ -447,6 +465,8 @@ async def seed_roles():
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_department_types():
     print("🏗️  Seeding department_types...")
+    # Uses upsert — sentinel employee may hold an indirect FK via departments
+    # → department_types, preventing deletion of department_types rows.
     rows = [
         (DT_TECH,      "Technology",  "TECH"),
         (DT_MGMT,      "Management",  "MGMT"),
@@ -456,12 +476,22 @@ async def seed_department_types():
         (DT_MARKETING, "Marketing",   "MARKETING"),
     ]
     for type_id, name, code in rows:
-        await db.department_types.create(data={
-            "department_type_id": type_id,
-            "type_name":          name,
-            "type_code":          code,
-            "updated_at":         NOW,
-        })
+        await db.department_types.upsert(
+            where={"department_type_id": type_id},
+            data={
+                "create": {
+                    "department_type_id": type_id,
+                    "type_name":          name,
+                    "type_code":          code,
+                    "updated_at":         NOW,
+                },
+                "update": {
+                    "type_name":  name,
+                    "type_code":  code,
+                    "updated_at": NOW,
+                },
+            }
+        )
     print(f"   ✅ Seeded {len(rows)} department types\n")
 
 
@@ -470,6 +500,8 @@ async def seed_department_types():
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_departments():
     print("🏢 Seeding departments...")
+    # Uses upsert — sentinel employee holds a non-nullable FK into departments,
+    # so the DELETE in clean_db may have been skipped for this table.
     rows = [
         (D_ENG,       "Engineering",             "ENG",       DT_TECH),
         (D_PLATFORM,  "Platform Engineering",    "PLATFORM",  DT_TECH),
@@ -483,13 +515,24 @@ async def seed_departments():
         (D_MARKETING, "Marketing & Growth",      "MARKETING", DT_MARKETING),
     ]
     for dept_id, name, code, type_id in rows:
-        await db.departments.create(data={
-            "department_id":      dept_id,
-            "department_name":    name,
-            "department_code":    code,
-            "department_type_id": type_id,
-            "updated_at":         NOW,
-        })
+        await db.departments.upsert(
+            where={"department_id": dept_id},
+            data={
+                "create": {
+                    "department_id":      dept_id,
+                    "department_name":    name,
+                    "department_code":    code,
+                    "department_type_id": type_id,
+                    "updated_at":         NOW,
+                },
+                "update": {
+                    "department_name":    name,
+                    "department_code":    code,
+                    "department_type_id": type_id,
+                    "updated_at":         NOW,
+                },
+            }
+        )
     print(f"   ✅ Seeded {len(rows)} departments\n")
 
 
@@ -498,6 +541,8 @@ async def seed_departments():
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_designations():
     print("🎖️  Seeding designations...")
+    # Uses upsert — sentinel employee holds a non-nullable FK into designations,
+    # so the DELETE in clean_db may have been skipped for this table.
     rows = [
         (DES_SYS_ADMIN, "System Administrator", "SYS_ADMIN", 0, "Top-level system administrator with full access"),
         (DES_DIRECTOR,  "Director",             "DIRECTOR",  1, "Senior director overseeing a business unit"),
@@ -511,15 +556,28 @@ async def seed_designations():
         (DES_HR_EXEC,   "HR Executive",         "HR_EXEC",   6, "Entry-level HR professional handling daily operations"),
     ]
     for desig_id, name, code, level, desc in rows:
-        await db.designations.create(data={
-            "designation_id":   desig_id,
-            "designation_name": name,
-            "designation_code": code,
-            "level":            level,
-            "description":      desc,
-            "is_active":        True,
-            "updated_at":       NOW,
-        })
+        await db.designations.upsert(
+            where={"designation_id": desig_id},
+            data={
+                "create": {
+                    "designation_id":   desig_id,
+                    "designation_name": name,
+                    "designation_code": code,
+                    "level":            level,
+                    "description":      desc,
+                    "is_active":        True,
+                    "updated_at":       NOW,
+                },
+                "update": {
+                    "designation_name": name,
+                    "designation_code": code,
+                    "level":            level,
+                    "description":      desc,
+                    "is_active":        True,
+                    "updated_at":       NOW,
+                },
+            }
+        )
         print(f"   ✅ {code:12s}  level={level}")
     print()
 
@@ -1138,12 +1196,12 @@ async def main():
 
         await clean_db()
 
-        await seed_status_master()        # MUST be first — employees FK depends on it
+        await seed_status_master()        # upsert — safe even if sentinel holds FK
         await seed_transaction_types()
         await seed_roles()
-        await seed_department_types()
-        await seed_departments()          # Migration needs at least 1 dept after this
-        await seed_designations()         # Migration needs at least 1 desig after this
+        await seed_department_types()     # upsert — safe even if sentinel holds FK
+        await seed_departments()          # upsert — safe even if sentinel holds FK
+        await seed_designations()         # upsert — safe even if sentinel holds FK
         await seed_admin_employee()
         await seed_employees()
         await backfill_audit_fields()
@@ -1160,12 +1218,6 @@ async def main():
         print("=" * 70)
         print("🎉  SEED COMPLETE!")
         print("=" * 70)
-        print()
-        print("NEXT STEP:")
-        print("   prisma migrate deploy")
-        print("   ↳ Creates the system sentinel employee (00000000-...)")
-        print("   ↳ Attaches audit triggers to all 17 tables")
-        print("   ↳ Revokes UPDATE/DELETE on audit_log from the app user")
         print()
         print("📝 Login credentials (password for all: Password123!)")
         print()
