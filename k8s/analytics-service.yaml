@@ -14,9 +14,14 @@ spec:
     spec:
       containers:
       - name: analytics-container
-        image: mrmonster786/rnr-analytics:latest
+        image: mrmonster786/rnr-backend-base:latest
+        # Point to the analytics entry point and port
+        args: ["python", "-m", "uvicorn", "src.analytics.main:app", "--host", "0.0.0.0", "--port", "8008"]
         ports:
         - containerPort: 8008
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
         resources:
           requests:
             memory: "128Mi"

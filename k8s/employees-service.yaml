@@ -14,16 +14,17 @@ spec:
     spec:
       containers:
       - name: employees-container
-        image: mrmonster786/rnr-employees:latest
+        image: mrmonster786/rnr-backend-base:latest
+        args: ["python", "-m", "uvicorn", "src.employees.main:app", "--host", "0.0.0.0", "--port", "8003"]
         ports:
         - containerPort: 8003
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
         resources:
           requests:
             memory: "128Mi"
             cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
 ---
 apiVersion: v1
 kind: Service

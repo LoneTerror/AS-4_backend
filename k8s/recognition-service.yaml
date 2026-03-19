@@ -14,16 +14,13 @@ spec:
     spec:
       containers:
       - name: recognition-container
-        image: mrmonster786/rnr-recognition:latest
+        image: mrmonster786/rnr-backend-base:latest
+        args: ["python", "-m", "uvicorn", "src.recognition.main:app", "--host", "0.0.0.0", "--port", "8005"]
         ports:
         - containerPort: 8005
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
 ---
 apiVersion: v1
 kind: Service

@@ -14,16 +14,13 @@ spec:
     spec:
       containers:
       - name: rewards-container
-        image: mrmonster786/rnr-rewards:latest
+        image: mrmonster786/rnr-backend-base:latest
+        args: ["python", "-m", "uvicorn", "src.rewards.main:app", "--host", "0.0.0.0", "--port", "8006"]
         ports:
         - containerPort: 8006
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
 ---
 apiVersion: v1
 kind: Service

@@ -41,29 +41,25 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install ONLY runtime dependencies. 
-# PM2, Node.js, npm, and Nginx are REMOVED.
+# Install ONLY runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 ca-certificates libatomic1 \
-    curl iputils-ping netcat-openbsd dnsutils && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+    curl iputils-ping netcat-openbsd dnsutils \
+    && rm -rf /var/lib/apt/lists/*
 
 # Security: Non-root user
 RUN addgroup --system appgroup && adduser --system --group appuser
 
-# Copy app from builder (includes the /app/.cache/prisma-python folder and venv)
+# Copy app from builder
 COPY --from=builder --chown=appuser:appgroup /app /app
 
-# Create a generic logs directory
-RUN mkdir -p /app/logs && chown -R appuser:appgroup /app/logs
+# CRITICAL: Fix the Python path so it can find the 'src' folder
+ENV PYTHONPATH=/app
+ENV PRISMA_BINARY_CACHE_DIR="/app/.cache/prisma-python"
+ENV PYTHONUNBUFFERED=1
 
 USER appuser
-ENV PATH="/app/venv/bin:$PATH"
-ENV PRISMA_BINARY_CACHE_DIR="/app/.cache/prisma-python"
 
-EXPOSE 8000
-
-# We DO NOT define a strict CMD here anymore.
-# The command will be injected by docker-compose.yml for each specific service.
-CMD ["python", "-m", "uvicorn", "src.core.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# FALLBACK COMMAND: This will be overridden by K8s args
+# If no args are provided, it tries to run the root main.py
+CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -14,7 +14,17 @@ spec:
     spec:
       containers:
       - name: wallet-container
-        image: mrmonster786/rnr-wallet:latest
+        image: mrmonster786/rnr-backend-base:latest
+        args: ["python", "-m", "uvicorn", "src.wallet.main:app", "--host", "0.0.0.0", "--port", "8004"]
+        env:
+        # Networking overrides for K8s service-to-service communication
+        - name: REDIS_URL
+          value: "redis://redis:6379/0"
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service:8001"
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
         ports:
         - containerPort: 8004
         resources:
