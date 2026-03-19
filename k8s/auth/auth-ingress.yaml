@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: auth-ingress # Unique name per file
+  namespace: default
+  annotations:
+    # Essential: This maps api.rnr.local/auth/docs -> auth-service:8001/v1/auth/docs
+    nginx.ingress.kubernetes.io/rewrite-target: /v1/auth/$2
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: api.rnr.local
+    http:
+      paths:
+      - path: /auth(/|$)(.*) # This captures the "anything" after /auth as group $2
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: auth-service
+            port:
+              number: 8001

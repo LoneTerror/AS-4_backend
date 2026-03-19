@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: recognition-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /v1/recognition/$2
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: api.rnr.local
+    http:
+      paths:
+      - path: /recognition(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: recognition-service
+            port:
+              number: 8005

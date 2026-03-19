@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rewards-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /v1/rewards/$2
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: api.rnr.local
+    http:
+      paths:
+      - path: /rewards(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: rewards-service
+            port:
+              number: 8006
