@@ -98,6 +98,7 @@ _SKIP_PREFIXES: tuple[str, ...] = (
     "/docs",
     "/redoc",
     "/openapi",
+    "/internal",
 )
 
 _SYSTEM_ACTOR = None
@@ -126,7 +127,10 @@ def _auto_title(route_key: str) -> str:
     return f"{method.title()} {label}".strip()
 
 
-def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
+def _extract_routes(
+    app: FastAPI,
+    always_public_routes: set[str],
+) -> list[tuple[str, str]]:
     """
     Walk app.routes and return a DEDUPLICATED list of (METHOD, full_path) tuples.
 
@@ -137,6 +141,10 @@ def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
     prepended to route.path at the ASGI level — we do it here so the route
     keys stored in the DB match the paths as seen by the gateway/client.
 
+    Routes whose full route key (METHOD:full_path) is in always_public_routes
+    are skipped — they are never written to route_permissions and bypass
+    permission checks entirely (handled in dependencies._is_public).
+
     Deduplication: FastAPI sometimes surfaces the same APIRoute twice (e.g.
     when a router is included multiple times, or HEAD is paired with GET).
     We use a set to guarantee uniqueness.
@@ -145,11 +153,6 @@ def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
 
     seen: set[tuple[str, str]] = set()
     results: list[tuple[str, str]] = []
-
-    results = []
-    
-    # 1. Grab the root_path defined in your FastAPI app (e.g., "/v1/rewards")
-    root = app.root_path.rstrip("/") if app.root_path else ""
 
     for route in app.routes:
         if not isinstance(route, APIRoute):
@@ -172,6 +175,10 @@ def _extract_routes(app: FastAPI) -> list[tuple[str, str]]:
             # a distinct permission boundary.
             if method == "HEAD":
                 continue
+            # Skip routes declared as always-public — they need no DB entry.
+            route_key = f"{method}:{full_path}"
+            if route_key in always_public_routes:
+                continue
             pair = (method, full_path)
             if pair not in seen:
                 seen.add(pair)
@@ -187,6 +194,7 @@ async def _do_register(
     default_roles: list[str],
     role_overrides: dict[str, list[str]],
     route_titles: dict[str, str],
+    always_public_routes: set[str],
 ) -> None:
     """Inner registration — runs inside an asyncio.wait_for timeout guard."""
     from src.prisma.client import db
@@ -203,8 +211,44 @@ async def _do_register(
         logger.warning("route_registry: no roles in DB — skipping registration")
         return
 
-    # ── 2. Extract routes (deduplicated) ──────────────────────────────────────
-    routes = _extract_routes(app)
+    # ── 1b. Deactivate stale rows for always-public routes ────────────────────
+    # These should never have been registered; clean them up if they exist.
+    if always_public_routes:
+        stale = await db.route_permissions.find_many(
+            where={"route_key": {"in": list(always_public_routes)}, "is_active": True}
+        )
+        if stale:
+            for row in stale:
+                await db.route_permissions.update(
+                    where={"id": row.id},
+                    data={"is_active": False, "updated_by": _SYSTEM_ACTOR, "updated_at": datetime.now(timezone.utc)},
+                )
+            logger.info(
+                "route_registry: deactivated %d stale permission rows for always-public routes",
+                len(stale),
+            )
+
+    # ── 1c. Deactivate stale rows for internal routes ─────────────────────────
+    # Internal routes (e.g. /internal/wallets/stats) are service-to-service
+    # only — they must never appear in route_permissions or the admin UI.
+    # This cleans up any rows that were inserted before _SKIP_PREFIXES included
+    # "/internal", so a DB wipe is not required after deploying the fix.
+    stale_internal = await db.route_permissions.find_many(
+        where={"route_key": {"contains": "/internal/"}, "is_active": True}
+    )
+    if stale_internal:
+        for row in stale_internal:
+            await db.route_permissions.update(
+                where={"id": row.id},
+                data={"is_active": False, "updated_by": _SYSTEM_ACTOR, "updated_at": datetime.now(timezone.utc)},
+            )
+        logger.info(
+            "route_registry: deactivated %d stale internal route permission rows",
+            len(stale_internal),
+        )
+
+    # ── 2. Extract routes (deduplicated, always_public + internal excluded) ───
+    routes = _extract_routes(app, always_public_routes)
     if not routes:
         logger.warning("route_registry: no routes found in app")
         return
@@ -336,6 +380,7 @@ async def register_app_routes(
     default_roles: list[str],
     role_overrides: Optional[dict[str, list[str]]] = None,
     route_titles: Optional[dict[str, str]] = None,
+    always_public_routes: Optional[set[str]] = None,
 ) -> None:
     """
     Auto-register all routes from `app` into route_permissions.
@@ -343,18 +388,26 @@ async def register_app_routes(
     Non-fatal — if registration times out or fails, the service still starts.
 
     Args:
-        app:            The FastAPI app instance for this service.
-        default_roles:  Role codes assigned to any route not in role_overrides.
-        role_overrides: {route_key: [role_codes]} for per-route overrides.
-        route_titles:   {route_key: "Human Readable Title"}.
-                        Routes without an entry get an auto-generated label.
+        app:                  The FastAPI app instance for this service.
+        default_roles:        Role codes assigned to any route not in role_overrides.
+        role_overrides:       {route_key: [role_codes]} for per-route overrides.
+        route_titles:         {route_key: "Human Readable Title"}.
+                              Routes without an entry get an auto-generated label.
+        always_public_routes: Set of route keys (e.g. "POST:/v1/auth/login") that
+                              are unconditionally public. These are NEVER written to
+                              route_permissions and any existing stale rows for them
+                              are deactivated. Use this for pre-auth endpoints like
+                              login, refresh, forgot-password, validate, etc. that
+                              must remain accessible to unauthenticated users and
+                              must never be togglable by an admin.
     """
-    role_overrides = role_overrides or {}
-    route_titles   = route_titles   or {}
+    role_overrides        = role_overrides        or {}
+    route_titles          = route_titles          or {}
+    always_public_routes  = always_public_routes  or set()
 
     try:
         await asyncio.wait_for(
-            _do_register(app, default_roles, role_overrides, route_titles),
+            _do_register(app, default_roles, role_overrides, route_titles, always_public_routes),
             timeout=_REGISTRATION_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:

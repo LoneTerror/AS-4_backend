@@ -495,17 +495,17 @@ async def seed_employees():
         (EMP_ARIJIT,    "arijit.banik",       "arijitb017@gmail.com",           DES_SR_DEV,    D_ENG,       EMP_HENRY, date(2000, 3, 17), date(2023, 3,  1), 2500,  100,  2600,  3),
         (EMP_SHUBRAJIT, "shubrajit.deb",      "shubrajitdeb180603@gmail.com",   DES_SR_DEV,    D_PLATFORM,  EMP_JAMES, date(2003, 6, 18), date(2023, 6,  1), 2200,  0,    2200,  2),
         (EMP_PRASUN,    "prasun.chakraborty", "nothingshere21@gmail.com",       DES_SR_DEV,    D_PLATFORM,  EMP_JAMES, date(1998, 11,25), date(2023, 3,  1), 2800,  200,  3000,  4),
-        (EMP_BOB,       "bob.builder",        "bob.builder@company.com",        DES_SR_DEV,    D_ENG,       EMP_HENRY, date(1993, 2, 14), date(2021, 7,  5), 3500,  300,  3800,  5),
-        (EMP_CAROL,     "carol.danvers",      "carol.danvers@company.com",      DES_SR_DEV,    D_DEVOPS,    EMP_JANE,  date(1994, 5, 20), date(2022, 4,  1), 3200,  100,  3300,  3),
-        (EMP_DAVE,      "dave.benson",        "dave.benson@company.com",        DES_DEV,       D_ENG,       EMP_HENRY, date(1997, 3,  8), date(2023, 9,  1), 1500,  0,    1500,  1),
-        (EMP_EVE,       "eve.online",         "eve.online@company.com",         DES_DEV,       D_ENG,       EMP_HENRY, date(1999, 10,15), date(2024, 1, 10), 1200,  0,    1200,  1),
-        (EMP_FRANK,     "frank.castle",       "frank.castle@company.com",       DES_DEV,       D_PLATFORM,  EMP_JAMES, date(1996, 7,  4), date(2023, 11, 1), 1800,  200,  2000,  2),
-        (EMP_KATE,      "kate.bishop",        "kate.bishop@company.com",        DES_DEV,       D_PLATFORM,  EMP_JAMES, date(2001, 4, 25), date(2024, 2,  1), 1000,  0,    1000,  1),
-        (EMP_LEO,       "leo.messi",          "leo.messi@company.com",          DES_DEV,       D_ENG,       EMP_HENRY, date(1987, 6, 24), date(2022, 10, 3), 2000,  100,  2100,  2),
-        (EMP_MIA,       "mia.khalifa",        "mia.khalifa@company.com",        DES_DEV,       D_DEVOPS,    EMP_JANE,  date(1999, 2, 10), date(2024, 5,  1), 900,   0,    900,   1),
-        (EMP_NOAH,      "noah.ark",           "noah.ark@company.com",           DES_DEV,       D_ENG,       EMP_HENRY, date(2000, 12, 1), date(2024, 7,  1), 700,   0,    700,   1),
-        (EMP_OLIVIA,    "olivia.pope",        "olivia.pope@company.com",        DES_QA_ENG,    D_QA,        EMP_IVY,   date(1993, 9, 18), date(2022, 6,  1), 1800,  100,  1900,  2),
-        (EMP_PETER,     "peter.parker",       "peter.parker@company.com",       DES_QA_ENG,    D_QA,        EMP_IVY,   date(2001, 8,  3), date(2024, 3,  1), 1100,  0,    1100,  1),
+        (EMP_BOB,       "midanka.lahon",       "midankalahon@gmail.com",         DES_SR_DEV,    D_ENG,       EMP_HENRY, date(1993, 2, 14), date(2021, 7,  5), 3500,  300,  3800,  5),
+        (EMP_CAROL,     "swarup.das",         "swarup1to3@gmail.com",           DES_SR_DEV,    D_DEVOPS,    EMP_JANE,  date(1994, 5, 20), date(2022, 4,  1), 3200,  100,  3300,  3),
+        (EMP_DAVE,      "bikash.nath",        "nathbikash231@gmail.com",        DES_DEV,       D_ENG,       EMP_HENRY, date(1997, 3,  8), date(2023, 9,  1), 1500,  0,    1500,  1),
+        (EMP_EVE,       "binit.goswami",      "binitkgsmile2005@gmail.com",     DES_DEV,       D_ENG,       EMP_HENRY, date(1999, 10,15), date(2024, 1, 10), 1200,  0,    1200,  1),
+        (EMP_FRANK,     "mrinmoy.kashyap",    "mrinmoykashyap.mk@gmail.com",    DES_DEV,       D_PLATFORM,  EMP_JAMES, date(1996, 7,  4), date(2023, 11, 1), 1800,  200,  2000,  2),
+        (EMP_KATE,      "rohit.sah",          "rsah94614@gmail.com",            DES_DEV,       D_PLATFORM,  EMP_JAMES, date(2001, 4, 25), date(2024, 2,  1), 1000,  0,    1000,  1),
+        (EMP_LEO,       "rishav.bora",        "rishavbora550@gmail.com",        DES_DEV,       D_ENG,       EMP_HENRY, date(1987, 6, 24), date(2022, 10, 3), 2000,  100,  2100,  2),
+        (EMP_MIA,       "aminul.islam",       "animul7535@gmail.com",           DES_DEV,       D_DEVOPS,    EMP_JANE,  date(1999, 2, 10), date(2024, 5,  1), 900,   0,    900,   1),
+        (EMP_NOAH,      "bikash.bora",        "borab796@gmail.com",             DES_DEV,       D_ENG,       EMP_HENRY, date(2000, 12, 1), date(2024, 7,  1), 700,   0,    700,   1),
+        (EMP_OLIVIA,    "dipam.barman",       "dipambarman3@gmail.com",         DES_QA_ENG,    D_QA,        EMP_IVY,   date(1993, 9, 18), date(2022, 6,  1), 1800,  100,  1900,  2),
+        (EMP_PETER,     "gautam.hazarika",    "gautamhazarika01@gmail.com",     DES_QA_ENG,    D_QA,        EMP_IVY,   date(2001, 8,  3), date(2024, 3,  1), 1100,  0,    1100,  1),
         (EMP_QUINN,     "quinn.harley",       "quinn.harley@company.com",       DES_QA_ENG,    D_QA,        EMP_IVY,   date(1998, 5, 11), date(2023, 5,  1), 1400,  50,   1450,  2),
         (EMP_RACHEL,    "rachel.green",       "rachel.green@company.com",       DES_HR_EXEC,   D_HR,        EMP_GRACE, date(1992, 10,22), date(2022, 9,  1), 1600,  0,    1600,  1),
         (EMP_SAM,       "sam.winchester",     "sam.winchester@company.com",     DES_HR_EXEC,   D_HR,        EMP_GRACE, date(1996, 1, 19), date(2023, 1, 10), 1300,  100,  1400,  2),
@@ -1019,31 +1019,31 @@ async def seed_audit_log():
         ("employees",         EMP_ARIJIT,     "INSERT", None,                                        {"username": "arijit.banik", "status": "ACTIVE"},                            EMP_ADMIN),
         ("employees",         EMP_SHUBRAJIT,  "INSERT", None,                                        {"username": "shubrajit.deb", "status": "ACTIVE"},                           EMP_ADMIN),
         ("employees",         EMP_PRASUN,     "INSERT", None,                                        {"username": "prasun.chakraborty", "status": "ACTIVE"},                      EMP_ADMIN),
-        ("employees",         EMP_BOB,        "INSERT", None,                                        {"username": "bob.builder", "status": "ACTIVE"},                             EMP_ADMIN),
-        ("employees",         EMP_CAROL,      "INSERT", None,                                        {"username": "carol.danvers", "status": "ACTIVE"},                           EMP_ADMIN),
+        ("employees",         EMP_BOB,        "INSERT", None,                                        {"username": "midanka.lahon", "status": "ACTIVE"},                           EMP_ADMIN),
+        ("employees",         EMP_CAROL,      "INSERT", None,                                        {"username": "swarup.das", "status": "ACTIVE"},                              EMP_ADMIN),
         ("employees",         EMP_EVE,        "UPDATE", {"status": "ACTIVE"},                        {"status": "INACTIVE"},                                                      EMP_ADMIN),
         ("employees",         EMP_EVE,        "UPDATE", {"status": "INACTIVE"},                      {"status": "ACTIVE"},                                                        EMP_ADMIN),
         ("wallets",           EMP_JOHN,       "UPDATE", {"available_points": 1700},                  {"available_points": 1500},                                                  EMP_ADMIN),
         ("wallets",           EMP_BOB,        "UPDATE", {"available_points": 3700},                  {"available_points": 3500},                                                  EMP_ADMIN),
         ("wallets",           EMP_LEO,        "UPDATE", {"available_points": 2200},                  {"available_points": 2000},                                                  EMP_ADMIN),
         ("reviews",           uid(),          "INSERT", None,                                        {"reviewer": "jane.smith", "receiver": "john.doe"},                         EMP_JANE),
-        ("reviews",           uid(),          "INSERT", None,                                        {"reviewer": "henry.ford", "receiver": "bob.builder"},                      EMP_HENRY),
-        ("reviews",           uid(),          "INSERT", None,                                        {"reviewer": "ivy.league", "receiver": "peter.parker"},                     EMP_IVY),
+        ("reviews",           uid(),          "INSERT", None,                                        {"reviewer": "henry.ford", "receiver": "midanka.lahon"},                    EMP_HENRY),
+        ("reviews",           uid(),          "INSERT", None,                                        {"reviewer": "ivy.league", "receiver": "gautam.hazarika"},                  EMP_IVY),
         ("reviews",           uid(),          "UPDATE", {"status": "REVIEW_ACTIVE"},                 {"status": "REVIEW_DELETED"},                                                EMP_ADMIN),
         ("employee_roles",    EMP_HENRY,      "INSERT", None,                                        {"role": "TEAM_LEAD", "assigned_by": "admin.user"},                         EMP_ADMIN),
         ("employee_roles",    EMP_IVY,        "INSERT", None,                                        {"role": "TEAM_LEAD", "assigned_by": "admin.user"},                         EMP_ADMIN),
         ("reward_catalog",    CAT_AWS_CPE,    "INSERT", None,                                        {"reward_name": "AWS Cloud Practitioner Exam", "points": 1200},              EMP_ADMIN),
         ("reward_catalog",    CAT_GCP_001,    "UPDATE", {"available_stock": 20},                     {"available_stock": 15},                                                     EMP_ADMIN),
         ("reward_catalog",    CAT_STA_001,    "UPDATE", {"is_active": True},                         {"is_active": False},                                                        EMP_ADMIN),
-        ("transactions",      uid(),          "INSERT", None,                                        {"amount": 500, "type": "BONUS", "employee": "carol.danvers"},               EMP_ADMIN),
-        ("transactions",      uid(),          "INSERT", None,                                        {"amount": 200, "type": "BONUS", "employee": "frank.castle"},                EMP_ADMIN),
+        ("transactions",      uid(),          "INSERT", None,                                        {"amount": 500, "type": "BONUS", "employee": "swarup.das"},                  EMP_ADMIN),
+        ("transactions",      uid(),          "INSERT", None,                                        {"amount": 200, "type": "BONUS", "employee": "mrinmoy.kashyap"},             EMP_ADMIN),
         ("transactions",      uid(),          "UPDATE", {"status": "PENDING"},                       {"status": "APPROVED"},                                                      EMP_ADMIN),
         ("departments",       D_ENG,          "UPDATE", {"department_name": "Software Engineering"}, {"department_name": "Engineering"},                                          EMP_ADMIN),
         ("designations",      DES_SR_DEV,     "UPDATE", {"level": 3},                                {"level": 4},                                                                EMP_ADMIN),
         ("review_categories", RC_OWNERSHIP,   "UPDATE", {"multiplier": "1.1000"},                    {"multiplier": "1.2000"},                                                    EMP_ADMIN),
         ("review_categories", RC_INNOVATION,  "UPDATE", {"multiplier": "1.2000"},                    {"multiplier": "1.3000"},                                                    EMP_ADMIN),
         ("reward_history",    uid(),          "INSERT", None,                                        {"reward": "Company Hoodie", "points": 400, "employee": "john.doe"},         EMP_ADMIN),
-        ("reward_history",    uid(),          "INSERT", None,                                        {"reward": "AWS exam voucher", "points": 1200, "employee": "carol.danvers"}, EMP_ADMIN),
+        ("reward_history",    uid(),          "INSERT", None,                                        {"reward": "AWS exam voucher", "points": 1200, "employee": "swarup.das"},      EMP_ADMIN),
         ("employees",         EMP_XENA,       "INSERT", None,                                        {"username": "xena.warrior", "status": "ACTIVE"},                            EMP_ADMIN),
     ]
 
@@ -1116,7 +1116,18 @@ async def main():
         print(f"   {'arijit.banik':<30} EMPLOYEE  (arijitb017@gmail.com)")
         print(f"   {'shubrajit.deb':<30} EMPLOYEE  (shubrajitdeb180603@gmail.com)")
         print(f"   {'prasun.chakraborty':<30} EMPLOYEE  (nothingshere21@gmail.com)")
-        print(f"   {'... + 19 more employees':<30} EMPLOYEE")
+        print(f"   {'midanka.lahon':<30} EMPLOYEE  (midankalahon@gmail.com)")
+        print(f"   {'swarup.das':<30} EMPLOYEE  (swarup1to3@gmail.com)")
+        print(f"   {'bikash.nath':<30} EMPLOYEE  (nathbikash231@gmail.com)")
+        print(f"   {'binit.goswami':<30} EMPLOYEE  (binitkgsmile2005@gmail.com)")
+        print(f"   {'mrinmoy.kashyap':<30} EMPLOYEE  (mrinmoykashyap.mk@gmail.com)")
+        print(f"   {'rohit.sah':<30} EMPLOYEE  (rsah94614@gmail.com)")
+        print(f"   {'rishav.bora':<30} EMPLOYEE  (rishavbora550@gmail.com)")
+        print(f"   {'aminul.islam':<30} EMPLOYEE  (animul7535@gmail.com)")
+        print(f"   {'bikash.bora':<30} EMPLOYEE  (borab796@gmail.com)")
+        print(f"   {'dipam.barman':<30} EMPLOYEE  (dipambarman3@gmail.com)")
+        print(f"   {'gautam.hazarika':<30} EMPLOYEE  (gautamhazarika01@gmail.com)")
+        print(f"   {'... + 8 more employees':<30} EMPLOYEE")
         print()
         print(f"   password (all): {TEST_PASSWORD}")
         print()

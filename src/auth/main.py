@@ -24,6 +24,7 @@ from src.common.middleware import (
     prisma_unique_violation_handler, request_rate_limit_middleware,
     validation_exception_handler,
 )
+from src.common.dependencies import register_public_paths
 from src.common.route_registry import register_app_routes
 from src.prisma.client import connect_with_retry, db
 
@@ -54,6 +55,14 @@ ROUTE_TITLES: dict[str, str] = {
     "POST:/v1/auth/bulk-import":     "Bulk Import Employees",
 }
 
+ALWAYS_PUBLIC_ROUTES: set[str] = {
+    "POST:/v1/auth/login",
+    "POST:/v1/auth/refresh",
+    "POST:/v1/auth/validate",
+    "POST:/v1/auth/forgot-password",
+    "POST:/v1/auth/reset-password",
+}
+
 cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "http://localhost:8005")
 allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
 
@@ -65,8 +74,24 @@ _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json",
 async def lifespan(app: FastAPI):
     await connect_with_retry()
     print("Auth Service: 🟢 Database Connected")
-    await register_app_routes(app, default_roles=["SUPER_ADMIN"],
-                               role_overrides=ROLE_OVERRIDES, route_titles=ROUTE_TITLES)
+
+    # Register pre-auth paths so all services skip permission checks for them.
+    # Include both bare and prefixed forms to cover direct + proxied requests.
+    register_public_paths(
+        "/login",           "/v1/auth/login",
+        "/refresh",         "/v1/auth/refresh",
+        "/validate",        "/v1/auth/validate",
+        "/forgot-password", "/v1/auth/forgot-password",
+        "/reset-password",  "/v1/auth/reset-password",
+    )
+
+    await register_app_routes(
+        app,
+        default_roles=["SUPER_ADMIN"],
+        role_overrides=ROLE_OVERRIDES,
+        route_titles=ROUTE_TITLES,
+        always_public_routes=ALWAYS_PUBLIC_ROUTES,
+    )
     yield
     await db.disconnect()
     print("Auth Service: 🔴 Database Disconnected")

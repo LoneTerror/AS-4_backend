@@ -25,7 +25,13 @@ AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
 _AUTH_CACHE_TTL = 30
 
 # ── Paths that never require authentication ───────────────────────────────────
-_PUBLIC_PATHS: frozenset[str] = frozenset({
+#
+# Seeded with well-known system paths. Each service extends this at startup
+# by calling register_public_paths() for its own always-public routes (e.g.
+# login, refresh, validate). This prevents those routes from ever being
+# checked against route_permissions — they must remain accessible even when
+# no valid token exists.
+_PUBLIC_PATHS: set[str] = {
     "/health",
     "/docs",
     "/redoc",
@@ -33,7 +39,32 @@ _PUBLIC_PATHS: frozenset[str] = frozenset({
     "/v1/docs",
     "/v1/redoc",
     "/v1/openapi.json",
-})
+}
+
+
+def register_public_paths(*paths: str) -> None:
+    """
+    Declare additional paths that bypass all auth and permission checks.
+
+    Call this once per service at startup (before the first request) for
+    any endpoint that must be reachable without a token — e.g. login,
+    refresh, forgot-password, validate. These paths are NEVER checked
+    against route_permissions so an admin cannot accidentally lock users
+    out by toggling them off.
+
+    Paths may be bare (e.g. "/login") or fully qualified with the service
+    root_path prefix (e.g. "/v1/auth/login") — both forms are registered
+    so the check works regardless of how the proxy forwards the request.
+
+    Example (auth main.py lifespan):
+        from src.common.dependencies import register_public_paths
+        register_public_paths(
+            "/login", "/v1/auth/login",
+            "/refresh", "/v1/auth/refresh",
+            ...
+        )
+    """
+    _PUBLIC_PATHS.update(paths)
 
 
 def _is_public(request: Request) -> bool:
