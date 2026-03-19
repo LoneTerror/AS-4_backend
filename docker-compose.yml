@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # 1. The Auth Microservice
   auth-service:
     build: 
       context: .
@@ -9,9 +8,8 @@ services:
     container_name: rnr-auth
     ports:
       - "8001:8001"
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-    # This overrides the Dockerfile CMD to boot ONLY the Auth service
+    env_file:
+      - .env
     command: uvicorn src.auth.main:app --host 0.0.0.0 --port 8001 --reload
 
   # 2. The Employees Microservice
