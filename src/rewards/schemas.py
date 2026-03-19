@@ -351,6 +351,7 @@ class RedemptionResponse(BaseModel):
     granted_at: datetime
     status: str
     new_stock_level: Optional[int] = None
+    new_balance: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 

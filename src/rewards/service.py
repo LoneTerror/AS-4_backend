@@ -8,6 +8,7 @@ from . import schemas
 from src.core.logger import logger
 from src.notifications.service import NotificationService
 from src.notifications.schemas import NotificationType
+from src.common import internal_client
 from src.common.cache import (
     cache_get, cache_set, cache_delete, invalidate_pattern,
     TTL_VOLATILE,  L1_VOLATILE,   # history          →  60s /  30s
@@ -23,7 +24,6 @@ def _key_catalog(active_only: bool, page: int, size: int) -> str:
     return f"rewards:catalog:{int(active_only)}:{page}:{size}"
 
 def _key_categories(is_active: Optional[bool]) -> str:
-    # None → "none", True → "1", False → "0"  — unambiguous, no bool serialization issues
     flag = "none" if is_active is None else str(int(is_active))
     return f"rewards:categories:{flag}"
 
@@ -46,7 +46,6 @@ async def invalidate_categories() -> None:
     await invalidate_pattern("rewards:categories:*")
 
 async def invalidate_history(wallet_id: Optional[str] = None) -> None:
-    """Bust a specific wallet's history pages, plus the global 'all' pages."""
     await invalidate_pattern("rewards:history:all:*")
     if wallet_id:
         await invalidate_pattern(f"rewards:history:{wallet_id}:*")
@@ -95,17 +94,6 @@ class RewardService:
     # ─────────────────────────────────────────────────────────────────────────
     # Helpers
     # ─────────────────────────────────────────────────────────────────────────
-    async def _get_sys_id(self, table, code_field, code_value):
-        record = await getattr(self.db, table).find_unique(where={code_field: code_value})
-        if not record:
-            raise HTTPException(
-                status_code=500,
-                detail=f"System Configuration Error: {code_value} not found in {table}",
-            )
-        if table == "transaction_types": return record.type_id
-        if table == "status_master":     return record.status_id
-        return None
-
     def _get_stock_status(self, stock: int) -> str:
         if stock <= 0:  return "Out of Stock"
         if stock < 10:  return "Limited Stock"
@@ -272,21 +260,17 @@ class RewardService:
         )
 
     async def get_catalog(self, is_active: Optional[bool] = True, page: int = 1, size: int = 20):
-        # 1. Update cache key to safely handle the None/Null state
         flag = "all" if is_active is None else str(int(is_active))
         key  = f"rewards:catalog:{flag}:{page}:{size}"
-        
+
         cached = await cache_get(key, l1_ttl=L1_MEDIUM)
         logger.debug("cache catalog key=%s %s", key, "HIT" if cached is not None else "MISS")
         if cached is not None:
             return cached
 
-        skip = (page - 1) * size
-        
-        # 2. Dynamically build the where_clause based on the boolean
+        skip         = (page - 1) * size
         where_clause = {"is_active": is_active} if is_active is not None else {}
-        
-        total_items = await self.db.reward_catalog.count(where=where_clause)
+        total_items  = await self.db.reward_catalog.count(where=where_clause)
 
         items = await self.db.reward_catalog.find_many(
             where=where_clause,
@@ -501,10 +485,10 @@ class RewardService:
     # Redemption
     # ─────────────────────────────────────────────────────────────────────────
     async def grant_reward(
-        self, 
-        wallet_id: str, # Added direct parameter
-        request: schemas.RedeemRewardRequest, 
-        granted_by_user_id: str
+        self,
+        wallet_id: str,
+        request: schemas.RedeemRewardRequest,
+        granted_by_user_id: str,
     ):
         logger.info(
             "Initiating grant_reward | catalog=%s wallet=%s",
@@ -523,128 +507,116 @@ class RewardService:
         if request.points < reward_item.min_points or request.points > reward_item.max_points:
             raise HTTPException(status_code=400, detail="Points are outside the allowed range")
 
-        wallet = await self.db.wallets.find_unique(where={"wallet_id": str(wallet_id)})
-        if not wallet:
-            raise HTTPException(status_code=404, detail="Wallet not found")
+        # ── Validate wallet balance via Wallet service (no cross-domain DB query) ──
+        try:
+            wallet_data = await internal_client.get_wallet_by_id(str(wallet_id))
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                raise HTTPException(status_code=404, detail="Wallet not found")
+            raise
 
-        if wallet.available_points < request.points:
+        available_points = wallet_data.get("available_points", 0)
+        if available_points < request.points:
             raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
-        type_id   = await self._get_sys_id("transaction_types", "type_code", "REWARD_REDEMPTION")
-        status_id = await self._get_sys_id("status_master",     "status_code", "APPROVED")
-
-        ref_number = f"TXN-{int(datetime.now().timestamp())}-{str(uuid.uuid4())[:8]}"
-
+        # ── Deduct stock (Rewards owns reward_catalog) ────────────────────────
         try:
-            async with self.db.tx() as transaction:
-                await transaction.wallets.update(
-                    where={"wallet_id": str(wallet_id)},
-                    data={
-                        "available_points": {"decrement": request.points},
-                        "redeemed_points":  {"increment": request.points},
-                        "updated_by":       granted_by_user_id,
-                        "updated_at":       datetime.now(timezone.utc),
-                    },
+            updated_catalog = await self.db.reward_catalog.update(
+                where={
+                    "catalog_id":      str(request.catalog_id),
+                    "available_stock": {"gt": 0},
+                },
+                data={
+                    "available_stock": {"decrement": 1},
+                    "updated_at":      datetime.now(timezone.utc),
+                    "updated_by":      granted_by_user_id,
+                },
+            )
+
+            if not updated_catalog:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Out of stock! This reward was just claimed by someone else.",
                 )
 
-                updated_catalog = await transaction.reward_catalog.update(
-                    where={
-                        "catalog_id":      str(request.catalog_id),
-                        "available_stock": {"gt": 0},
-                    },
-                    data={
-                        "available_stock": {"decrement": 1},
-                        "updated_at":      datetime.now(timezone.utc),
-                        "updated_by":      granted_by_user_id,
-                    },
-                )
-
-                if not updated_catalog:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Out of stock! This reward was just claimed by someone else.",
-                    )
-
-                await transaction.transactions.create(
-                    data={
-                        "wallet_id":           str(wallet_id),
-                        "amount":              request.points,
-                        "transaction_type_id": type_id,
-                        "status_id":           status_id,
-                        "description":         f"Redeemed: {reward_item.reward_name}",
-                        "reference_number":    ref_number,
-                        "transaction_at":      datetime.now(timezone.utc),
-                        "created_by":          granted_by_user_id,
-                        "updated_by":          granted_by_user_id,
-                        "updated_at":          datetime.now(timezone.utc),
-                    }
-                )
-
-                history_record = await transaction.reward_history.create(
-                    data={
-                        "wallet_id":  str(wallet_id),
-                        "catalog_id": str(request.catalog_id),
-                        "points":     request.points,
-                        "granted_by": granted_by_user_id,
-                        "comment":    request.comment,
-                        "created_by": granted_by_user_id,
-                        "updated_by": granted_by_user_id,
-                        "updated_at": datetime.now(timezone.utc),
-                    }
-                )
-
-            # ── Post-commit: invalidate caches ────────────────────────────────
-            await invalidate_catalog()
-            await invalidate_history(str(wallet_id))
-            await cache_delete(f"wallets:employee:{wallet.employee_id}")
-            from src.analytics.service import invalidate_leaderboard
-            await invalidate_leaderboard()
-
-            try:
-                new_balance = wallet.available_points - request.points
-                await self._notif.create_notification(
-                    employee_id=wallet.employee_id,
-                    title=f"You redeemed \"{reward_item.reward_name}\" 🎁",
-                    message=(
-                        f"{request.points} points were used to redeem "
-                        f"\"{reward_item.reward_name}\". "
-                        f"Your remaining balance is {new_balance} points."
-                        + (f" Note: {request.comment}" if request.comment else "")
-                    ),
-                    type=NotificationType.REWARD,
-                )
-            except Exception:
-                logger.exception(
-                    "Redemption notification failed for history %s — redemption completed successfully",
-                    history_record.history_id,
-                )
-
-            logger.info("Transaction %s completed for wallet %s", ref_number, wallet_id)
-            return {
-                "history_id":      history_record.history_id,
-                "points":          history_record.points,
-                "granted_at":      history_record.granted_at,
-                "status":          "COMPLETED",
-                "new_stock_level": updated_catalog.available_stock,
-            }
+            # ── Write reward_history (Rewards owns reward_history) ────────────
+            history_record = await self.db.reward_history.create(
+                data={
+                    "wallet_id":  str(wallet_id),
+                    "catalog_id": str(request.catalog_id),
+                    "points":     request.points,
+                    "granted_by": granted_by_user_id,
+                    "comment":    request.comment,
+                    "created_by": granted_by_user_id,
+                    "updated_by": granted_by_user_id,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
 
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Atomic transaction failed for %s: %s", ref_number, e, exc_info=True)
+            logger.error("grant_reward DB write failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
+
+        # ── Publish event → Wallet service deducts points asynchronously ──────
+        from src.common.event_publisher import publish
+        await publish("events:reward.redeemed", {
+            "history_id":  str(history_record.history_id),
+            "wallet_id":   str(wallet_id),
+            "points":      str(request.points),
+            "catalog_id":  str(request.catalog_id),
+            "redeemed_by": granted_by_user_id,
+        })
+
+        # ── Post-commit: invalidate caches ────────────────────────────────────
+        await invalidate_catalog()
+        await invalidate_history(str(wallet_id))
+
+        # ── Notification (best-effort) ────────────────────────────────────────
+        try:
+            employee_id = wallet_data.get("employee_id")
+            if employee_id:
+                await self._notif.create_notification(
+                    employee_id=employee_id,
+                    title=f"You redeemed \"{reward_item.reward_name}\" 🎁",
+                    message=(
+                        f"{request.points} points were used to redeem "
+                        f"\"{reward_item.reward_name}\"."
+                        + (f" Note: {request.comment}" if request.comment else "")
+                    ),
+                    type=NotificationType.REWARD,
+                )
+        except Exception:
+            logger.exception(
+                "Redemption notification failed for history %s — redemption completed successfully",
+                history_record.history_id,
+            )
+
+        logger.info(
+            "Reward redeemed: catalog=%s wallet=%s points=%d",
+            request.catalog_id, wallet_id, request.points,
+        )
+        return {
+            "history_id":      history_record.history_id,
+            "points":          history_record.points,
+            "granted_at":      history_record.granted_at,
+            "status":          "COMPLETED",
+            "new_stock_level": updated_catalog.available_stock,
+            "new_balance":     available_points - request.points,
+        }
 
     # ─────────────────────────────────────────────────────────────────────────
     # History
     # ─────────────────────────────────────────────────────────────────────────
     async def get_history(self, wallet_id: Optional[str] = None, page: int = 1, size: int = 10):
         if wallet_id:
-            wallet_exists = await self.db.wallets.find_unique(where={"wallet_id": wallet_id})
-            if not wallet_exists:
-                raise HTTPException(
-                    status_code=404, 
-                    detail=f"Wallet not found. Ensure the ID is correct."
-                )
+            try:
+                await internal_client.get_wallet_by_id(wallet_id)
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    raise HTTPException(status_code=404, detail="Wallet not found. Ensure the ID is correct.")
+                raise
 
         key    = _key_history(wallet_id, page, size)
         cached = await cache_get(key, l1_ttl=L1_VOLATILE)
@@ -680,21 +652,25 @@ class RewardService:
         await cache_set(key, result, ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
         return {**result, "data": history}
 
-    async def get_wallet_id_for_user(self, user_id: str) -> Optional[str]:
+    async def get_wallet_id_for_user(self, employee_id: str) -> Optional[str]:
         """
-        Look up the wallet_id for an employee.
+        Look up the wallet_id for an employee via the Wallet service internal API.
         PERMANENT tier — wallet_id is immutable once created, safe to cache for 24h.
-        Called on every /history/me request so it must be cheap.
+        Replaces: db.wallets.find_first(where={"employee_id": employee_id})
         """
-        key    = _key_wallet_id(user_id)
+        key    = _key_wallet_id(employee_id)
         cached = await cache_get(key, l1_ttl=L1_PERMANENT)
         logger.debug("cache wallet_id key=%s %s", key, "HIT" if cached is not None else "MISS")
         if cached is not None:
             return cached
 
-        wallet = await self.db.wallets.find_first(where={"employee_id": user_id})
-        if not wallet:
+        try:
+            data      = await internal_client.get_wallet_by_employee(employee_id)
+            wallet_id = data.get("wallet_id")
+        except Exception as exc:
+            logger.warning("Could not fetch wallet for employee %s: %s", employee_id, exc)
             return None
 
-        await cache_set(key, wallet.wallet_id, ttl=TTL_PERMANENT, l1_ttl=L1_PERMANENT)
-        return wallet.wallet_id
+        if wallet_id:
+            await cache_set(key, wallet_id, ttl=TTL_PERMANENT, l1_ttl=L1_PERMANENT)
+        return wallet_id

@@ -14,7 +14,15 @@ from src.recognition.schemas import (
     ReviewCategoryUpdateRequest,
     PaginatedReviewCategoryResponse,
 )
-from src.recognition.service import RecognitionService
+from src.recognition.service import (
+    list_review_categories,
+    create_review_category,
+    update_review_category,
+    list_reviews,
+    get_review,
+    create_review,
+    update_review,
+)
 
 router            = APIRouter(prefix="/reviews")
 categories_router = APIRouter(prefix="/review-categories")
@@ -36,13 +44,13 @@ categories_router = APIRouter(prefix="/review-categories")
         "**sum of all selected category multipliers × reviewer weight**."
     ),
 )
-async def list_review_categories(
+async def list_review_categories_route(
     page:        int  = Query(1,    ge=1),
     page_size:   int  = Query(20,   ge=1, le=100),
     active_only: bool = Query(True, description="Return only active categories"),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    return await RecognitionService.list_review_categories(page, page_size, active_only)
+    return await list_review_categories(page=page, limit=page_size, active_only=active_only)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,11 +156,11 @@ _CATEGORY_UPDATE_REQUEST_BODY = {
     ),
     openapi_extra={"requestBody": _CATEGORY_CREATE_REQUEST_BODY},
 )
-async def create_review_category(
+async def create_review_category_route(
     payload: ReviewCategoryCreateRequest,
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    return await RecognitionService.create_review_category(payload, current_user)
+    return await create_review_category(payload, current_user.id)
 
 
 @categories_router.put(
@@ -168,12 +176,12 @@ async def create_review_category(
     ),
     openapi_extra={"requestBody": _CATEGORY_UPDATE_REQUEST_BODY},
 )
-async def update_review_category(
+async def update_review_category_route(
     payload: ReviewCategoryUpdateRequest,
     id: UUID = Path(..., description="Unique review category identifier"),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    return await RecognitionService.update_review_category(str(id), payload, current_user)
+    return await update_review_category(str(id), payload, current_user.id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -186,7 +194,7 @@ async def update_review_category(
     response_model_exclude_none=True,
     summary="List Reviews",
 )
-async def list_reviews(
+async def list_reviews_route(
     page:      int = Query(1,  ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: CurrentUser = Depends(check_route_permission),
@@ -195,7 +203,37 @@ async def list_reviews(
     - **EMPLOYEE / MANAGER**: only reviews they gave or received.
     - **HR_ADMIN / SUPER_ADMIN**: all reviews.
     """
-    return await RecognitionService.list_reviews(page, page_size, current_user)
+    if any(r in current_user.roles for r in ("HR_ADMIN", "SUPER_ADMIN")):
+        return await list_reviews(page=page, limit=page_size)
+    else:
+        # Employees/managers see only reviews where they are reviewer or receiver.
+        # Fetch both sets and merge (service supports one filter at a time).
+        import math
+        as_reviewer = await list_reviews(page=page, limit=page_size, reviewer_id=str(current_user.id))
+        as_receiver = await list_reviews(page=page, limit=page_size, receiver_id=str(current_user.id))
+        # Merge, deduplicate by review_id, re-sort by review_at desc
+        seen = set()
+        merged = []
+        for review in sorted(
+            as_reviewer["data"] + as_receiver["data"],
+            key=lambda r: r["review_at"],
+            reverse=True,
+        ):
+            if review["review_id"] not in seen:
+                seen.add(review["review_id"])
+                merged.append(review)
+        total = len(merged)
+        start = (page - 1) * page_size
+        page_items = merged[start: start + page_size]
+        return {
+            "data": page_items,
+            "pagination": {
+                "current_page": page, "per_page": page_size, "total": total,
+                "total_pages": math.ceil(total / page_size) if total else 0,
+                "has_next": (page * page_size) < total,
+                "has_previous": page > 1,
+            },
+        }
 
 
 @router.get(
@@ -204,11 +242,11 @@ async def list_reviews(
     response_model_exclude_none=True,
     summary="Get Review",
 )
-async def get_review(
+async def get_review_route(
     id: UUID = Path(..., description="Unique review identifier"),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    return await RecognitionService.get_review(str(id), current_user)
+    return await get_review(str(id))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -336,11 +374,11 @@ _UPDATE_REQUEST_BODY = {
     ),
     openapi_extra={"requestBody": _CREATE_REQUEST_BODY},
 )
-async def create_review(
+async def create_review_route(
     payload: ReviewCreateRequest,
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    return await RecognitionService.create_review(payload, current_user)
+    return await create_review(payload, str(current_user.id))
 
 
 @router.put(
@@ -356,7 +394,7 @@ async def create_review(
     ),
     openapi_extra={"requestBody": _UPDATE_REQUEST_BODY},
 )
-async def update_review(
+async def update_review_route(
     payload: ReviewUpdateRequest,
     id: UUID = Path(..., description="Unique review identifier"),
     current_user: CurrentUser = Depends(check_route_permission),
@@ -365,4 +403,4 @@ async def update_review(
     - **Review creator**: can update their own reviews.
     - **HR_ADMIN / SUPER_ADMIN**: can update any review.
     """
-    return await RecognitionService.update_review(str(id), payload, current_user)
+    return await update_review(str(id), payload, str(current_user.id))

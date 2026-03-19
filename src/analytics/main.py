@@ -1,91 +1,98 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from prisma.errors import UniqueViolationError
-from contextlib import asynccontextmanager
-import os
+"""
+src/analytics/main.py
+──────────────────────
+Analytics Service.
 
-# --- OpenTelemetry Imports ---
+Changes vs original
+────────────────────
+1. Removed: all imports from src.analytics.queries (deleted file).
+2. Added: close internal_client HTTP connection pool on shutdown.
+3. Analytics owns ZERO tables — all data comes via internal HTTP.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from prisma.errors import UniqueViolationError
+
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-# -----------------------------
 
-from src.prisma.client import db, connect_with_retry
-from src.notifications.redis_client import connect_redis, disconnect_redis
-from src.common.dependencies import close_auth_client
+from src.analytics.reward_consumer import reward_redeemed_consumer_loop
 from src.analytics.router import router as analytics_router
+from src.common import internal_client
+from src.common.dependencies import close_auth_client
 from src.common.middleware import (
-    request_rate_limit_middleware,
-    http_exception_handler,
-    validation_exception_handler,
     generic_exception_handler,
-    prisma_unique_violation_handler
+    http_exception_handler,
+    prisma_unique_violation_handler,
+    request_rate_limit_middleware,
+    validation_exception_handler,
 )
 from src.common.route_registry import register_app_routes
+from src.notifications.redis_client import connect_redis, disconnect_redis
+from src.prisma.client import connect_with_retry, db
+
+resource      = Resource.create({"service.name": "rnr-analytics"})
+provider      = TracerProvider(resource=resource)
+otlp_exporter = OTLPSpanExporter()
+provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+trace.set_tracer_provider(provider)
 
 ROLE_OVERRIDES = {
-
-    "GET:/v1/analytics/dashboard/leaderboard":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/recent-reviews":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/platform-stats":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-
-    "GET:/v1/analytics/dashboard/teams":                    ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/teams/{department_id}":    ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/participation":            ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/recognition-trend":        ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/recognition/teams":        ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/recognition/users":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/leaderboard":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/analytics/dashboard/recent-reviews":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/analytics/dashboard/platform-stats":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/analytics/dashboard/teams":                 ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/teams/{department_id}": ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/participation":         ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition-trend":     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition/teams":     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/analytics/dashboard/recognition/users":     ["SUPER_ADMIN", "HR_ADMIN"],
 }
-
 ROUTE_TITLES = {
-    "GET:/v1/analytics/dashboard/leaderboard":              "View Leaderboard",
-    "GET:/v1/analytics/dashboard/recent-reviews":           "View Recent Reviews",
-    "GET:/v1/analytics/dashboard/teams":                    "View All Teams Overview",
-    "GET:/v1/analytics/dashboard/teams/{department_id}":    "View Team Details",
-    "GET:/v1/analytics/dashboard/platform-stats":           "View Platform Statistics",
-    "GET:/v1/analytics/dashboard/participation":            "View Participation Stats",
-    "GET:/v1/analytics/dashboard/recognition-trend":        "View Recognition Trends",
-    "GET:/v1/analytics/dashboard/recognition/teams":        "View Team Recognition",
-    "GET:/v1/analytics/dashboard/recognition/users":        "View User Recognition",
+    "GET:/v1/analytics/dashboard/leaderboard":           "View Leaderboard",
+    "GET:/v1/analytics/dashboard/recent-reviews":        "View Recent Reviews",
+    "GET:/v1/analytics/dashboard/platform-stats":        "View Platform Statistics",
+    "GET:/v1/analytics/dashboard/teams":                 "View All Teams Overview",
+    "GET:/v1/analytics/dashboard/teams/{department_id}": "View Team Details",
+    "GET:/v1/analytics/dashboard/participation":         "View Participation Stats",
+    "GET:/v1/analytics/dashboard/recognition-trend":     "View Recognition Trends",
+    "GET:/v1/analytics/dashboard/recognition/teams":     "View Team Recognition",
+    "GET:/v1/analytics/dashboard/recognition/users":     "View User Recognition",
 }
-# ==========================================
-# OpenTelemetry Configuration
-# ==========================================
-# 1. Identify the service in Jaeger
-resource = Resource.create({"service.name": "rnr-analytics"})
-provider = TracerProvider(resource=resource)
 
-# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
-otlp_exporter = OTLPSpanExporter()
-
-# 3. Process traces in batches in the background
-processor = BatchSpanProcessor(otlp_exporter)
-provider.add_span_processor(processor)
-
-# 4. Register globally
-trace.set_tracer_provider(provider)
-# ==========================================
-
-# Grab the env var, default to localhost for local dev fallback
-cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS")
-# Split by comma and strip whitespace to create a clean list
-allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "")
+allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Analytics needs DB only for team-report department lookups and
+    # employee-per-department queries (it reads org structure, not wallet/review data).
     await connect_with_retry()
     print("Analytics Service: 🟢 Database Connected")
 
+    shutdown_event = asyncio.Event()
+    consumer_task  = None
+
     try:
         await connect_redis()
-        print("Analytics Service: ☑️ Redis Connected")
-    except Exception as e:
-        print(f"Analytics Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+        print("Analytics Service: ☑️  Redis Connected")
+        consumer_task = asyncio.create_task(
+            reward_redeemed_consumer_loop(shutdown_event)
+        )
+    except Exception as exc:
+        print(f"Analytics Service: ⚠️  Redis unavailable ({exc}) — caching disabled")
 
     await register_app_routes(
         app,
@@ -96,21 +103,28 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Drain the shared httpx connection pool
+    shutdown_event.set()
+    if consumer_task:
+        await consumer_task
+
+    await internal_client.close()
+
     await close_auth_client()
     await disconnect_redis()
     await db.disconnect()
-    print("Analytics Service: 🔴 Database Disconnected")
+    print("Analytics Service: 🔴 Disconnected")
 
 
 app = FastAPI(
     title="Analytics Service",
-    description="Dashboard summary and analytics endpoints",
+    description="Dashboard analytics — reads from owning services via internal HTTP",
     version="1.0.0",
     root_path="/v1/analytics",
     openapi_url="/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 
@@ -120,10 +134,10 @@ async def health_check():
 
 
 app.middleware("http")(request_rate_limit_middleware)
-app.add_exception_handler(Exception, generic_exception_handler)
+app.add_exception_handler(Exception,              generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(HTTPException, http_exception_handler)
-app.add_exception_handler(UniqueViolationError,prisma_unique_violation_handler)
+app.add_exception_handler(HTTPException,          http_exception_handler)
+app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -136,15 +150,9 @@ app.add_middleware(
 
 app.include_router(analytics_router, prefix="/dashboard", tags=["Dashboard"])
 
-# ==========================================
-# Instrument FastAPI
-# ==========================================
-# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
-    app,
-    excluded_urls="health,/docs,/openapi.json,/redoc"
+    app, excluded_urls="health,/docs,/openapi.json,/redoc"
 )
-# ==========================================
 
 if __name__ == "__main__":
     import uvicorn

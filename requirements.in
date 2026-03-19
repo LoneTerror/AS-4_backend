@@ -20,7 +20,7 @@ slack-sdk
 prisma>=0.13.0,<1.0.0
 asyncpg
 redis
-
+apscheduler[redis]
 # HTTP Client
 httpx==0.28.0
 aiohttp

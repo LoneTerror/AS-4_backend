@@ -1,80 +1,71 @@
+"""
+src/recognition/main.py  — Recognition Service entry point.
+"""
+from __future__ import annotations
+
 import asyncio
 import os
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from prisma.errors import UniqueViolationError
 from contextlib import asynccontextmanager
 
-# --- OpenTelemetry Imports ---
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from prisma.errors import UniqueViolationError
+
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-# -----------------------------
 
-from src.prisma.client import db, connect_with_retry
-from src.recognition.router import router as recognition_router
-from src.recognition.router import categories_router as review_categories_router
+from src.common.dependencies import close_auth_client
+from src.common.middleware import (
+    generic_exception_handler, http_exception_handler,
+    prisma_unique_violation_handler, request_rate_limit_middleware,
+    validation_exception_handler,
+)
+from src.common.route_registry import register_app_routes
 from src.digest.router import router as digest_router
 from src.notifications.email_sender import EmailSender, SMTPConfig
 from src.notifications.redis_client import connect_redis, disconnect_redis
+from src.prisma.client import connect_with_retry, db
+from src.recognition.internal_router import router as internal_router
+from src.recognition.router import categories_router as review_categories_router
+from src.recognition.router import router as recognition_router
 from src.digest.worker import digest_worker_loop
-from src.common.dependencies import close_auth_client
-from src.common.middleware import (
-    request_rate_limit_middleware,
-    http_exception_handler,
-    validation_exception_handler,
-    generic_exception_handler,
-    prisma_unique_violation_handler
-)
-from src.common.route_registry import register_app_routes
+
+resource      = Resource.create({"service.name": "rnr-recognition"})
+provider      = TracerProvider(resource=resource)
+otlp_exporter = OTLPSpanExporter()
+provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+trace.set_tracer_provider(provider)
 
 ROLE_OVERRIDES = {
-    "GET:/v1/recognitions/reviews":                        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/recognitions/reviews/{id}":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/recognitions/reviews":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "PUT:/v1/recognitions/reviews/{id}":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/recognitions/review-categories":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/recognitions/review-categories":             ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/recognitions/review-categories/{id}":         ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/recognitions/digest":                         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/recognitions/digest/send":                   ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/recognitions/reviews":                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/recognitions/reviews/{id}":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/reviews":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/v1/recognitions/reviews/{id}":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/v1/recognitions/review-categories":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/review-categories":         ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/v1/recognitions/review-categories/{id}":     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/v1/recognitions/digest":                     ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/v1/recognitions/digest/send":               ["SUPER_ADMIN", "HR_ADMIN"],
 }
-# ── Recognitions Service ──────────────────────────────────────────────────────
 ROUTE_TITLES = {
-    "GET:/v1/recognitions/reviews":                         "List Reviews",
-    "GET:/v1/recognitions/reviews/{id}":                    "Get Review Details",
-    "POST:/v1/recognitions/reviews":                        "Submit Review",
-    "PUT:/v1/recognitions/reviews/{id}":                    "Update Review",
-    "GET:/v1/recognitions/review-categories":               "List Review Categories",
-    "POST:/v1/recognitions/review-categories":              "Create Review Category",
-    "PUT:/v1/recognitions/review-categories/{id}":          "Update Review Category",
-    "GET:/v1/recognitions/digest":                          "View Recognition Digest",
-    "POST:/v1/recognitions/digest/send":                    "Send Recognition Digest",
+    "GET:/v1/recognitions/reviews":                    "List Reviews",
+    "GET:/v1/recognitions/reviews/{id}":               "Get Review Details",
+    "POST:/v1/recognitions/reviews":                   "Submit Review",
+    "PUT:/v1/recognitions/reviews/{id}":               "Update Review",
+    "GET:/v1/recognitions/review-categories":          "List Review Categories",
+    "POST:/v1/recognitions/review-categories":         "Create Review Category",
+    "PUT:/v1/recognitions/review-categories/{id}":     "Update Review Category",
+    "GET:/v1/recognitions/digest":                     "View Recognition Digest",
+    "POST:/v1/recognitions/digest/send":               "Send Recognition Digest",
 }
 
-
-# ==========================================
-# OpenTelemetry Configuration
-# ==========================================
-# 1. Identify the service in Jaeger
-resource = Resource.create({"service.name": "rnr-recognition"})
-provider = TracerProvider(resource=resource)
-
-# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
-otlp_exporter = OTLPSpanExporter()
-
-# 3. Process traces in batches in the background
-processor = BatchSpanProcessor(otlp_exporter)
-provider.add_span_processor(processor)
-
-# 4. Register globally
-trace.set_tracer_provider(provider)
-# ==========================================
+cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "")
+allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
 
 
 @asynccontextmanager
@@ -84,11 +75,11 @@ async def lifespan(app: FastAPI):
 
     try:
         await connect_redis()
-        print("Recognition Service: ☑️ Redis Connected")
-    except Exception as e:
-        print(f"Recognition Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+        print("Recognition Service: ☑️  Redis Connected")
+    except Exception as exc:
+        print(f"Recognition Service: ⚠️  Redis unavailable ({exc})")
 
-    sender = EmailSender(SMTPConfig.from_env())
+    sender      = EmailSender(SMTPConfig.from_env())
     digest_task = asyncio.create_task(digest_worker_loop(db, sender))
 
     await register_app_routes(
@@ -115,8 +106,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recognition Service",
     version="1.0.0",
-    openapi_url="/openapi.json",
     root_path="/v1/recognitions",
+    openapi_url="/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -129,15 +120,10 @@ async def health_check():
 
 
 app.middleware("http")(request_rate_limit_middleware)
-app.add_exception_handler(Exception, generic_exception_handler)
+app.add_exception_handler(Exception,              generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(HTTPException, http_exception_handler)
-app.add_exception_handler(UniqueViolationError,prisma_unique_violation_handler)
-
-# Grab the env var, default to localhost for local dev fallback
-cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS")
-# Split by comma and strip whitespace to create a clean list
-allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+app.add_exception_handler(HTTPException,          http_exception_handler)
+app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -151,18 +137,12 @@ app.add_middleware(
 app.include_router(recognition_router,       tags=["Reviews"])
 app.include_router(review_categories_router, tags=["Review Categories"])
 app.include_router(digest_router)
+# ↓ NO prefix here — routes already written as /internal/reviews/...
+app.include_router(internal_router)
 
-
-# ==========================================
-# Instrument FastAPI
-# ==========================================
-# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
-    app,
-    excluded_urls="health,docs,openapi.json,redoc"
+    app, excluded_urls="health,docs,openapi.json,redoc,internal"
 )
-# ==========================================
-
 
 if __name__ == "__main__":
     import uvicorn

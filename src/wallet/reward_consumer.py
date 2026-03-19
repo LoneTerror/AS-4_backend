@@ -1,0 +1,194 @@
+"""
+src/wallet/reward_consumer.py
+──────────────────────────────
+Redis Stream consumer — listens on 'events:reward.redeemed'
+and deducts points from the wallet's available_points.
+
+Previously the Rewards service wrote directly to the wallets table.
+Now it publishes this event and the Wallet service handles the deduction.
+
+Idempotency: checks for an existing DEBIT transaction with
+reference_number = history_id before writing.
+
+Consumer group : wallet-service
+Consumer name  : reward-debit-worker-1
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
+
+STREAM_KEY    = "events:reward.redeemed"
+GROUP_NAME    = "wallet-service"
+CONSUMER_NAME = "reward-debit-worker-1"
+BLOCK_MS      = 5_000
+BATCH_SIZE    = 10
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+async def _ensure_group(r) -> None:
+    try:
+        await r.xgroup_create(STREAM_KEY, GROUP_NAME, id="0", mkstream=True)
+    except Exception as exc:
+        if "BUSYGROUP" not in str(exc):
+            raise
+
+
+async def _deduct_points(
+    history_id: str, wallet_id: str, points: int, redeemed_by: str
+) -> None:
+    """Deduct points from wallet. Idempotent via reference_number check."""
+    from src.prisma.client import db
+
+    existing = await db.transactions.find_first(
+        where={"reference_number": f"redemption:{history_id}"}
+    )
+    if existing:
+        logger.debug("Deduction for redemption %s already recorded — skipping", history_id)
+        return
+
+    wallet = await db.wallets.find_first(where={"wallet_id": wallet_id})
+    if not wallet:
+        raise RuntimeError(f"Wallet {wallet_id} not found")
+
+    if wallet.available_points < points:
+        logger.warning(
+            "Insufficient points for wallet %s (has %d, needs %d) — redemption %s",
+            wallet_id, wallet.available_points, points, history_id,
+        )
+        # Still write the transaction to record the attempt and ACK.
+        # The Rewards service validates balance before issuing the event,
+        # so this path should be rare in practice.
+        points = min(points, wallet.available_points)
+
+    debit_type = await db.transaction_types.find_first(
+        where={"is_credit": False, "type_code": "REWARD_REDEMPTION"}
+    ) or await db.transaction_types.find_first(where={"is_credit": False})
+
+    status = await db.status_master.find_first(
+        where={"status_code": "SUCCESS", "entity_type": "TRANSACTION"}
+    ) or await db.status_master.find_first(where={"status_code": "SUCCESS"})
+
+    if not debit_type or not status:
+        raise RuntimeError("Missing debit transaction_type or SUCCESS status in DB")
+
+    await db.transactions.create(data={
+        "wallet_id":           wallet_id,
+        "amount":              points,
+        "transaction_type_id": debit_type.type_id,
+        "status_id":           status.status_id,
+        "reference_number":    f"redemption:{history_id}",
+        "description":         f"Points deducted for reward redemption {history_id}",
+        "transaction_at":      _now(),
+        "created_by":          redeemed_by,
+        "updated_by":          redeemed_by,
+        "updated_at":          _now(),
+    })
+
+    await db.wallets.update(
+        where={"wallet_id": wallet_id},
+        data={
+            "available_points": {"decrement": points},
+            "redeemed_points":  {"increment": points},
+            "updated_by":       redeemed_by,
+            "updated_at":       _now(),
+        },
+    )
+
+    # ── Invalidate wallet cache so the next read reflects the deduction ────
+    # wallet.employee_id is already in scope from the find_first above —
+    # no extra DB query needed. Key must match _wallet_key() in service.py.
+    try:
+        from src.common.cache import cache_delete
+        await cache_delete(f"wallets:employee:{wallet.employee_id}")
+        logger.debug(
+            "Cache busted for employee %s after redemption %s",
+            wallet.employee_id, history_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Cache invalidation failed after deduction %s: %s", history_id, exc
+        )
+
+    logger.info(
+        "Deducted %d points from wallet %s for redemption %s",
+        points, wallet_id, history_id,
+    )
+
+
+async def reward_redeemed_consumer_loop(shutdown_event: asyncio.Event) -> None:
+    from src.notifications.redis_client import get_redis
+    try:
+        r = get_redis()
+    except RuntimeError:
+        logger.warning("Redis unavailable — reward.redeemed consumer disabled")
+        return
+
+    await _ensure_group(r)
+    await _recover_pending(r)
+    logger.info("reward.redeemed consumer started")
+
+    while not shutdown_event.is_set():
+        try:
+            results = await r.xreadgroup(
+                groupname=GROUP_NAME, consumername=CONSUMER_NAME,
+                streams={STREAM_KEY: ">"}, count=BATCH_SIZE, block=BLOCK_MS,
+            )
+            if not results:
+                continue
+            for _stream, messages in results:
+                for msg_id, fields in messages:
+                    await _handle_message(r, msg_id, fields)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error("reward.redeemed consumer error: %s", exc)
+            if "NOGROUP" in str(exc):
+                try:
+                    await _ensure_group(r)
+                except Exception as eg_exc:
+                    logger.error("reward.redeemed _ensure_group recovery failed: %s", eg_exc)
+            await asyncio.sleep(2)
+
+    logger.info("reward.redeemed consumer stopped")
+
+
+async def _recover_pending(r) -> None:
+    try:
+        pending = await r.xpending_range(STREAM_KEY, GROUP_NAME, min="-", max="+", count=100)
+        if not pending:
+            return
+        for entry in pending:
+            msg_id = entry["message_id"]
+            msgs   = await r.xrange(STREAM_KEY, min=msg_id, max=msg_id)
+            if msgs:
+                _, fields = msgs[0]
+                await _handle_message(r, msg_id, fields)
+    except Exception as exc:
+        logger.warning("reward.redeemed recovery failed: %s", exc)
+
+
+async def _handle_message(r, msg_id: str, fields: dict) -> None:
+    history_id  = fields.get("history_id", "")
+    wallet_id   = fields.get("wallet_id", "")
+    redeemed_by = fields.get("redeemed_by", "system")
+    try:
+        points = int(fields.get("points", "0"))
+    except ValueError:
+        points = 0
+
+    if not history_id or not wallet_id:
+        await r.xack(STREAM_KEY, GROUP_NAME, msg_id)
+        return
+
+    try:
+        await _deduct_points(history_id, wallet_id, points, redeemed_by)
+        await r.xack(STREAM_KEY, GROUP_NAME, msg_id)
+    except Exception as exc:
+        logger.error("Failed to deduct points for redemption %s: %s", history_id, exc)

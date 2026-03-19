@@ -8,16 +8,21 @@ from fastapi.exceptions import RequestValidationError
 from prisma.errors import UniqueViolationError
 from starlette import status
 
-# --- IMPORT LOGGER ---
 from src.core.logger import logger
 
 # ==========================================================
 # CONFIG
 # ==========================================================
-RATE_LIMIT = 1000
-WINDOW_SECONDS = 3600  
+RATE_LIMIT     = 1000
+WINDOW_SECONDS = 3600
 
-requests_store = defaultdict(list)
+requests_store: defaultdict[str, list[float]] = defaultdict(list)
+
+# Periodic cleanup — purge IPs not seen in the last hour every 10 minutes.
+# Prevents requests_store growing unbounded in long-running processes
+# where many unique IPs accumulate over time.
+_CLEANUP_INTERVAL_SECONDS = 600
+_last_cleanup = time.time()
 
 
 # ==========================================================
@@ -33,7 +38,7 @@ def map_status_to_error_code(status_code: int) -> str:
         422: "VALIDATION_ERROR",
         429: "RATE_LIMIT_EXCEEDED",
         500: "INTERNAL_ERROR",
-        503: "SERVICE_UNAVAILABLE"
+        503: "SERVICE_UNAVAILABLE",
     }
     return mapping.get(status_code, "INTERNAL_ERROR")
 
@@ -43,8 +48,7 @@ def map_status_to_error_code(status_code: int) -> str:
 # ==========================================================
 async def http_exception_handler(request: Request, exc: HTTPException):
     request_id = getattr(request.state, "request_id", "unknown")
-    
-    # Log 5xx errors as actual errors, but 4xx as warnings (since 4xx is a client issue)
+
     if exc.status_code >= 500:
         logger.error(f"[{request_id}] HTTP {exc.status_code} at {request.url.path}: {exc.detail}")
     else:
@@ -54,32 +58,30 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         status_code=exc.status_code,
         content={
             "error": {
-                "code": map_status_to_error_code(exc.status_code),
-                "message": exc.detail,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "path": request.url.path,
-                "request_id": request_id
+                "code":       map_status_to_error_code(exc.status_code),
+                "message":    exc.detail,
+                "timestamp":  datetime.now(timezone.utc).isoformat(),
+                "path":       request.url.path,
+                "request_id": request_id,
             }
-        }
+        },
     )
+
 
 async def prisma_unique_violation_handler(request: Request, exc: UniqueViolationError):
     request_id = getattr(request.state, "request_id", "unknown")
-    
-    # Log the conflict
     logger.warning(f"[{request_id}] Unique Constraint Violation at {request.url.path}: {str(exc)}")
-
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={
             "error": {
-                "code": "CONFLICT",
-                "message": "A record with this unique identifier already exists.",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "path": request.url.path,
-                "request_id": request_id
+                "code":       "CONFLICT",
+                "message":    "A record with this unique identifier already exists.",
+                "timestamp":  datetime.now(timezone.utc).isoformat(),
+                "path":       request.url.path,
+                "request_id": request_id,
             }
-        }
+        },
     )
 
 
@@ -97,28 +99,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "error": {
-                "code": "VALIDATION_ERROR",
-                "message": "Request validation failed",
-                "details": formatted_errors,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "path": request.url.path,
-                "request_id": request_id
-            }
-        }
-    )
-
-
-async def prisma_unique_violation_handler(request: Request, exc: Exception):
-    request_id = getattr(request.state, "request_id", "unknown")
-    logger.warning(f"[{request_id}] Unique constraint violation at {request.url.path}: {str(exc)}")
-    return JSONResponse(
-        status_code=status.HTTP_409_CONFLICT,
-        content={
-            "error": {
-                "code": "CONFLICT",
-                "message": "A record with the same unique identifier already exists",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "path": request.url.path,
+                "code":       "VALIDATION_ERROR",
+                "message":    "Request validation failed",
+                "details":    formatted_errors,
+                "timestamp":  datetime.now(timezone.utc).isoformat(),
+                "path":       request.url.path,
                 "request_id": request_id,
             }
         },
@@ -127,21 +112,21 @@ async def prisma_unique_violation_handler(request: Request, exc: Exception):
 
 async def generic_exception_handler(request: Request, exc: Exception):
     request_id = getattr(request.state, "request_id", "unknown")
-
-    # CRITICAL: This captures the raw stack trace of unexpected crashes (500s)
-    logger.error(f"[{request_id}] Unhandled Server Error at {request.url.path}: {str(exc)}", exc_info=True)
-
+    logger.error(
+        f"[{request_id}] Unhandled Server Error at {request.url.path}: {str(exc)}",
+        exc_info=True,
+    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "error": {
-                "code": "INTERNAL_ERROR",
-                "message": "An unexpected error occurred",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "path": request.url.path,
-                "request_id": request_id
+                "code":       "INTERNAL_ERROR",
+                "message":    "An unexpected error occurred",
+                "timestamp":  datetime.now(timezone.utc).isoformat(),
+                "path":       request.url.path,
+                "request_id": request_id,
             }
-        }
+        },
     )
 
 
@@ -149,6 +134,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 # MAIN MIDDLEWARE
 # ==========================================================
 async def request_rate_limit_middleware(request: Request, call_next):
+    global _last_cleanup
     start_time = time.time()
 
     # 1. Request ID
@@ -158,19 +144,33 @@ async def request_rate_limit_middleware(request: Request, call_next):
     client_ip = request.client.host
     logger.info(f"[{request_id}] Incoming {request.method} {request.url.path} from IP: {client_ip}")
 
-    # 2. Rate limiting (in-memory)
-    now = time.time()
+    now          = time.time()
     window_start = now - WINDOW_SECONDS
 
+    # 2. Periodic cleanup — purge stale IPs to prevent memory leak.
+    #    Runs at most once every _CLEANUP_INTERVAL_SECONDS regardless of traffic.
+    if now - _last_cleanup > _CLEANUP_INTERVAL_SECONDS:
+        stale_ips = [
+            ip for ip, timestamps in requests_store.items()
+            if not timestamps or timestamps[-1] < window_start
+        ]
+        for ip in stale_ips:
+            del requests_store[ip]
+        _last_cleanup = now
+        if stale_ips:
+            logger.debug("Rate limit store: purged %d stale IP(s)", len(stale_ips))
+
+    # 3. Slide the window — drop timestamps outside the current window
     requests_store[client_ip] = [
         ts for ts in requests_store[client_ip] if ts > window_start
     ]
 
+    # 4. Rate limit check
     if len(requests_store[client_ip]) >= RATE_LIMIT:
         logger.warning(f"[{request_id}] Rate limit exceeded for IP: {client_ip}")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded"
+            detail="Rate limit exceeded",
         )
 
     requests_store[client_ip].append(now)
@@ -178,21 +178,23 @@ async def request_rate_limit_middleware(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception as e:
-        # If an error happens during the request, we log the failure time
         process_time = time.time() - start_time
         logger.error(f"[{request_id}] Request failed after {process_time:.4f}s")
         raise e
 
     process_time = time.time() - start_time
-    logger.info(f"[{request_id}] Completed {request.method} {request.url.path} - Status: {response.status_code} - Took: {process_time:.4f}s")
+    logger.info(
+        f"[{request_id}] Completed {request.method} {request.url.path} "
+        f"- Status: {response.status_code} - Took: {process_time:.4f}s"
+    )
 
-    # 3. Attach headers
-    remaining = RATE_LIMIT - len(requests_store[client_ip])
+    # 5. Attach rate limit headers
+    remaining  = RATE_LIMIT - len(requests_store[client_ip])
     reset_time = int(requests_store[client_ip][0] + WINDOW_SECONDS)
 
-    response.headers["X-Request-ID"] = request_id
-    response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT)
+    response.headers["X-Request-ID"]          = request_id
+    response.headers["X-RateLimit-Limit"]     = str(RATE_LIMIT)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
-    response.headers["X-RateLimit-Reset"] = str(reset_time)
+    response.headers["X-RateLimit-Reset"]     = str(reset_time)
 
     return response

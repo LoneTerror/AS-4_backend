@@ -267,7 +267,7 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
         raise HTTPException(status_code=500, detail="Default 'EMPLOYEE' role not found")
 
     hashed_pwd = get_password_hash(data.password)
-    now        = datetime.now()
+    now        = datetime.now(timezone.utc)
 
     try:
         async with db.tx() as transaction:
@@ -340,8 +340,20 @@ async def create_employee(data: schemas.CreateEmployeeRequest, created_by_id: st
                 ),
             )
 
-        # ── Post-commit: invalidate caches & send welcome notification ─────
+        # ── Post-commit: invalidate caches, publish event & send welcome notification ─────
         await _invalidate_employee_caches(new_emp.employee_id)
+
+        try:
+            from src.common.event_publisher import publish
+            await publish("events:employee.created", {
+                "employee_id": str(new_emp.employee_id),
+                "created_by":  created_by_id,
+            })
+        except Exception:
+            logger.exception(
+                "event publish failed for employee %s — account was created successfully",
+                new_emp.employee_id,
+            )
 
         try:
             await _get_notif_service().create_notification(
@@ -387,7 +399,7 @@ async def update_employee(
         )
 
     update_data["updated_by"] = updated_by_id
-    update_data["updated_at"] = datetime.now()
+    update_data["updated_at"] = datetime.now(timezone.utc)
 
     await db.employees.update(
         where={"employee_id": employee_id},
@@ -412,7 +424,7 @@ async def patch_employee(employee_id: str, updated_by_id: str):
         data={
             "status_id":  inactive_status.status_id,
             "updated_by": updated_by_id,
-            "updated_at": datetime.now(),
+            "updated_at": datetime.now(timezone.utc),
         },
     )
 
