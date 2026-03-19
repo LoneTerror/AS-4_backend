@@ -17,7 +17,9 @@ async def connect_redis() -> aioredis.Redis:
         encoding="utf-8",
         decode_responses=True,
         socket_connect_timeout=5,
-        socket_timeout=30,
+        # Remove socket_timeout — it causes blocking xreadgroup calls to raise
+        # TimeoutError on Windows when no messages arrive within the timeout window,
+        # even with block=0. Let Redis operations run to natural completion.
         socket_keepalive=True,
         retry_on_timeout=True,
         retry_on_error=[ConnectionError],

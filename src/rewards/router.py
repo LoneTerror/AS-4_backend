@@ -58,7 +58,7 @@ async def update_category(
 
 @router.get("/categories", response_model=List[schemas.CategoryResponse])
 async def get_categories(
-    is_active: Optional[bool] = None, # None means fetch everything
+    is_active: Optional[bool] = None,
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
@@ -104,10 +104,9 @@ async def view_catalog(
     """View the catalog with pagination and nested category details."""
     logger.debug(f"User {current_user.id} viewing catalog page {pagination.page}")
     svc = service.RewardService(db)
-    
     return await svc.get_catalog(
-        is_active=is_active, 
-        page=pagination.page, 
+        is_active=is_active,
+        page=pagination.page,
         size=pagination.size
     )
 
@@ -131,23 +130,22 @@ async def restock_item(
 @router.post("/redeem", response_model=schemas.RedemptionResponse, status_code=status.HTTP_201_CREATED)
 async def redeem_reward(
     request: Request,
-    body: schemas.RedeemRewardRequest, # Use the new schema
+    body: schemas.RedeemRewardRequest,
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
     logger.info(f"User {current_user.id} attempting to redeem catalog item {body.catalog_id}")
     svc = service.RewardService(db)
-    
-    # Securely map the token's user ID to their wallet ID
+
     wallet_id = await svc.get_wallet_id_for_user(current_user.id)
     if not wallet_id:
         raise HTTPException(status_code=404, detail="Wallet not found for the authenticated user.")
 
-    # Pass the resolved wallet_id directly to the service
     return await svc.grant_reward(
-        wallet_id=wallet_id, 
-        request=body, 
-        granted_by_user_id=current_user.id
+        wallet_id=wallet_id,
+        request=body,
+        granted_by_user_id=current_user.id,
+        req_info=request,          # ← ADDED: was missing, caused NULL ip in audit + stream
     )
 
 
@@ -155,7 +153,7 @@ async def redeem_reward(
 
 @router.get("/history/me", response_model=schemas.PaginatedHistoryResponse)
 async def get_my_history(
-    pagination: PaginationParams = Depends(), 
+    pagination: PaginationParams = Depends(),
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
@@ -165,18 +163,16 @@ async def get_my_history(
     if not my_wallet_id:
         return {"data": [], "total_items": 0, "page": pagination.page, "size": pagination.size}
 
-    # Access the validated variables using pagination.page and pagination.size
     return await svc.get_history(
-        wallet_id=my_wallet_id, 
-        page=pagination.page, 
+        wallet_id=my_wallet_id,
+        page=pagination.page,
         size=pagination.size
     )
 
 
 @router.get("/history", response_model=schemas.PaginatedHistoryResponse)
 async def get_all_history(
-    # CHANGE: Update Optional[str] to Optional[UUID4]
-    wallet_id: Optional[UUID4] = None, 
+    wallet_id: Optional[UUID4] = None,
     pagination: PaginationParams = Depends(),
     db: Prisma = Depends(get_db),
     current_user: CurrentUser = Depends(check_route_permission),
@@ -186,9 +182,9 @@ async def get_all_history(
     svc = service.RewardService(db)
 
     safe_wallet_id = str(wallet_id) if wallet_id else None
-    
+
     return await svc.get_history(
-        wallet_id=safe_wallet_id, 
-        page=pagination.page, 
+        wallet_id=safe_wallet_id,
+        page=pagination.page,
         size=pagination.size
     )

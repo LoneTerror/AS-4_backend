@@ -16,12 +16,15 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from src.prisma.client import db
+from src.common.audit import audit_ctx
+
 logger = logging.getLogger(__name__)
 
 STREAM_KEY    = "events:employee.created"
 GROUP_NAME    = "wallet-service"
 CONSUMER_NAME = "employee-wallet-worker-1"
-BLOCK_MS      = 5_000
+BLOCK_MS      = 0       # non-blocking — use asyncio.sleep for backoff instead
 BATCH_SIZE    = 10
 
 
@@ -38,22 +41,42 @@ async def _ensure_group(r) -> None:
             raise
 
 
-async def _provision_wallet(employee_id: str, created_by: str) -> None:
+async def _provision_wallet(employee_id: str, created_by: str, ip_address: str | None = None) -> None:
     """Create a wallet if one doesn't already exist — idempotent."""
-    from src.prisma.client import db
+
     existing = await db.wallets.find_first(where={"employee_id": employee_id})
     if existing:
         logger.debug("Wallet already exists for %s", employee_id)
         return
-    await db.wallets.create(data={
-        "employee_id":         employee_id,
-        "available_points":    0,
-        "redeemed_points":     0,
-        "total_earned_points": 0,
-        "created_by":          created_by,
-        "updated_by":          created_by,
-        "updated_at":          _now(),
-    })
+
+    # created_by is the admin/system actor who triggered the employee.created event.
+    # ip_address is forwarded from the Auth service via the stream payload.
+    new_wallet = None
+    async with audit_ctx(
+        user_id    = created_by,
+        request    = None,
+        ip_address = ip_address,
+        table_name = "wallets",
+        record_id  = lambda: str(new_wallet.wallet_id),
+        operation  = "INSERT",
+        new_values = lambda: {
+            "employee_id":         employee_id,
+            "available_points":    0,
+            "redeemed_points":     0,
+            "total_earned_points": 0,
+            "created_by":          created_by,
+        },
+    ):
+        new_wallet = await db.wallets.create(data={
+            "employee_id":         employee_id,
+            "available_points":    0,
+            "redeemed_points":     0,
+            "total_earned_points": 0,
+            "created_by":          created_by,
+            "updated_by":          created_by,
+            "updated_at":          _now(),
+        })
+
     logger.info("Wallet provisioned for employee %s", employee_id)
 
 
@@ -79,10 +102,12 @@ async def employee_created_consumer_loop(shutdown_event: asyncio.Event) -> None:
                 block=BLOCK_MS,
             )
             if not results:
+                await asyncio.sleep(0.5)
                 continue
             for _stream, messages in results:
                 for msg_id, fields in messages:
                     await _handle_message(r, msg_id, fields)
+            await asyncio.sleep(0)
         except asyncio.CancelledError:
             break
         except Exception as exc:
@@ -118,12 +143,13 @@ async def _recover_pending(r) -> None:
 async def _handle_message(r, msg_id: str, fields: dict) -> None:
     employee_id = fields.get("employee_id", "")
     created_by  = fields.get("created_by", "system")
+    ip_address  = fields.get("ip_address") or None   # forwarded from Auth service publisher
     if not employee_id:
         logger.warning("employee.created msg %s missing employee_id", msg_id)
         await r.xack(STREAM_KEY, GROUP_NAME, msg_id)
         return
     try:
-        await _provision_wallet(employee_id, created_by)
+        await _provision_wallet(employee_id, created_by, ip_address)
         await r.xack(STREAM_KEY, GROUP_NAME, msg_id)
     except Exception as exc:
         logger.error("Failed to provision wallet for %s: %s", employee_id, exc)

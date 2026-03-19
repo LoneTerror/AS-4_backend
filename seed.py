@@ -7,7 +7,7 @@ Run with:
     python seed.py
 
 Tables seeded (in dependency order):
-    status_master          — GENERAL, TRANSACTION, REVIEW statuses
+    status_master          — EMPLOYEE, TRANSACTION, REVIEW statuses
     transaction_types      — CREDIT, DEBIT, REWARD_REDEMPTION, BONUS, ADJUSTMENT, REVERSAL
     roles                  — SUPER_ADMIN, HR_ADMIN, MANAGER, EMPLOYEE, AUDITOR, TEAM_LEAD, DIRECTOR
     department_types       — TECH, MGMT, OPERATIONS, FINANCE, LEGAL, MARKETING
@@ -26,6 +26,18 @@ Tables seeded (in dependency order):
     audit_log              — 30 audit entries
     notifications          — 30 notifications
     NOTE: route_permissions are auto-handled by the system on startup.
+
+AUDIT MIGRATION NOTE:
+    The audit trigger migration (migration.sql) requires:
+      - At least one row in departments         ← seeded here
+      - At least one row in designations        ← seeded here
+      - A status_master row where
+          entity_type = 'EMPLOYEE'
+          status_code = 'ACTIVE'               ← S_EMP_ACTIVE seeded here
+
+    Run order:
+        1. python seed.py
+        2. prisma migrate deploy   (runs migration.sql — creates sentinel + triggers)
 """
 import os
 from pathlib import Path
@@ -58,6 +70,13 @@ TEST_PASSWORD = "Password123!"
 TODAY = date.today()
 NOW = datetime.now(timezone.utc)
 
+# Sentinel UUID — must match migration.sql exactly.
+# This employee is the fallback "performed_by" for any DB write that happens
+# outside the application (migrations, DBA sessions, background jobs that
+# have no authenticated user).  It is created by the migration, NOT the seed,
+# because the triggers must already exist before any further seeding runs.
+SYSTEM_SENTINEL_ID = "00000000-0000-0000-0000-000000000000"
+
 
 def uid() -> str:
     return str(uuid.uuid4())
@@ -73,15 +92,22 @@ def dt(d: date) -> datetime:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Status Master ─────────────────────────────────────────────────────────────
-S_ACTIVE         = "990e8400-e29b-41d4-a716-446655440000"
-S_INACTIVE       = "990e8400-e29b-41d4-a716-446655440001"
-S_TXN_PENDING    = "990e8400-e29b-41d4-a716-446655440002"
-S_TXN_APPROVED   = "990e8400-e29b-41d4-a716-446655440003"
-S_TXN_REJECTED   = "990e8400-e29b-41d4-a716-446655440004"
-S_REV_ACTIVE     = "990e8400-e29b-41d4-a716-446655440005"
-S_REV_DELETED    = "990e8400-e29b-41d4-a716-446655440006"
-S_TXN_SUCCESS    = "990e8400-e29b-41d4-a716-446655440007"
-S_TXN_FAILED     = "990e8400-e29b-41d4-a716-446655440008"
+# IMPORTANT: S_EMP_ACTIVE must have entity_type='EMPLOYEE' and status_code='ACTIVE'
+# because the audit trigger migration looks for exactly that combination to assign
+# to the system sentinel employee row.
+S_EMP_ACTIVE     = "990e8400-e29b-41d4-a716-446655440000"   # EMPLOYEE / ACTIVE
+S_EMP_INACTIVE   = "990e8400-e29b-41d4-a716-446655440001"   # EMPLOYEE / INACTIVE
+S_TXN_PENDING    = "990e8400-e29b-41d4-a716-446655440002"   # TRANSACTION / PENDING
+S_TXN_APPROVED   = "990e8400-e29b-41d4-a716-446655440003"   # TRANSACTION / APPROVED
+S_TXN_REJECTED   = "990e8400-e29b-41d4-a716-446655440004"   # TRANSACTION / REJECTED
+S_TXN_SUCCESS    = "990e8400-e29b-41d4-a716-446655440007"   # TRANSACTION / SUCCESS
+S_TXN_FAILED     = "990e8400-e29b-41d4-a716-446655440008"   # TRANSACTION / FAILED
+S_REV_ACTIVE     = "990e8400-e29b-41d4-a716-446655440005"   # REVIEW / REVIEW_ACTIVE
+S_REV_DELETED    = "990e8400-e29b-41d4-a716-446655440006"   # REVIEW / REVIEW_DELETED
+
+# Convenience alias — use S_EMP_ACTIVE everywhere an employee status is needed
+S_ACTIVE   = S_EMP_ACTIVE
+S_INACTIVE = S_EMP_INACTIVE
 
 # ── Transaction Types ─────────────────────────────────────────────────────────
 TT_CREDIT        = "bb0e8400-e29b-41d4-a716-446655440001"
@@ -164,7 +190,7 @@ EMP_VERA         = "110e8400-e29b-41d4-a716-44665544001c"
 EMP_WILL         = "110e8400-e29b-41d4-a716-44665544001d"
 EMP_XENA         = "110e8400-e29b-41d4-a716-44665544001e"
 
-# ── Review Categories (10 positive only) ─────────────────────────────────────
+# ── Review Categories ─────────────────────────────────────────────────────────
 RC_OWNERSHIP     = "dd0e8400-e29b-41d4-a716-446655440001"
 RC_INNOVATION    = "dd0e8400-e29b-41d4-a716-446655440002"
 RC_COLLAB        = "dd0e8400-e29b-41d4-a716-446655440003"
@@ -183,7 +209,7 @@ RWCAT_EXP        = "cc0e8400-e29b-41d4-a716-446655440003"
 RWCAT_WELLNESS   = "cc0e8400-e29b-41d4-a716-446655440004"
 RWCAT_LEARNING   = "cc0e8400-e29b-41d4-a716-446655440005"
 
-# ── Reward Catalog (STABLE IDs — never change these) ─────────────────────────
+# ── Reward Catalog (STABLE IDs) ───────────────────────────────────────────────
 CAT_AMZ_010      = "ed0e8400-e29b-41d4-a716-446655440001"
 CAT_AMZ_025      = "ed0e8400-e29b-41d4-a716-446655440002"
 CAT_AMZ_050      = "ed0e8400-e29b-41d4-a716-446655440003"
@@ -220,80 +246,133 @@ CAT_CONF_001     = "ed0e8400-e29b-41d4-a716-44665544001e"
 # CLEAN
 # ─────────────────────────────────────────────────────────────────────────────
 async def clean_db():
+    """
+    Delete all seed data in the correct order, preserving the system sentinel.
+
+    The schema has circular created_by/updated_by FKs pointing back to
+    employees from almost every table (department_types, departments,
+    designations, roles, status_master, reward_categories, review_categories,
+    reward_catalog, wallets, employee_roles, etc.).
+
+    This means you CANNOT simply delete employees first — Postgres will refuse
+    because those other tables still reference employee UUIDs via created_by.
+
+    Correct approach:
+      Step 1 — NULL out all created_by/updated_by columns that point to
+                employees, across every table that has them.  This breaks the
+                circular references so employees can be deleted.
+      Step 2 — Delete leaf tables first (no other table FKs into them).
+      Step 3 — Delete employees (non-sentinel only).
+      Step 4 — Delete the remaining lookup tables (departments, designations,
+                department_types, status_master) which are now safe.
+    """
     print("🧹 Cleaning existing data...")
+
+    # ── Step 1: NULL out all created_by / updated_by back-references ──────────
+    # Every table that has a created_by or updated_by FK to employees must be
+    # cleared here before we can delete any employee rows.
+    null_refs = [
+        # (table,                  columns with FK to employees)
+        ("audit_log",              ["performed_by"]),
+        ("department_types",       ["created_by", "updated_by"]),
+        ("departments",            ["created_by", "updated_by"]),
+        ("designations",           ["created_by", "updated_by"]),
+        ("roles",                  ["created_by", "updated_by"]),
+        ("route_permissions",      ["created_by", "updated_by"]),
+        ("status_master",          ["created_by", "updated_by"]),
+        ("transaction_types",      ["created_by", "updated_by"]),
+        ("review_categories",      ["created_by", "updated_by"]),
+        ("reward_categories",      ["created_by", "updated_by"]),
+        ("reward_catalog",         ["created_by", "updated_by"]),
+        ("employee_roles",         ["assigned_by", "revoked_by", "created_by", "updated_by"]),
+        ("wallets",                ["created_by", "updated_by"]),
+        ("transactions",           ["created_by", "updated_by"]),
+        ("reward_history",         ["granted_by", "created_by", "updated_by"]),
+        ("reviews",                ["reviewer_id", "receiver_id", "created_by", "updated_by"]),
+        ("refresh_tokens",         []),   # no created_by — employee_id is cascade-deleted
+    ]
+
+    for table, cols in null_refs:
+        if not cols:
+            continue
+        set_clause = ", ".join(f"{c} = NULL" for c in cols)
+        try:
+            await db.execute_raw(f"UPDATE {table} SET {set_clause}")
+        except Exception as ex:
+            print(f"   ⚠ Could not null refs on {table}: {ex}")
+
+    print("   ✓ Nulled all created_by/updated_by back-references")
+
+    # ── Step 2: Delete leaf tables (strict dependency order) ──────────────────
+    # These have no other tables pointing into them (or their FKs are now NULL).
+    leaf_deletes = [
+        "audit_log",
+        "notifications",
+        "review_category_tags",
+        "reviews",
+        "transactions",
+        "reward_history",
+        "refresh_tokens",
+        "employee_roles",
+        "wallets",
+        "reward_catalog",
+        "reward_categories",
+        "transaction_types",
+        "review_categories",
+        "route_permissions",
+        "roles",
+    ]
+    for table in leaf_deletes:
+        try:
+            await db.execute_raw(f"DELETE FROM {table}")
+        except Exception as ex:
+            print(f"   ⚠ Could not delete {table}: {ex}")
+
+    print("   ✓ Deleted leaf tables")
+
+    # ── Step 3: Delete non-sentinel employees ─────────────────────────────────
+    # The sentinel (00000000-...) must stay if it exists — it was created by
+    # the audit migration and the triggers FK into it.
     try:
-        await db.execute_raw("""
-            TRUNCATE TABLE
-                audit_log,
-                notifications,
-                review_category_tags,
-                reviews,
-                transactions,
-                reward_history,
-                refresh_tokens,
-                employee_roles,
-                wallets,
-                employees,
-                reward_catalog,
-                reward_categories,
-                transaction_types,
-                review_categories,
-                designations,
-                departments,
-                department_types,
-                route_permissions,
-                roles,
-                status_master
-            CASCADE
-        """)
-        print("   ✓ CASCADE truncate successful\n")
-    except Exception as e:
-        print(f"   ⚠ CASCADE truncate failed: {e}")
-        deletion_order = [
-            ("audit_log",            db.audit_log),
-            ("notifications",        db.notifications),
-            ("review_category_tags", db.review_category_tags),
-            ("reviews",              db.reviews),
-            ("transactions",         db.transactions),
-            ("reward_history",       db.reward_history),
-            ("refresh_tokens",       db.refresh_tokens),
-            ("employee_roles",       db.employee_roles),
-            ("wallets",              db.wallets),
-            ("employees",            db.employees),
-            ("reward_catalog",       db.reward_catalog),
-            ("reward_categories",    db.reward_categories),
-            ("transaction_types",    db.transaction_types),
-            ("review_categories",    db.review_categories),
-            ("designations",         db.designations),
-            ("departments",          db.departments),
-            ("department_types",     db.department_types),
-            ("route_permissions",    db.route_permissions),
-            ("roles",                db.roles),
-            ("status_master",        db.status_master),
-        ]
-        for name, table in deletion_order:
-            try:
-                count = await table.delete_many()
-                if count:
-                    print(f"   ✓ Deleted {count} {name} rows")
-            except Exception as ex:
-                print(f"   ✗ Could not delete {name}: {ex}")
-        print()
+        await db.execute_raw(
+            f"DELETE FROM employees WHERE employee_id != '{SYSTEM_SENTINEL_ID}'"
+        )
+        print("   ✓ Deleted non-sentinel employees")
+    except Exception as ex:
+        print(f"   ⚠ Could not delete employees: {ex}")
+
+    # ── Step 4: Delete lookup tables (now safe — no employee refs remain) ─────
+    for table in ["designations", "departments", "department_types", "status_master"]:
+        try:
+            await db.execute_raw(f"DELETE FROM {table}")
+        except Exception as ex:
+            print(f"   ⚠ Could not delete {table}: {ex}")
+
+    print("   ✓ Deleted lookup tables")
+    print("   ✓ Clean complete (sentinel preserved if present)\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STATUS MASTER  (9 rows)
+# STATUS MASTER
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_status_master():
     print("📋 Seeding status_master...")
+    # ┌─────────────────────────────────────────────────────────────────────┐
+    # │  CRITICAL FOR AUDIT MIGRATION                                       │
+    # │  S_EMP_ACTIVE MUST have entity_type='EMPLOYEE' status_code='ACTIVE' │
+    # │  The migration.sql sentinel INSERT queries this exact combination.   │
+    # └─────────────────────────────────────────────────────────────────────┘
     rows = [
-        (S_ACTIVE,       "ACTIVE",         "Active",      "GENERAL",     "Entity is active and operational"),
-        (S_INACTIVE,     "INACTIVE",       "Inactive",    "GENERAL",     "Entity is inactive or disabled"),
+        # Employee statuses — entity_type = 'EMPLOYEE'
+        (S_EMP_ACTIVE,   "ACTIVE",         "Active",      "EMPLOYEE",    "Employee is active and operational"),
+        (S_EMP_INACTIVE, "INACTIVE",       "Inactive",    "EMPLOYEE",    "Employee is inactive or disabled"),
+        # Transaction statuses — entity_type = 'TRANSACTION'
         (S_TXN_PENDING,  "PENDING",        "Pending",     "TRANSACTION", "Transaction awaiting approval"),
         (S_TXN_APPROVED, "APPROVED",       "Approved",    "TRANSACTION", "Transaction has been approved"),
         (S_TXN_REJECTED, "REJECTED",       "Rejected",    "TRANSACTION", "Transaction has been rejected"),
         (S_TXN_SUCCESS,  "SUCCESS",        "Success",     "TRANSACTION", "Transaction completed successfully"),
         (S_TXN_FAILED,   "FAILED",         "Failed",      "TRANSACTION", "Transaction failed to complete"),
+        # Review statuses — entity_type = 'REVIEW'
         (S_REV_ACTIVE,   "REVIEW_ACTIVE",  "Active",      "REVIEW",      "Review is active and visible"),
         (S_REV_DELETED,  "REVIEW_DELETED", "Deleted",     "REVIEW",      "Review has been soft-deleted"),
     ]
@@ -306,11 +385,13 @@ async def seed_status_master():
             "description": desc,
             "updated_at":  NOW,
         })
-    print(f"   ✅ Seeded {len(rows)} status rows\n")
+    print(f"   ✅ Seeded {len(rows)} status rows")
+    print(f"   ℹ  S_EMP_ACTIVE ({S_EMP_ACTIVE}) → entity_type=EMPLOYEE status_code=ACTIVE")
+    print(f"      ↳ Migration sentinel will use this row\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TRANSACTION TYPES  (6 rows)
+# TRANSACTION TYPES
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_transaction_types():
     print("💳 Seeding transaction_types...")
@@ -335,7 +416,7 @@ async def seed_transaction_types():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ROLES  (7 rows)
+# ROLES
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_roles():
     print("👥 Seeding roles...")
@@ -362,7 +443,7 @@ async def seed_roles():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DEPARTMENT TYPES  (6 rows)
+# DEPARTMENT TYPES
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_department_types():
     print("🏗️  Seeding department_types...")
@@ -385,7 +466,7 @@ async def seed_department_types():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DEPARTMENTS  (10 rows)
+# DEPARTMENTS
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_departments():
     print("🏢 Seeding departments...")
@@ -413,7 +494,7 @@ async def seed_departments():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DESIGNATIONS  (10 rows)
+# DESIGNATIONS
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_designations():
     print("🎖️  Seeding designations...")
@@ -477,13 +558,12 @@ async def seed_admin_employee():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REMAINING EMPLOYEES  (29 rows)
+# REMAINING EMPLOYEES (29 rows)
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_employees():
     print("👤 Seeding employees (29 remaining)...")
     hashed = hash_password(TEST_PASSWORD)
 
-    # (id, username, email, desig_id, dept_id, manager_id, dob, doj, avail, redeemed, total, version)
     employees = [
         (EMP_JANE,      "jane.smith",         "jane.smith@company.com",         DES_ENG_MGR,   D_ENG,       None,      date(1988, 4, 12), date(2019, 3,  1), 8000,  500,  8500,  3),
         (EMP_ALICE,     "alice.wong",         "alice.wong@company.com",         DES_DIRECTOR,  D_EXEC,      None,      date(1982, 9,  5), date(2017, 6, 15), 12000, 1000, 13000, 5),
@@ -495,7 +575,7 @@ async def seed_employees():
         (EMP_ARIJIT,    "arijit.banik",       "arijitb017@gmail.com",           DES_SR_DEV,    D_ENG,       EMP_HENRY, date(2000, 3, 17), date(2023, 3,  1), 2500,  100,  2600,  3),
         (EMP_SHUBRAJIT, "shubrajit.deb",      "shubrajitdeb180603@gmail.com",   DES_SR_DEV,    D_PLATFORM,  EMP_JAMES, date(2003, 6, 18), date(2023, 6,  1), 2200,  0,    2200,  2),
         (EMP_PRASUN,    "prasun.chakraborty", "nothingshere21@gmail.com",       DES_SR_DEV,    D_PLATFORM,  EMP_JAMES, date(1998, 11,25), date(2023, 3,  1), 2800,  200,  3000,  4),
-        (EMP_BOB,       "midanka.lahon",       "midankalahon@gmail.com",         DES_SR_DEV,    D_ENG,       EMP_HENRY, date(1993, 2, 14), date(2021, 7,  5), 3500,  300,  3800,  5),
+        (EMP_BOB,       "midanka.lahon",      "midankalahon@gmail.com",         DES_SR_DEV,    D_ENG,       EMP_HENRY, date(1993, 2, 14), date(2021, 7,  5), 3500,  300,  3800,  5),
         (EMP_CAROL,     "swarup.das",         "swarup1to3@gmail.com",           DES_SR_DEV,    D_DEVOPS,    EMP_JANE,  date(1994, 5, 20), date(2022, 4,  1), 3200,  100,  3300,  3),
         (EMP_DAVE,      "bikash.nath",        "nathbikash231@gmail.com",        DES_DEV,       D_ENG,       EMP_HENRY, date(1997, 3,  8), date(2023, 9,  1), 1500,  0,    1500,  1),
         (EMP_EVE,       "binit.goswami",      "binitkgsmile2005@gmail.com",     DES_DEV,       D_ENG,       EMP_HENRY, date(1999, 10,15), date(2024, 1, 10), 1200,  0,    1200,  1),
@@ -627,10 +707,10 @@ async def seed_employee_roles():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REVIEW CATEGORIES  (10 positive rows only)
+# REVIEW CATEGORIES
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_review_categories():
-    print("🏷️  Seeding review_categories (10 positive only)...")
+    print("🏷️  Seeding review_categories...")
     rows = [
         (RC_OWNERSHIP,     "OWNERSHIP",       "Ownership",        "1.2000", "Taking responsibility and driving results to completion"),
         (RC_INNOVATION,    "INNOVATION",      "Innovation",       "1.3000", "Creative thinking and novel problem solving"),
@@ -655,12 +735,11 @@ async def seed_review_categories():
             "updated_by":    EMP_ADMIN,
             "updated_at":    NOW,
         })
-        print(f"   ✅ {code:22s}  x{mult}  ✨")
-    print()
+    print(f"   ✅ Seeded {len(rows)} review categories\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REWARD CATEGORIES  (5 rows)
+# REWARD CATEGORIES
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_reward_categories():
     print("🏷️  Seeding reward_categories...")
@@ -682,45 +761,38 @@ async def seed_reward_categories():
             "updated_by":    EMP_ADMIN,
             "updated_at":    NOW,
         })
-        print(f"   ✅ {code}")
-    print()
+    print(f"   ✅ Seeded {len(rows)} reward categories\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REWARD CATALOG  (30 rows — STABLE IDs)
+# REWARD CATALOG (30 rows)
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_reward_catalog():
-    print("🎁 Seeding reward_catalog (stable IDs)...")
-    # (catalog_id, name, code, desc, category_id, default_pts, min_pts, max_pts, stock)
+    print("🎁 Seeding reward_catalog...")
     rows = [
-        # Gift Cards
         (CAT_AMZ_010, "Amazon Gift Card $10",           "REW-AMZ-010",  "Amazon digital gift card $10",              RWCAT_GIFT,     100,  100,  100,  200),
         (CAT_AMZ_025, "Amazon Gift Card $25",           "REW-AMZ-025",  "Amazon digital gift card $25",              RWCAT_GIFT,     250,  250,  250,  150),
         (CAT_AMZ_050, "Amazon Gift Card $50",           "REW-AMZ-050",  "Amazon digital gift card $50",              RWCAT_GIFT,     500,  500,  500,   80),
         (CAT_FLK_020, "Flipkart Voucher $20",           "REW-FLK-020",  "Flipkart shopping voucher $20",             RWCAT_GIFT,     200,  200,  200,  120),
         (CAT_SWG_015, "Swiggy Food Voucher $15",        "REW-SWG-015",  "Swiggy food delivery voucher $15",          RWCAT_GIFT,     150,  150,  150,  100),
         (CAT_NET_001, "Netflix 1-Month",                "REW-NET-001",  "One month Netflix subscription",            RWCAT_GIFT,     300,  300,  300,   60),
-        # Merchandise
         (CAT_TSH_001, "Company T-Shirt (S/M/L/XL)",    "REW-TSH-001",  "Premium company branded T-shirt",           RWCAT_MERCH,    200,  200,  200,  250),
         (CAT_HOD_001, "Company Hoodie",                 "REW-HOD-001",  "Premium company branded hoodie",            RWCAT_MERCH,    400,  400,  400,   80),
         (CAT_CAP_001, "Company Cap",                    "REW-CAP-001",  "Embroidered company cap",                   RWCAT_MERCH,    150,  150,  150,  300),
         (CAT_MUG_001, "Company Mug",                    "REW-MUG-001",  "Ceramic company branded mug",               RWCAT_MERCH,    100,  100,  100,  400),
         (CAT_BAG_001, "Company Backpack",               "REW-BAG-001",  "Premium laptop backpack with logo",         RWCAT_MERCH,    600,  600,  600,   50),
         (CAT_BTL_001, "Company Water Bottle",           "REW-BTL-001",  "Insulated stainless steel water bottle",    RWCAT_MERCH,    250,  250,  250,  150),
-        # Experiences
         (CAT_LNC_001, "Team Lunch Voucher (5 pax)",     "REW-LNC-001",  "Lunch for you and your team (up to 5)",     RWCAT_EXP,      500,  500,  500,   30),
         (CAT_DIN_001, "Team Dinner Voucher (5 pax)",    "REW-DIN-001",  "Dinner for you and your team (up to 5)",    RWCAT_EXP,      700,  700,  700,   20),
         (CAT_MOV_001, "Movie Tickets (2 pax)",          "REW-MOV-001",  "Two premium movie tickets",                 RWCAT_EXP,      300,  300,  300,   75),
         (CAT_STA_001, "Weekend Staycation",             "REW-STA-001",  "2-night hotel staycation for 2",            RWCAT_EXP,     2000, 2000, 2000,   10),
         (CAT_SPA_001, "Spa Day Voucher",                "REW-SPA-001",  "Full-day spa session for 1",                RWCAT_EXP,      800,  800,  800,   25),
         (CAT_AMU_001, "Amusement Park Tickets",         "REW-AMU-001",  "Two tickets to a local amusement park",     RWCAT_EXP,      600,  600,  600,   40),
-        # Wellness
         (CAT_GYM_001, "Gym Membership 1 Month",         "REW-GYM-001",  "One-month gym membership at partner gyms", RWCAT_WELLNESS, 400,  400,  400,   50),
         (CAT_YOG_001, "Yoga Class Pack (10 sessions)",  "REW-YOG-001",  "10-session pack at a yoga studio",          RWCAT_WELLNESS, 350,  350,  350,   40),
         (CAT_MHT_001, "Mental Health App (1 Year)",     "REW-MHT-001",  "Annual subscription to a wellness app",     RWCAT_WELLNESS, 500,  500,  500,   60),
         (CAT_HLT_001, "Health Checkup Package",         "REW-HLT-001",  "Comprehensive annual health checkup",       RWCAT_WELLNESS, 800,  800,  800,   30),
         (CAT_ERG_001, "Ergonomic Cushion Set",          "REW-ERG-001",  "Lumbar and seat cushion for better posture",RWCAT_WELLNESS, 300,  300,  300,  100),
-        # Learning
         (CAT_UDM_001, "Udemy Course (1 course)",        "REW-UDM-001",  "Any single Udemy course of choice",         RWCAT_LEARNING, 300,  300,  300,   80),
         (CAT_CRS_001, "Coursera 1-Month Plus",          "REW-CRS-001",  "1-month Coursera Plus subscription",        RWCAT_LEARNING, 500,  500,  500,   50),
         (CAT_ORL_001, "O'Reilly 1-Month Access",        "REW-ORL-001",  "1-month O'Reilly learning platform access", RWCAT_LEARNING, 450,  450,  450,   40),
@@ -749,12 +821,10 @@ async def seed_reward_catalog():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REVIEWS + REVIEW_CATEGORY_TAGS  (30 reviews — positive categories only)
+# REVIEWS + REVIEW_CATEGORY_TAGS
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_reviews():
     print("⭐ Seeding reviews + review_category_tags...")
-
-    # (reviewer_id, receiver_id, comment, raw_points, days_ago, tags: [(cat_id, mult, code)])
     review_data = [
         (EMP_JANE,   EMP_JOHN,      "Delivered the auth module on time with excellent test coverage.",                  17.6, 30, [(RC_OWNERSHIP,     "1.2000", "OWNERSHIP"),       (RC_DELIVERY,      "1.2000", "DELIVERY")]),
         (EMP_HENRY,  EMP_BOB,       "Bob consistently ships quality code with minimal review cycles.",                  15.0, 28, [(RC_QUALITY,       "1.2000", "QUALITY"),         (RC_OWNERSHIP,     "1.2000", "OWNERSHIP")]),
@@ -811,12 +881,11 @@ async def seed_reviews():
                 "category_code_snapshot": code,
             })
             tag_count += 1
-
     print(f"   ✅ Seeded {len(review_data)} reviews with {tag_count} category tags\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TRANSACTIONS  (30 rows)
+# TRANSACTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_transactions():
     print("💰 Seeding transactions...")
@@ -832,7 +901,6 @@ async def seed_transactions():
         w = await db.wallets.find_unique(where={"employee_id": emp_id})
         wallet_map[emp_id] = w.wallet_id
 
-    # (employee_id, amount, type_id, status_id, description, ref, days_ago)
     txns = [
         (EMP_JOHN,      200,  TT_CREDIT,     S_TXN_APPROVED, "Q1 performance review credit",                "TXN-2025-001", 90),
         (EMP_JOHN,      300,  TT_CREDIT,     S_TXN_APPROVED, "Q2 performance review credit",                "TXN-2025-002", 60),
@@ -879,12 +947,11 @@ async def seed_transactions():
             "updated_by":          emp_id,
             "updated_at":          NOW,
         })
-
     print(f"   ✅ Seeded {len(txns)} transactions\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REWARD HISTORY  (30 rows)
+# REWARD HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_reward_history():
     print("🎀 Seeding reward_history...")
@@ -900,7 +967,6 @@ async def seed_reward_history():
         w = await db.wallets.find_unique(where={"employee_id": emp_id})
         wallet_map[emp_id] = w.wallet_id
 
-    # (employee_id, catalog_id, points, comment, days_ago)
     history_data = [
         (EMP_JOHN,      CAT_HOD_001,  400,  "End-of-year hoodie redemption",               30),
         (EMP_JOHN,      CAT_AMZ_025,  250,  "Redeemed Amazon gift card",                   15),
@@ -946,16 +1012,14 @@ async def seed_reward_history():
             "updated_by": emp_id,
             "updated_at": NOW,
         })
-
     print(f"   ✅ Seeded {len(history_data)} reward history entries\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTIFICATIONS  (30 rows)
+# NOTIFICATIONS
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_notifications():
     print("🔔 Seeding notifications...")
-
     notifs = [
         (EMP_JOHN,      "Points Credited",         "You received 200 points for Q1 performance review.",            "CREDIT",     True,  True,  1, 90),
         (EMP_JOHN,      "Reward Redeemed",          "Your Company Hoodie redemption has been approved.",             "REDEMPTION", True,  True,  1, 30),
@@ -988,7 +1052,6 @@ async def seed_notifications():
         (EMP_VERA,      "Ergonomic Set Dispatched", "Your ergonomic cushion set has been shipped.",                  "REDEMPTION", False, True,  1,  5),
         (EMP_NOAH,      "Welcome Bonus",            "Welcome! 100 onboarding bonus points have been credited.",      "BONUS",      False, False, 0,  1),
     ]
-
     for emp_id, title, message, ntype, is_read, email_sent, send_attempts, days_ago in notifs:
         read_at = (NOW - timedelta(days=days_ago // 2)) if is_read else None
         data = {
@@ -1004,16 +1067,14 @@ async def seed_notifications():
         if read_at:
             data["read_at"] = read_at
         await db.notifications.create(data=data)
-
     print(f"   ✅ Seeded {len(notifs)} notifications\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AUDIT LOG  (30 rows)
+# AUDIT LOG
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_audit_log():
     print("📝 Seeding audit_log...")
-
     entries = [
         ("employees",         EMP_JOHN,       "INSERT", None,                                        {"username": "john.doe", "status": "ACTIVE"},                                EMP_ADMIN),
         ("employees",         EMP_ARIJIT,     "INSERT", None,                                        {"username": "arijit.banik", "status": "ACTIVE"},                            EMP_ADMIN),
@@ -1043,7 +1104,7 @@ async def seed_audit_log():
         ("review_categories", RC_OWNERSHIP,   "UPDATE", {"multiplier": "1.1000"},                    {"multiplier": "1.2000"},                                                    EMP_ADMIN),
         ("review_categories", RC_INNOVATION,  "UPDATE", {"multiplier": "1.2000"},                    {"multiplier": "1.3000"},                                                    EMP_ADMIN),
         ("reward_history",    uid(),          "INSERT", None,                                        {"reward": "Company Hoodie", "points": 400, "employee": "john.doe"},         EMP_ADMIN),
-        ("reward_history",    uid(),          "INSERT", None,                                        {"reward": "AWS exam voucher", "points": 1200, "employee": "swarup.das"},      EMP_ADMIN),
+        ("reward_history",    uid(),          "INSERT", None,                                        {"reward": "AWS exam voucher", "points": 1200, "employee": "swarup.das"},    EMP_ADMIN),
         ("employees",         EMP_XENA,       "INSERT", None,                                        {"username": "xena.warrior", "status": "ACTIVE"},                            EMP_ADMIN),
     ]
 
@@ -1061,7 +1122,6 @@ async def seed_audit_log():
                 '127.0.0.1', 'seed-script/2.0', NOW()
             )
         """)
-
     print(f"   ✅ Seeded {len(entries)} audit log entries\n")
 
 
@@ -1072,18 +1132,18 @@ async def main():
     await db.connect()
     try:
         print("=" * 70)
-        print("🌱  EMPLOYEE REWARDS SYSTEM — DATABASE SEED  (Extended ~30 rows/table)")
+        print("🌱  EMPLOYEE REWARDS SYSTEM — DATABASE SEED")
         print("=" * 70)
         print()
 
         await clean_db()
 
-        await seed_status_master()
+        await seed_status_master()        # MUST be first — employees FK depends on it
         await seed_transaction_types()
         await seed_roles()
         await seed_department_types()
-        await seed_departments()
-        await seed_designations()
+        await seed_departments()          # Migration needs at least 1 dept after this
+        await seed_designations()         # Migration needs at least 1 desig after this
         await seed_admin_employee()
         await seed_employees()
         await backfill_audit_fields()
@@ -1101,7 +1161,13 @@ async def main():
         print("🎉  SEED COMPLETE!")
         print("=" * 70)
         print()
-        print("📝 Login credentials (all share the same password):")
+        print("NEXT STEP:")
+        print("   prisma migrate deploy")
+        print("   ↳ Creates the system sentinel employee (00000000-...)")
+        print("   ↳ Attaches audit triggers to all 17 tables")
+        print("   ↳ Revokes UPDATE/DELETE on audit_log from the app user")
+        print()
+        print("📝 Login credentials (password for all: Password123!)")
         print()
         print(f"   {'username':<30} {'role(s)'}")
         print(f"   {'-'*30} {'-'*30}")
@@ -1116,23 +1182,11 @@ async def main():
         print(f"   {'arijit.banik':<30} EMPLOYEE  (arijitb017@gmail.com)")
         print(f"   {'shubrajit.deb':<30} EMPLOYEE  (shubrajitdeb180603@gmail.com)")
         print(f"   {'prasun.chakraborty':<30} EMPLOYEE  (nothingshere21@gmail.com)")
-        print(f"   {'midanka.lahon':<30} EMPLOYEE  (midankalahon@gmail.com)")
-        print(f"   {'swarup.das':<30} EMPLOYEE  (swarup1to3@gmail.com)")
-        print(f"   {'bikash.nath':<30} EMPLOYEE  (nathbikash231@gmail.com)")
-        print(f"   {'binit.goswami':<30} EMPLOYEE  (binitkgsmile2005@gmail.com)")
-        print(f"   {'mrinmoy.kashyap':<30} EMPLOYEE  (mrinmoykashyap.mk@gmail.com)")
-        print(f"   {'rohit.sah':<30} EMPLOYEE  (rsah94614@gmail.com)")
-        print(f"   {'rishav.bora':<30} EMPLOYEE  (rishavbora550@gmail.com)")
-        print(f"   {'aminul.islam':<30} EMPLOYEE  (animul7535@gmail.com)")
-        print(f"   {'bikash.bora':<30} EMPLOYEE  (borab796@gmail.com)")
-        print(f"   {'dipam.barman':<30} EMPLOYEE  (dipambarman3@gmail.com)")
-        print(f"   {'gautam.hazarika':<30} EMPLOYEE  (gautamhazarika01@gmail.com)")
-        print(f"   {'... + 8 more employees':<30} EMPLOYEE")
+        print(f"   {'... + 19 more employees':<30} EMPLOYEE")
         print()
         print(f"   password (all): {TEST_PASSWORD}")
         print()
-        print("⚠️  Route Permissions:")
-        print("   route_permissions is EMPTY — auto-populated on microservice startup.")
+        print("⚠️  route_permissions is EMPTY — auto-populated on microservice startup.")
         print()
 
     except Exception as e:
