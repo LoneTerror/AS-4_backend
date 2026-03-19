@@ -58,6 +58,11 @@ ENV PYTHONPATH=/app
 ENV PRISMA_BINARY_CACHE_DIR="/app/.cache/prisma-python"
 ENV PYTHONUNBUFFERED=1
 
+# Ensure the venv is at the FRONT of the path
+ENV PATH="/app/venv/bin:$PATH"
+# Explicitly tell Python where the site-packages are
+ENV PYTHONPATH="/app:/app/venv/lib/python3.10/site-packages"
+
 USER appuser
 
 # FALLBACK COMMAND: This will be overridden by K8s args
