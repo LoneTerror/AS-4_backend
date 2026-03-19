@@ -48,6 +48,42 @@ services:
       - auth-service
     command: uvicorn src.recognition.main:app --host 0.0.0.0 --port 8005 --reload
 
+  rewards-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-rewards
+    ports:
+      - "8006:8006"
+    env_file:
+      - .env
+    environment:
+      # Standardizing to your internal service discovery naming
+      - REDIS_URL=redis://redis:6379/0
+      - AUTH_SERVICE_URL=http://auth-service:8001/v1/auth/validate
+      - WALLET_SERVICE_URL=http://wallet-service:8000
+    depends_on:
+      - redis
+      - auth-service
+    command: uvicorn src.rewards.main:app --host 0.0.0.0 --port 8006 --reload
+
+  organization-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-organization
+    ports:
+      - "8007:8007"
+    env_file:
+      - .env
+    environment:
+      # Overriding internal URLs for Docker networking
+      - AUTH_SERVICE_URL=http://auth-service:8001/v1/auth/validate
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: uvicorn src.organization.main:app --host 0.0.0.0 --port 8007 --reload
+
   # 3. The Analytics Microservice (New)
   analytics-service:
     build:
@@ -68,23 +104,6 @@ services:
       - auth-service
       - employees-service
     command: uvicorn src.analytics.main:app --host 0.0.0.0 --port 8008 --reload
-
-  organization-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: rnr-organization
-    ports:
-      - "8007:8007"
-    env_file:
-      - .env
-    environment:
-      # Overriding internal URLs for Docker networking
-      - AUTH_SERVICE_URL=http://auth-service:8001/v1/auth/validate
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-    command: uvicorn src.organization.main:app --host 0.0.0.0 --port 8007 --reload
 
   # 4. Redis (Event Stream & Caching)
   redis:
