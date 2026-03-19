@@ -3,6 +3,15 @@ kind: Ingress
 metadata:
   name: recognition-ingress
   annotations:
+    kubernetes.io/ingress.class: nginx
+    # 1. Enable CORS
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    # 2. Define who is allowed to call this API (Browser security)
+    nginx.ingress.kubernetes.io/cors-allow-origin: "http://api.rnr.local:30119, http://localhost:3000"
+    # 3. Allow standard API methods
+    nginx.ingress.kubernetes.io/cors-allow-methods: "PUT, GET, POST, OPTIONS, DELETE"
+    # 4. Critical: Must allow 'Authorization' for your JWT tokens to pass through
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization"
     nginx.ingress.kubernetes.io/rewrite-target: /v1/recognition/$2
 spec:
   ingressClassName: nginx
