@@ -22,19 +22,35 @@ services:
       dockerfile: Dockerfile
     container_name: rnr-employees
     ports:
-      - "8003:8003" # Matches your src.employees.main port
+      - "8003:8003"
+    env_file:
+      - .env
+    command: uvicorn src.employees.main:app --host 0.0.0.0 --port 8003 --reload
+    depends_on:
+      - redis
+
+  # 3. The Analytics Microservice (New)
+  analytics-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-analytics
+    ports:
+      - "8008:8008"
     env_file:
       - .env
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      # Overriding Redis and internal URLs for Docker networking
       - REDIS_URL=redis://redis:6379/0
-      # OTEL_EXPORTER_OTLP_ENDPOINT can be added here if using tracing
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - EMPLOYEES_SERVICE_URL=http://employees-service:8003
     depends_on:
       - redis
-    # Using uvicorn on 8003 as defined in your main.py
-    command: uvicorn src.employees.main:app --host 0.0.0.0 --port 8003 --reload
+      - auth-service
+      - employees-service
+    command: uvicorn src.analytics.main:app --host 0.0.0.0 --port 8008 --reload
 
-  # 3. Redis (Required for Employee's APScheduler and Workers)
+  # 4. Redis (Event Stream & Caching)
   redis:
     image: redis:7-alpine
     container_name: rnr-redis
