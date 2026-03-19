@@ -10,7 +10,7 @@ spec:
   - host: api.rnr.local
     http:
       paths:
-      - path: /recognition(/|$)(.*)
+      - path: /v1/recognitions(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:

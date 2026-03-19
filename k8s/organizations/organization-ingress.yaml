@@ -3,14 +3,14 @@ kind: Ingress
 metadata:
   name: organization-ingress
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /v1/organization/$2
+    nginx.ingress.kubernetes.io/rewrite-target: /v1/organizations/$2
 spec:
   ingressClassName: nginx
   rules:
   - host: api.rnr.local
     http:
       paths:
-      - path: /organization(/|$)(.*)
+      - path: /v1/organizations(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:

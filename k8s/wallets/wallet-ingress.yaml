@@ -10,7 +10,7 @@ spec:
   - host: api.rnr.local
     http:
       paths:
-      - path: /wallet(/|$)(.*)
+      - path: /v1/wallet(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:

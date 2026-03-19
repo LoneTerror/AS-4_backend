@@ -10,7 +10,7 @@ spec:
   - host: api.rnr.local
     http:
       paths:
-      - path: /analytics(/|$)(.*)
+      - path: /v1/analytics(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:

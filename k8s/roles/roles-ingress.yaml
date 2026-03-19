@@ -10,7 +10,7 @@ spec:
   - host: api.rnr.local
     http:
       paths:
-      - path: /roles(/|$)(.*)
+      - path: /v1/roles(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:

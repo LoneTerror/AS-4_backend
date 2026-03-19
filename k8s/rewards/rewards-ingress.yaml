@@ -10,7 +10,7 @@ spec:
   - host: api.rnr.local
     http:
       paths:
-      - path: /rewards(/|$)(.*)
+      - path: /v1/rewards(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:
