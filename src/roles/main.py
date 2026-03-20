@@ -1,7 +1,6 @@
 import uvicorn
 import os
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from fastapi.exceptions import RequestValidationError
@@ -29,23 +28,6 @@ from src.roles.router import router
 from src.common.route_registry import register_app_routes
 
 # ── Route configuration ───────────────────────────────────────────────────────
-#
-# Route keys MUST match the format built by route_registry._extract_routes:
-#
-#   f"{METHOD}:{root_path}{route.path}"
-#
-# This app has root_path="/v1/roles" and the router registers bare paths
-# like "/list", "/employees", etc.  So the keys are:
-#
-#   GET:/v1/roles/list          (not GET:/v1/roles  — that would be the root)
-#   POST:/v1/roles/create
-#   etc.
-#
-# TIP: On startup, route_registry logs every route key it finds at DEBUG
-# level.  Set LOG_LEVEL=DEBUG once to verify all keys match what you have
-# here, then drop back to INFO.
-# ─────────────────────────────────────────────────────────────────────────────
-
 ROLE_OVERRIDES: dict[str, list[str]] = {
     # ── Roles ─────────────────────────────────────────────────────────────────
     "GET:/v1/roles/list":                           ["SUPER_ADMIN", "HR_ADMIN"],
@@ -121,23 +103,12 @@ app = FastAPI(
     title="Roles & Permissions Service",
     version="1.0.0",
     lifespan=lifespan,
-    # root_path is the reverse-proxy strip prefix.
-    # route_registry prepends this to every route.path to build the DB key.
     root_path="/v1/roles",
     openapi_url="/openapi.json",
     docs_url="/docs",
 )
 
-cors_origins_str      = os.getenv("FRONTEND_CORS_ORIGINS", "")
-allowed_origins_list  = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS MIDDLEWARE REMOVED FROM HERE
 
 app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)

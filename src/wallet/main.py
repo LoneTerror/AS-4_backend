@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
+# CORSMiddleware import removed
 from fastapi.responses import JSONResponse
 from prisma.errors import UniqueViolationError
 
@@ -35,6 +35,7 @@ from src.wallet.review_consumer import review_created_consumer_loop
 from src.wallet.reward_consumer import reward_redeemed_consumer_loop
 from src.wallet.routes import router as wallet_router
 
+# --- OpenTelemetry Configuration ---
 resource      = Resource.create({"service.name": "rnr-wallet"})
 provider      = TracerProvider(resource=resource)
 otlp_exporter = OTLPSpanExporter()
@@ -59,10 +60,6 @@ ROUTE_TITLES = {
     "GET:/v1/wallets/transactions/types":             "List Transaction Types",
     "POST:/v1/wallets/transactions":                  "Create Transaction",
 }
-
-cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "")
-allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -124,7 +121,7 @@ async def health_check():
     return {"status": "healthy", "service": "Wallet Service"}
 
 
-# Deprecated — returns 410 Gone so Recognition service callers get a clear signal
+# Deprecated route remains for signal consistency
 @app.post("/credit-from-review", include_in_schema=False)
 async def credit_from_review_deprecated():
     return JSONResponse(status_code=410, content={
@@ -132,25 +129,19 @@ async def credit_from_review_deprecated():
     })
 
 
+# Middleware & Exception Handlers
 app.middleware("http")(request_rate_limit_middleware)
-app.add_exception_handler(Exception,              generic_exception_handler)
+app.add_exception_handler(Exception,               generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(HTTPException,          http_exception_handler)
-app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)
+app.add_exception_handler(HTTPException,           http_exception_handler)
+app.add_exception_handler(UniqueViolationError,    prisma_unique_violation_handler)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
-    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
-)
+# CORS MIDDLEWARE REMOVED FROM HERE
 
 app.include_router(wallet_router)
-# ↓ NO prefix here — routes are already written as /internal/wallets/...
 app.include_router(internal_router)
 
+# Instrumentation
 FastAPIInstrumentor.instrument_app(
     app, excluded_urls="health,docs,openapi.json,redoc,internal"
 )

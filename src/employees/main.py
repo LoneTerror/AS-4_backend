@@ -12,7 +12,7 @@ import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
+# CORSMiddleware import removed
 from fastapi.openapi.utils import get_openapi
 from prisma.errors import UniqueViolationError
 
@@ -82,9 +82,8 @@ ROUTE_TITLES = {
 
 _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
 
-# Celebration job cron time — override via env if needed
-_CELEB_HOUR   = int(os.getenv("CELEBRATION_CRON_HOUR",  "0"))  # default midnight
-_CELEB_MINUTE = int(os.getenv("CELEBRATION_CRON_MINUTE", "5"))  # default 00:05
+_CELEB_HOUR   = int(os.getenv("CELEBRATION_CRON_HOUR",  "0"))
+_CELEB_MINUTE = int(os.getenv("CELEBRATION_CRON_MINUTE", "5"))
 
 
 @asynccontextmanager
@@ -111,7 +110,6 @@ async def lifespan(app: FastAPI):
 
     app.state.redis = r
 
-    # ── Email worker (BLPOP — instant notifications) ───────────────────────
     worker_task = None
     if r is not None:
         worker_task = asyncio.create_task(
@@ -120,27 +118,12 @@ async def lifespan(app: FastAPI):
         )
         print("Employee Service: 📧 Email worker started")
 
-    # ── Celebration scheduler (APScheduler MemoryJobStore + Redis lock) ────
-    #
-    # RedisJobStore cannot pickle Prisma/Redis/SMTP objects (they contain
-    # thread locks) so we use the default MemoryJobStore — the scheduler
-    # lives in-process and fires the cron at the right time.
-    #
-    # Multi-instance dedup is handled by a Redis SET NX lock inside
-    # _run_celebrations — only the first pod to acquire it runs the job;
-    # all others log and skip. The Redis sentinel inside process_celebrations
-    # is the secondary guard if two pods somehow both acquire the lock.
-    #
-    # max_instances=1  → never overlaps within a single pod.
-    # coalesce=True    → if pod was down at midnight, run once on wake.
     scheduler = None
     if r is not None:
         _lock_key = "apscheduler:celebration:lock"
-        _lock_ttl = 3600  # 1 hour — well beyond any broadcast duration
+        _lock_ttl = 3600
 
         async def _run_celebrations() -> None:
-            # Raw r.set() NX used intentionally — requires atomicity not
-            # available in cache helpers.
             acquired = await r.set(_lock_key, "1", nx=True, ex=_lock_ttl)
             if not acquired:
                 logger.info("Celebration job: lock held by another instance — skipping")
@@ -171,7 +154,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # ── Shutdown ───────────────────────────────────────────────────────────
     registry_task.cancel()
 
     if scheduler is not None:
@@ -222,16 +204,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "http://localhost:8005")
-allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS MIDDLEWARE REMOVED FROM HERE
 
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)
@@ -256,7 +229,6 @@ async def health_check():
 app.include_router(notifications_router, tags=["Notifications"])
 app.include_router(webhooks_router,      tags=["Webhooks"])
 app.include_router(emp_router,           tags=["Employees"])
-# ↓ NO prefix — route already written as /internal/employees/active-count
 app.include_router(internal_router)
 
 
@@ -264,7 +236,7 @@ def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     schema = get_openapi(title=app.title, version=app.version,
-                         description=app.description, routes=app.routes)
+                        description=app.description, routes=app.routes)
     schema.setdefault("components", {})
     schema["components"]["securitySchemes"] = {
         "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}

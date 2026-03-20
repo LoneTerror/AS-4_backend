@@ -1,7 +1,6 @@
 import os
-
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware # Optional: remove import if no longer used anywhere
 from fastapi.exceptions import RequestValidationError
 from prisma.errors import UniqueViolationError
 from contextlib import asynccontextmanager
@@ -54,23 +53,12 @@ ROUTE_TITLES = {
     "PATCH:/v1/rewards/categories/{category_id}":     "Update Reward Category",
 }
 
-# ==========================================
-# OpenTelemetry Configuration
-# ==========================================
-# 1. Identify the service in Jaeger
 resource = Resource.create({"service.name": "rnr-rewards"})
 provider = TracerProvider(resource=resource)
-
-# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
 otlp_exporter = OTLPSpanExporter()
-
-# 3. Process traces in batches in the background
 processor = BatchSpanProcessor(otlp_exporter)
 provider.add_span_processor(processor)
-
-# 4. Register globally
 trace.set_tracer_provider(provider)
-# ==========================================
 
 
 @asynccontextmanager
@@ -122,32 +110,17 @@ async def health_check():
         "database": "Connected" if db.is_connected() else "Disconnected",
     }
 
-# Grab the env var, default to localhost for local dev fallback
-cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS")
-# Split by comma and strip whitespace to create a clean list
-allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
-    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
-)
-
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
-app.add_exception_handler(UniqueViolationError,prisma_unique_violation_handler)
+app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
 
 app.include_router(rewards_router.router)
 
 # ==========================================
 # Instrument FastAPI
 # ==========================================
-# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
     excluded_urls="health,/docs,/openapi.json,/redoc"

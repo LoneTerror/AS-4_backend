@@ -3,11 +3,9 @@ src/analytics/main.py
 ──────────────────────
 Analytics Service.
 
-Changes vs original
-────────────────────
-1. Removed: all imports from src.analytics.queries (deleted file).
-2. Added: close internal_client HTTP connection pool on shutdown.
-3. Analytics owns ZERO tables — all data comes via internal HTTP.
+Changes vs original:
+1. Removed: CORSMiddleware and related origin logic.
+2. Analytics owns ZERO tables — all data comes via internal HTTP.
 """
 from __future__ import annotations
 
@@ -17,7 +15,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from prisma.errors import UniqueViolationError
 
 from opentelemetry import trace
@@ -42,6 +39,7 @@ from src.common.route_registry import register_app_routes
 from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.prisma.client import connect_with_retry, db
 
+# --- OpenTelemetry Configuration ---
 resource      = Resource.create({"service.name": "rnr-analytics"})
 provider      = TracerProvider(resource=resource)
 otlp_exporter = OTLPSpanExporter()
@@ -71,14 +69,9 @@ ROUTE_TITLES = {
     "GET:/v1/analytics/dashboard/recognition/users":     "View User Recognition",
 }
 
-cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "")
-allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Analytics needs DB only for team-report department lookups and
-    # employee-per-department queries (it reads org structure, not wallet/review data).
+    # Analytics needs DB for team-report department lookups
     await connect_with_retry()
     print("Analytics Service: 🟢 Database Connected")
 
@@ -103,13 +96,12 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Drain the shared httpx connection pool
+    # Cleanup
     shutdown_event.set()
     if consumer_task:
         await consumer_task
 
     await internal_client.close()
-
     await close_auth_client()
     await disconnect_redis()
     await db.disconnect()
@@ -133,23 +125,16 @@ async def health_check():
     return {"status": "healthy", "service": "Analytics Service"}
 
 
+# Middleware & Exception Handlers
 app.middleware("http")(request_rate_limit_middleware)
-app.add_exception_handler(Exception,              generic_exception_handler)
+app.add_exception_handler(Exception,               generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(HTTPException,          http_exception_handler)
-app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
-    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
-)
+app.add_exception_handler(HTTPException,           http_exception_handler)
+app.add_exception_handler(UniqueViolationError,    prisma_unique_violation_handler)
 
 app.include_router(analytics_router, prefix="/dashboard", tags=["Dashboard"])
 
+# Instrumentation
 FastAPIInstrumentor.instrument_app(
     app, excluded_urls="health,/docs,/openapi.json,/redoc"
 )

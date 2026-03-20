@@ -1,7 +1,7 @@
 import uvicorn
 import os
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+# CORSMiddleware import removed
 from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 
@@ -62,9 +62,6 @@ ROLE_OVERRIDES: dict[str, list[str]] = {
 }
 
 # ── Route titles ──────────────────────────────────────────────────────────────
-# BUG FIXED: previously ROUTE_TITLES was defined twice — the first definition
-# (which mistakenly contained recognitions keys) was silently overwritten by
-# the second. Now there is exactly one definition with the correct org keys.
 ROUTE_TITLES: dict[str, str] = {
     # Departments
     "GET:/v1/organizations/departments":                            "List Departments",
@@ -88,7 +85,6 @@ ROUTE_TITLES: dict[str, str] = {
     "GET:/v1/organizations/audit-logs/{audit_id}":                  "Get Audit Log Details",
 }
 
-# Paths that never require auth — excluded from BearerAuth injection in OpenAPI
 _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
 
 # ── OpenTelemetry ─────────────────────────────────────────────────────────────
@@ -140,16 +136,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "http://localhost:8005,http://localhost:8001,http://localhost:8003")
-allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS LOGIC AND MIDDLEWARE REMOVED FROM HERE
 
 app.middleware("http")(request_rate_limit_middleware)
 
@@ -172,9 +159,6 @@ app.include_router(audit_logs_router,           prefix="/audit-logs",           
 
 
 # ── OpenAPI schema ────────────────────────────────────────────────────────────
-# BUG FIXED: the old loop used `.values()` (not `.items()`) so it couldn't
-# check the path name and injected BearerAuth onto /health too, causing
-# check_route_permission to return 401 on health polls.
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema

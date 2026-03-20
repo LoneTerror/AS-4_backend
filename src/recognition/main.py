@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
+# CORSMiddleware import removed
 from prisma.errors import UniqueViolationError
 
 from opentelemetry import trace
@@ -35,6 +35,7 @@ from src.recognition.router import categories_router as review_categories_router
 from src.recognition.router import router as recognition_router
 from src.digest.worker import digest_worker_loop
 
+# --- OpenTelemetry Configuration ---
 resource      = Resource.create({"service.name": "rnr-recognition"})
 provider      = TracerProvider(resource=resource)
 otlp_exporter = OTLPSpanExporter()
@@ -63,10 +64,6 @@ ROUTE_TITLES = {
     "GET:/v1/recognitions/digest":                     "View Recognition Digest",
     "POST:/v1/recognitions/digest/send":               "Send Recognition Digest",
 }
-
-cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "")
-allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -119,27 +116,21 @@ async def health_check():
     return {"status": "healthy", "service": "Recognition Service"}
 
 
+# Middleware & Exceptions
 app.middleware("http")(request_rate_limit_middleware)
-app.add_exception_handler(Exception,              generic_exception_handler)
+app.add_exception_handler(Exception,               generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(HTTPException,          http_exception_handler)
-app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)
+app.add_exception_handler(HTTPException,           http_exception_handler)
+app.add_exception_handler(UniqueViolationError,    prisma_unique_violation_handler)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
-    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
-)
+# CORS MIDDLEWARE REMOVED FROM HERE
 
 app.include_router(recognition_router,       tags=["Reviews"])
 app.include_router(review_categories_router, tags=["Review Categories"])
 app.include_router(digest_router)
-# ↓ NO prefix here — routes already written as /internal/reviews/...
 app.include_router(internal_router)
 
+# Instrumentation
 FastAPIInstrumentor.instrument_app(
     app, excluded_urls="health,docs,openapi.json,redoc,internal"
 )

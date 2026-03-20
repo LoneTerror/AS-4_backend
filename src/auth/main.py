@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from prisma.errors import UniqueViolationError
 
@@ -28,6 +27,7 @@ from src.common.dependencies import register_public_paths
 from src.common.route_registry import register_app_routes
 from src.prisma.client import connect_with_retry, db
 
+# --- OpenTelemetry Configuration ---
 resource      = Resource.create({"service.name": "rnr-auth"})
 provider      = TracerProvider(resource=resource)
 otlp_exporter = OTLPSpanExporter()
@@ -63,9 +63,6 @@ ALWAYS_PUBLIC_ROUTES: set[str] = {
     "POST:/v1/auth/reset-password",
 }
 
-cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "http://localhost:8005")
-allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
 _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json",
                  "/login", "/refresh", "/validate", "/forgot-password", "/reset-password"}
 
@@ -75,8 +72,6 @@ async def lifespan(app: FastAPI):
     await connect_with_retry()
     print("Auth Service: 🟢 Database Connected")
 
-    # Register pre-auth paths so all services skip permission checks for them.
-    # Include both bare and prefixed forms to cover direct + proxied requests.
     register_public_paths(
         "/login",           "/v1/auth/login",
         "/refresh",         "/v1/auth/refresh",
@@ -89,7 +84,7 @@ async def lifespan(app: FastAPI):
         app,
         default_roles=["SUPER_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
-        route_titles=ROUTE_TITLES,
+        role_titles=ROUTE_TITLES,
         always_public_routes=ALWAYS_PUBLIC_ROUTES,
     )
     yield
@@ -103,8 +98,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(CORSMiddleware, allow_origins=allowed_origins_list,
-                   allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# CORS MIDDLEWARE REMOVED
+
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)
 app.add_exception_handler(HTTPException,          http_exception_handler)
