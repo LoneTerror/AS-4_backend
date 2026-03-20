@@ -14,7 +14,8 @@ spec:
     spec:
       containers:
       - name: employees-container
-        image: mrmonster786/rnr-backend-base:latest
+        image: 192.168.116.51:30500/rnr-backend-base:latest 
+        imagePullPolicy: Always
         args: ["python", "-m", "uvicorn", "src.employees.main:app", "--host", "0.0.0.0", "--port", "8003"]
         ports:
         - containerPort: 8003

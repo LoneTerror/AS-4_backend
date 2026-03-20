@@ -14,8 +14,8 @@ spec:
     spec:
       containers:
       - name: analytics-container
-        image: mrmonster786/rnr-backend-base:latest
-        # Point to the analytics entry point and port
+        image: 192.168.116.51:30500/rnr-backend-base:latest 
+        imagePullPolicy: Always
         args: ["python", "-m", "uvicorn", "src.analytics.main:app", "--host", "0.0.0.0", "--port", "8008"]
         ports:
         - containerPort: 8008

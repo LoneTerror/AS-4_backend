@@ -14,7 +14,8 @@ spec:
     spec:
       containers:
       - name: organization-container
-        image: mrmonster786/rnr-backend-base:latest
+        image: 192.168.116.51:30500/rnr-backend-base:latest 
+        imagePullPolicy: Always
         args: ["python", "-m", "uvicorn", "src.organization.main:app", "--host", "0.0.0.0", "--port", "8007"]
         ports:
         - containerPort: 8007
