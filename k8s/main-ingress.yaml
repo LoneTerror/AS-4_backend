@@ -1,0 +1,80 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rnr-master-ingress
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    # Added localhost:3000 specifically for your frontend
+    nginx.ingress.kubernetes.io/cors-allow-origin: "http://api.rnr.local, http://localhost:3000"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "PUT, GET, POST, OPTIONS, DELETE"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization"
+    # No rewrite needed if your Python code already uses /v1/...
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: api.rnr.local
+    http:
+      paths:
+      - path: /v1/auth
+        pathType: Prefix
+        backend:
+          service:
+            name: auth-service
+            port:
+              number: 8001
+
+      - path: /v1/roles
+        pathType: Prefix
+        backend:
+          service:
+            name: roles-service
+            port:
+              number: 8002
+
+      - path: /v1/employees
+        pathType: Prefix
+        backend:
+          service:
+            name: employees-service
+            port:
+              number: 8003
+      - path: /v1/wallets
+        pathType: Prefix
+        backend:
+          service:
+            name: wallet-service
+            port:
+              number: 8004
+      - path: /v1/recognitions
+        pathType: Prefix
+        backend:
+          service:
+            name: recognition-service
+            port:
+              number: 8005
+
+      - path: /v1/rewards
+        pathType: Prefix
+        backend:
+          service:
+            name: rewards-service
+            port:
+              number: 8006
+
+      - path: /v1/organizations
+        pathType: Prefix
+        backend:
+          service:
+            name: organization-service
+            port:
+              number: 8007
+
+      - path: /v1/analytics
+        pathType: Prefix
+        backend:
+          service:
+            name: analytics-service
+            port:
+              number: 8008
+      
