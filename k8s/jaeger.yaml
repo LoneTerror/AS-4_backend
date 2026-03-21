@@ -15,10 +15,12 @@ spec:
       containers:
       - name: jaeger
         image: jaegertracing/all-in-one:latest
+        env:
+        - name: COLLECTOR_OTLP_ENABLED
+          value: "true"
         ports:
-        - containerPort: 16686 # UI
-        - containerPort: 4317  # OTLP gRPC
-        - containerPort: 4318  # OTLP HTTP
+        - containerPort: 16686
+        - containerPort: 4317
 ---
 apiVersion: v1
 kind: Service

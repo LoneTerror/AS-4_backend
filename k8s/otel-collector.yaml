@@ -8,7 +8,9 @@ data:
       otlp:
         protocols:
           grpc:
+            endpoint: 0.0.0.0:4317  # Change from 127.0.0.1 to 0.0.0.0
           http:
+            endpoint: 0.0.0.0:4318  # Change from 127.0.0.1 to 0.0.0.0
     exporters:
       otlp:
         endpoint: "jaeger:4317"
