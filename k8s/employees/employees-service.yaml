@@ -5,7 +5,7 @@ metadata:
 spec:
   replicas: 2
   strategy:
-    type: Recreate
+    type: Recreate # Keeps things safe for Prisma migrations
   selector:
     matchLabels:
       app: employees-service
@@ -27,8 +27,11 @@ spec:
             name: rnr-secrets
         resources:
           requests:
-            memory: "128Mi"
+            memory: "200Mi"  
             cpu: "100m"
+          limits:
+            memory: "512Mi"  
+            cpu: "500m"      
 ---
 apiVersion: v1
 kind: Service

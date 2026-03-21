@@ -17,10 +17,8 @@ spec:
       terminationGracePeriodSeconds: 5
       containers:
       - name: auth-container
-        # [FIX] Ensure the image name matches your Docker Hub repo
         image: mrmonster786/rnr-backend-base:latest 
         imagePullPolicy: Always
-        # [FIX] This overrides the Dockerfile CMD to use the correct entry point
         args: ["python", "-m", "uvicorn", "src.auth.main:app", "--host", "0.0.0.0", "--port", "8001"]
         ports:
         - containerPort: 8001
@@ -29,7 +27,7 @@ spec:
             name: rnr-secrets
         resources:
           requests:
-            memory: "128Mi"
+            memory: "200Mi"
             cpu: "100m"
           limits:
             memory: "512Mi"
@@ -44,5 +42,5 @@ spec:
     app: auth-service
   ports:
     - protocol: TCP
-      port: 8001       # Port exposed by the Service
-      targetPort: 8001 # Must match containerPort and Uvicorn port
+      port: 8001
+      targetPort: 8001
