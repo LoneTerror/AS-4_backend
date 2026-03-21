@@ -15,6 +15,8 @@ RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 RUN pip install --upgrade pip
 
+ENV PRISMA_CLIENT_PY_ENGINE_TYPE="binary"
+
 # 3. Install Python Dependencies
 # (Ensure 'prisma' is in your requirements.txt)
 COPY requirements.txt .
@@ -24,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY prisma/ ./prisma/
 ENV PRISMA_BINARY_CACHE_DIR="/app/.cache/prisma-python"
 # This fixes the "prisma-client-py not found" error
-RUN prisma generate 
+RUN prisma generate && rm -rf /app/.cache/prisma-python
 
 # 5. Copy the rest of the application code
 COPY . .

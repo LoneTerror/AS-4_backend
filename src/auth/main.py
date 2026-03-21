@@ -64,7 +64,7 @@ ALWAYS_PUBLIC_ROUTES: set[str] = {
 }
 
 _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json",
-                 "/login", "/refresh", "/validate", "/forgot-password", "/reset-password"}
+                "/login", "/refresh", "/validate", "/forgot-password", "/reset-password"}
 
 
 @asynccontextmanager
@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
         app,
         default_roles=["SUPER_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
-        role_titles=ROUTE_TITLES,
+        route_titles=ROUTE_TITLES, 
         always_public_routes=ALWAYS_PUBLIC_ROUTES,
     )
     yield
