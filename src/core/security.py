@@ -69,7 +69,13 @@ def decode_token(token: str) -> Optional[dict]:
     microservice synchronization issues.
     """
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Add 30 seconds of leeway for clock drift
+        return jwt.decode(
+            token, 
+            SECRET_KEY, 
+            algorithms=[ALGORITHM], 
+            leeway=30 
+        )
     except ExpiredSignatureError:
         logger.warning("JWT Validation failed: Token has expired")
         return None
