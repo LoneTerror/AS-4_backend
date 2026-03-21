@@ -1,0 +1,19 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: employees-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: employees-service # Must match your deployment name
+  minReplicas: 2            # Never go below 2 (for high availability)
+  maxReplicas: 6            # Max pods allowed during a spike
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60 # Scale up if CPU goes over 60% of the 'Request'
