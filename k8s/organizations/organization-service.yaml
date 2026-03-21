@@ -19,9 +19,12 @@ spec:
       - name: organization-container
         image: mrmonster786/rnr-backend-base:latest 
         imagePullPolicy: Always
-        args: ["python", "-m", "uvicorn", "src.organization.main:app", "--host", "0.0.0.0", "--port", "8007"]
+        args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.organization.main:app", "--host", "0.0.0.0", "--port", "8007"]
         ports:
         - containerPort: 8007
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: "organization-service"
         envFrom:
         - secretRef:
             name: rnr-secrets

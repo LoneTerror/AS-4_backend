@@ -5,7 +5,7 @@ metadata:
 spec:
   replicas: 2
   strategy:
-    type: Recreate # Keeps things safe for Prisma migrations
+    type: Recreate 
   selector:
     matchLabels:
       app: employees-service
@@ -19,9 +19,12 @@ spec:
       - name: employees-container
         image: mrmonster786/rnr-backend-base:latest 
         imagePullPolicy: Always
-        args: ["python", "-m", "uvicorn", "src.employees.main:app", "--host", "0.0.0.0", "--port", "8003"]
+        args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.employees.main:app", "--host", "0.0.0.0", "--port", "8003"]
         ports:
         - containerPort: 8003
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: "employees-service"
         envFrom:
         - secretRef:
             name: rnr-secrets

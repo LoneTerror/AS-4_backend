@@ -19,12 +19,14 @@ spec:
       - name: wallet-container
         image: mrmonster786/rnr-backend-base:latest 
         imagePullPolicy: Always
-        args: ["python", "-m", "uvicorn", "src.wallet.main:app", "--host", "0.0.0.0", "--port", "8004"]
+        args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.wallet.main:app", "--host", "0.0.0.0", "--port", "8004"]
         env:
         - name: REDIS_URL
           value: "redis://redis:6379/0"
         - name: AUTH_SERVICE_URL
           value: "http://auth-service:8001"
+        - name: OTEL_SERVICE_NAME
+          value: "wallet-service"
         ports:
         - containerPort: 8004
         envFrom:

@@ -19,9 +19,12 @@ spec:
       - name: rewards-container
         image: mrmonster786/rnr-backend-base:latest 
         imagePullPolicy: Always
-        args: ["python", "-m", "uvicorn", "src.rewards.main:app", "--host", "0.0.0.0", "--port", "8006"]
+        args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.rewards.main:app", "--host", "0.0.0.0", "--port", "8006"]
         ports:
         - containerPort: 8006
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: "rewards-service"
         envFrom:
         - secretRef:
             name: rnr-secrets
