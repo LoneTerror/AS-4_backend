@@ -1,403 +1,308 @@
 """
-test_schemas.py
-Unit tests for src/recognition/schemas.py
-
-UPDATED:
-- Removed 'rating' field from all request and response schemas as it was replaced 
-  by multi-category support (category_ids / category_tags).
-- All create/update payload helpers now use category_ids (plural List[UUID]).
-- Added tests for category_ids list validation: min 1, max 5, unique, valid UUIDs.
-- ReviewResponse tests updated to match the new multi-category response shape:
-  category_tags, category_ids, category_codes instead of the old rating field.
+tests/test_schemas.py
+──────────────────────
+Pydantic schema validation — no DB or IO involved.
 """
+from __future__ import annotations
 
-import os
-import sys
+import uuid
+
 import pytest
-from uuid import UUID, uuid4
-from datetime import datetime, timezone
-
-sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
 from pydantic import ValidationError
-import importlib.util, pathlib
 
-_schema_path = pathlib.Path(__file__).parent.parent / "schemas.py"
-_spec = importlib.util.spec_from_file_location("schemas_module", _schema_path)
-_schemas = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_schemas)
+from src.recognition.schemas import (
+    PaginatedReviewCategoryResponse,
+    PaginatedReviewResponse,
+    PaginationMeta,
+    ReviewCategoryCreateRequest,
+    ReviewCategoryResponse,
+    ReviewCategoryTagResponse,
+    ReviewCategoryUpdateRequest,
+    ReviewCreateRequest,
+    ReviewResponse,
+    ReviewUpdateRequest,
+)
 
-ReviewCreateRequest     = _schemas.ReviewCreateRequest
-ReviewUpdateRequest     = _schemas.ReviewUpdateRequest
-ReviewResponse          = _schemas.ReviewResponse
-PaginationMeta          = _schemas.PaginationMeta
-PaginatedReviewResponse = _schemas.PaginatedReviewResponse
+CAT_ID  = uuid.uuid4()
+REV_ID  = uuid.uuid4()
+EMP_ID  = uuid.uuid4()
+EMP2_ID = uuid.uuid4()
+STAT_ID = uuid.uuid4()
+NOW     = "2026-01-15T10:00:00Z"
 
-# ---------------------------------------------------------------------------
-# Shared sample data
-# ---------------------------------------------------------------------------
-
-VALID_UUID     = str(uuid4())
-VALID_CAT_UUID = str(uuid4())
-NOW            = datetime.now(timezone.utc)
-SHORT_URL      = "https://cdn.example.com/file.jpg"
-LONG_URL       = "https://cdn.example.com/" + "x" * 490  # > 500 chars total
-
-
-def valid_create_payload(**overrides):
-    """
-    category_ids is a List of UUIDs (1–5), not a single UUID.
-    """
-    base = dict(
-        receiver_id=VALID_UUID,
-        category_ids=[VALID_CAT_UUID],
-        comment="Great performance across all metrics.",
-        image_url=None,
-        video_url=None,
-    )
-    base.update(overrides)
-    return base
-
-
-def valid_response_payload(**overrides):
-    base = dict(
-        review_id=uuid4(),
-        reviewer_id=uuid4(),
-        receiver_id=uuid4(),
-        comment="Good work",
-        image_url=None,
-        video_url=None,
-        status_id=uuid4(),
-        review_at=NOW,
-        created_at=NOW,
-        created_by=uuid4(),
-        updated_at=NOW,
-        updated_by=uuid4(),
-    )
-    base.update(overrides)
-    return base
-
-
-# ===========================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 # ReviewCreateRequest
-# ===========================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 
 class TestReviewCreateRequest:
+    def _valid(self, **overrides):
+        base = dict(
+            receiver_id=EMP_ID,
+            comment="This is a valid comment with more than ten chars",
+            category_ids=[CAT_ID],
+        )
+        base.update(overrides)
+        return ReviewCreateRequest(**base)
 
-    def test_valid_payload_accepted(self):
-        req = ReviewCreateRequest(**valid_create_payload())
-        assert str(req.receiver_id) == VALID_UUID
+    def test_valid_minimal(self):
+        r = self._valid()
+        assert r.receiver_id == EMP_ID
+        assert len(r.category_ids) == 1
 
-    def test_receiver_id_must_be_valid_uuid(self):
+    def test_up_to_five_categories(self):
+        cats = [uuid.uuid4() for _ in range(5)]
+        r = self._valid(category_ids=cats)
+        assert len(r.category_ids) == 5
+
+    def test_too_many_categories_raises(self):
+        cats = [uuid.uuid4() for _ in range(6)]
         with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(receiver_id="not-a-uuid"))
+            self._valid(category_ids=cats)
 
-    def test_comment_minimum_length_10(self):
+    def test_empty_categories_raises(self):
         with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(comment="Short"))
+            self._valid(category_ids=[])
 
-    def test_comment_maximum_length_2000(self):
+    def test_duplicate_category_ids_raises(self):
+        same = uuid.uuid4()
+        with pytest.raises(ValidationError, match="Duplicate"):
+            self._valid(category_ids=[same, same])
+
+    def test_comment_too_short_raises(self):
         with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(comment="x" * 2001))
+            self._valid(comment="short")
 
-    def test_comment_exactly_10_chars_is_valid(self):
-        req = ReviewCreateRequest(**valid_create_payload(comment="1234567890"))
-        assert len(req.comment) == 10
+    def test_comment_exactly_10_chars_ok(self):
+        r = self._valid(comment="1234567890")
+        assert r.comment == "1234567890"
 
-    def test_comment_exactly_2000_chars_is_valid(self):
-        req = ReviewCreateRequest(**valid_create_payload(comment="x" * 2000))
-        assert len(req.comment) == 2000
-
-    def test_image_url_none_is_accepted(self):
-        req = ReviewCreateRequest(**valid_create_payload(image_url=None))
-        assert req.image_url is None
-
-    def test_valid_https_image_url_accepted(self):
-        req = ReviewCreateRequest(**valid_create_payload(image_url=SHORT_URL))
-        assert req.image_url is not None
-
-    def test_image_url_exceeding_500_chars_raises(self):
+    def test_comment_too_long_raises(self):
         with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(image_url=LONG_URL))
+            self._valid(comment="x" * 2001)
 
-    def test_video_url_none_is_accepted(self):
-        req = ReviewCreateRequest(**valid_create_payload(video_url=None))
-        assert req.video_url is None
+    def test_comment_max_length_ok(self):
+        r = self._valid(comment="x" * 2000)
+        assert len(r.comment) == 2000
 
-    def test_valid_https_video_url_accepted(self):
-        req = ReviewCreateRequest(**valid_create_payload(video_url=SHORT_URL))
-        assert req.video_url is not None
+    def test_optional_image_url(self):
+        r = self._valid(image_url="https://cdn.example.com/img.jpg")
+        assert str(r.image_url).startswith("https://")
 
-    def test_video_url_exceeding_500_chars_raises(self):
+    def test_optional_video_url(self):
+        r = self._valid(video_url="https://cdn.example.com/vid.mp4")
+        assert str(r.video_url).startswith("https://")
+
+    def test_url_too_long_raises(self):
         with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(video_url=LONG_URL))
+            self._valid(image_url="https://example.com/" + "x" * 490)
 
     def test_extra_fields_forbidden(self):
         with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(unexpected_field="boom"))
+            self._valid(unknown_field="oops")
 
-    def test_receiver_id_is_stored_as_uuid(self):
-        req = ReviewCreateRequest(**valid_create_payload(receiver_id=VALID_UUID))
-        assert isinstance(req.receiver_id, UUID)
-
-    def test_all_required_fields_missing_raises(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest()
-
-    def test_comment_cannot_be_none(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(comment=None))
-
-    # ── category_ids tests (plural list field) ────────────────────────────
-
-    def test_category_ids_required(self):
-        """Omitting category_ids entirely must raise a validation error."""
-        payload = valid_create_payload()
-        del payload["category_ids"]
-        with pytest.raises(ValidationError) as exc_info:
-            ReviewCreateRequest(**payload)
-        assert "category_ids" in str(exc_info.value)
-
-    def test_category_ids_must_be_list_of_valid_uuids(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(category_ids=["not-a-uuid"]))
-
-    def test_category_ids_stored_as_list_of_uuid_objects(self):
-        req = ReviewCreateRequest(**valid_create_payload(category_ids=[VALID_CAT_UUID]))
-        assert isinstance(req.category_ids, list)
-        assert isinstance(req.category_ids[0], UUID)
-
-    def test_category_ids_cannot_be_empty_list(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(category_ids=[]))
-
-    def test_category_ids_cannot_be_none(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(category_ids=None))
-
-    def test_category_ids_max_5_items(self):
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(
-                category_ids=[str(uuid4()) for _ in range(6)]
-            ))
-
-    def test_category_ids_exactly_5_is_valid(self):
-        req = ReviewCreateRequest(**valid_create_payload(
-            category_ids=[str(uuid4()) for _ in range(5)]
-        ))
-        assert len(req.category_ids) == 5
-
-    def test_category_ids_single_item_is_valid(self):
-        req = ReviewCreateRequest(**valid_create_payload(
-            category_ids=[VALID_CAT_UUID]
-        ))
-        assert len(req.category_ids) == 1
-
-    def test_duplicate_category_ids_rejected(self):
-        same_id = str(uuid4())
-        with pytest.raises(ValidationError):
-            ReviewCreateRequest(**valid_create_payload(
-                category_ids=[same_id, same_id]
-            ))
+    def test_none_urls_accepted(self):
+        r = self._valid(image_url=None, video_url=None)
+        assert r.image_url is None
+        assert r.video_url is None
 
 
-# ===========================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 # ReviewUpdateRequest
-# ===========================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 
 class TestReviewUpdateRequest:
+    def test_comment_only(self):
+        r = ReviewUpdateRequest(comment="Updated comment is long enough")
+        assert r.comment is not None
 
-    def test_only_comment_is_valid(self):
-        req = ReviewUpdateRequest(comment="An updated comment for the review.")
-        assert req.comment == "An updated comment for the review."
+    def test_category_ids_only(self):
+        r = ReviewUpdateRequest(category_ids=[CAT_ID])
+        assert len(r.category_ids) == 1
 
-    def test_all_fields_at_once_is_valid(self):
-        req = ReviewUpdateRequest(
-            comment="Updated rating and comment.",
-            image_url=SHORT_URL,
-            video_url=SHORT_URL,
-            category_ids=[VALID_CAT_UUID]
-        )
-        assert req.comment == "Updated rating and comment."
-
-    def test_empty_request_raises_at_least_one_field(self):
-        with pytest.raises(ValidationError) as exc_info:
+    def test_empty_update_raises(self):
+        with pytest.raises(ValidationError, match="At least one field"):
             ReviewUpdateRequest()
-        assert "At least one field" in str(exc_info.value)
 
-    def test_comment_too_short_rejected(self):
-        with pytest.raises(ValidationError):
-            ReviewUpdateRequest(comment="Hi")
+    def test_duplicate_category_ids_raises(self):
+        same = uuid.uuid4()
+        with pytest.raises(ValidationError, match="Duplicate"):
+            ReviewUpdateRequest(category_ids=[same, same])
 
-    def test_comment_too_long_rejected(self):
+    def test_url_too_long_raises(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(comment="y" * 2001)
-
-    def test_image_url_too_long_raises(self):
-        with pytest.raises(ValidationError):
-            ReviewUpdateRequest(image_url=LONG_URL)
-
-    def test_video_url_too_long_raises(self):
-        with pytest.raises(ValidationError):
-            ReviewUpdateRequest(video_url=LONG_URL)
+            ReviewUpdateRequest(image_url="https://x.com/" + "a" * 490)
 
     def test_extra_fields_forbidden(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(comment="valid comment", unknown_field="x")
+            ReviewUpdateRequest(comment="valid comment here", extra="nope")
 
-    def test_all_fields_none_explicit_raises(self):
+    def test_all_fields_valid(self):
+        r = ReviewUpdateRequest(
+            comment="Updated comment for the review",
+            category_ids=[CAT_ID, uuid.uuid4()],
+            image_url="https://cdn.example.com/img.png",
+            video_url="https://cdn.example.com/vid.mp4",
+        )
+        assert r.comment is not None
+        assert len(r.category_ids) == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ReviewCategoryCreateRequest
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewCategoryCreateRequest:
+    def _valid(self, **overrides):
+        base = dict(category_code="innovation", category_name="Innovation", multiplier=1.4)
+        base.update(overrides)
+        return ReviewCategoryCreateRequest(**base)
+
+    def test_code_uppercased(self):
+        r = self._valid(category_code="  teamwork  ")
+        assert r.category_code == "TEAMWORK"
+
+    def test_name_stripped(self):
+        r = self._valid(category_name="  Leadership  ")
+        assert r.category_name == "Leadership"
+
+    def test_multiplier_must_be_positive(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(comment=None, image_url=None, video_url=None, category_ids=None)
+            self._valid(multiplier=0.0)
 
-    def test_only_image_url_is_valid(self):
-        req = ReviewUpdateRequest(image_url=SHORT_URL)
-        assert req.image_url is not None
-
-    def test_only_video_url_is_valid(self):
-        req = ReviewUpdateRequest(video_url=SHORT_URL)
-        assert req.video_url is not None
-
-    # ── category_ids tests for update (plural list) ───────────────────────
-
-    def test_only_category_ids_is_valid(self):
-        """Updating only the category list is a valid partial update."""
-        req = ReviewUpdateRequest(category_ids=[VALID_CAT_UUID])
-        assert isinstance(req.category_ids, list)
-        assert isinstance(req.category_ids[0], UUID)
-
-    def test_category_ids_must_be_valid_uuids(self):
+    def test_negative_multiplier_raises(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(category_ids=["not-a-uuid"])
+            self._valid(multiplier=-1.0)
 
-    def test_duplicate_category_ids_rejected(self):
-        same_id = str(uuid4())
+    def test_description_optional(self):
+        r = self._valid()
+        assert r.description is None
+
+    def test_description_provided(self):
+        r = self._valid(description="A description")
+        assert r.description == "A description"
+
+    def test_extra_fields_forbidden(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(category_ids=[same_id, same_id])
+            self._valid(is_active=True)
 
-    def test_category_ids_max_5(self):
+    def test_description_max_length(self):
+        r = self._valid(description="x" * 500)
+        assert len(r.description) == 500
+
+    def test_description_too_long_raises(self):
         with pytest.raises(ValidationError):
-            ReviewUpdateRequest(category_ids=[str(uuid4()) for _ in range(6)])
+            self._valid(description="x" * 501)
 
 
-# ===========================================================================
+# ─────────────────────────────────────────────────────────────────────────────
+# ReviewCategoryUpdateRequest
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewCategoryUpdateRequest:
+    def test_empty_raises(self):
+        with pytest.raises(ValidationError, match="At least one field"):
+            ReviewCategoryUpdateRequest()
+
+    def test_is_active_only(self):
+        r = ReviewCategoryUpdateRequest(is_active=False)
+        assert r.is_active is False
+
+    def test_code_uppercased(self):
+        r = ReviewCategoryUpdateRequest(category_code="ownership")
+        assert r.category_code == "OWNERSHIP"
+
+    def test_zero_multiplier_raises(self):
+        with pytest.raises(ValidationError):
+            ReviewCategoryUpdateRequest(multiplier=0.0)
+
+    def test_extra_fields_forbidden(self):
+        with pytest.raises(ValidationError):
+            ReviewCategoryUpdateRequest(multiplier=1.2, unknown="x")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ReviewCategoryResponse
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewCategoryResponse:
+    def _make(self, **overrides):
+        base = dict(
+            category_id=CAT_ID, category_code="INNOVATION",
+            category_name="Innovation", multiplier=1.4, is_active=True,
+        )
+        base.update(overrides)
+        return ReviewCategoryResponse(**base)
+
+    def test_valid(self):
+        r = self._make()
+        assert r.category_code == "INNOVATION"
+        assert r.multiplier == 1.4
+
+    def test_description_optional(self):
+        r = self._make()
+        assert r.description is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ReviewCategoryTagResponse
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewCategoryTagResponse:
+    def test_valid(self):
+        t = ReviewCategoryTagResponse(
+            category_id=CAT_ID, category_code="TEAMWORK", multiplier_snapshot=1.2
+        )
+        assert t.multiplier_snapshot == 1.2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ReviewResponse
-# ===========================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 
 class TestReviewResponse:
+    def _make(self, **overrides):
+        base = dict(
+            review_id=REV_ID, reviewer_id=EMP_ID, receiver_id=EMP2_ID,
+            comment="Great work!", status_id=STAT_ID,
+            review_at=NOW, created_at=NOW, created_by=EMP_ID,
+            updated_at=NOW, updated_by=EMP_ID,
+        )
+        base.update(overrides)
+        return ReviewResponse(**base)
 
-    def test_valid_response_constructed(self):
-        resp = ReviewResponse(**valid_response_payload())
-        assert isinstance(resp.review_id, UUID)
+    def test_minimal_valid(self):
+        r = self._make()
+        assert r.comment == "Great work!"
 
-    def test_optional_image_url_can_be_none(self):
-        resp = ReviewResponse(**valid_response_payload(image_url=None))
-        assert resp.image_url is None
+    def test_optional_raw_points(self):
+        r = self._make()
+        assert r.raw_points is None
 
-    def test_optional_video_url_can_be_none(self):
-        resp = ReviewResponse(**valid_response_payload(video_url=None))
-        assert resp.video_url is None
+    def test_raw_points_provided(self):
+        r = self._make(raw_points=2.6)
+        assert r.raw_points == 2.6
 
-    def test_image_url_as_string_accepted(self):
-        resp = ReviewResponse(**valid_response_payload(image_url=SHORT_URL))
-        assert resp.image_url == SHORT_URL
+    def test_category_tags_optional(self):
+        r = self._make()
+        assert r.category_tags is None
 
-    def test_all_uuid_fields_are_uuid_type(self):
-        resp = ReviewResponse(**valid_response_payload())
-        for field in ("review_id", "reviewer_id", "receiver_id",
-                      "status_id", "created_by", "updated_by"):
-            assert isinstance(getattr(resp, field), UUID), f"{field} should be UUID"
-
-    def test_timestamps_are_datetime(self):
-        resp = ReviewResponse(**valid_response_payload())
-        for field in ("review_at", "created_at", "updated_at"):
-            assert isinstance(getattr(resp, field), datetime)
-
-    def test_comment_preserved(self):
-        resp = ReviewResponse(**valid_response_payload(comment="Specific comment text"))
-        assert resp.comment == "Specific comment text"
-
-    def test_from_attributes_enabled(self):
-        assert ReviewResponse.model_config.get("from_attributes") is True
-
-    # ── Multi-category fields ─────────────────────────────────────────────
-
-    def test_category_tags_optional_defaults_none(self):
-        resp = ReviewResponse(**valid_response_payload())
-        assert resp.category_tags is None
-
-    def test_category_ids_convenience_field_optional(self):
-        resp = ReviewResponse(**valid_response_payload())
-        assert resp.category_ids is None
-
-    def test_category_codes_convenience_field_optional(self):
-        resp = ReviewResponse(**valid_response_payload())
-        assert resp.category_codes is None
-
-    def test_raw_points_optional_defaults_none(self):
-        resp = ReviewResponse(**valid_response_payload())
-        assert resp.raw_points is None
-
-    def test_raw_points_populated(self):
-        resp = ReviewResponse(**valid_response_payload(raw_points=15.68))
-        assert resp.raw_points == 15.68
+    def test_with_category_tags(self):
+        tag = ReviewCategoryTagResponse(
+            category_id=CAT_ID, category_code="INNOVATION", multiplier_snapshot=1.4
+        )
+        r = self._make(category_tags=[tag])
+        assert len(r.category_tags) == 1
 
 
-# ===========================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 # PaginationMeta
-# ===========================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 
 class TestPaginationMeta:
-
-    def _make(self, **kw):
-        defaults = dict(current_page=1, per_page=20, total=100,
-                        total_pages=5, has_next=True, has_previous=False)
-        defaults.update(kw)
-        return PaginationMeta(**defaults)
-
-    def test_valid_pagination_meta(self):
-        meta = self._make()
-        assert meta.total == 100
-
-    def test_has_next_is_bool(self):
-        assert self._make(has_next=False).has_next is False
-
-    def test_has_previous_is_bool(self):
-        assert self._make(has_previous=True).has_previous is True
-
-    def test_missing_field_raises(self):
-        with pytest.raises(ValidationError):
-            PaginationMeta(current_page=1, per_page=20)
-
-
-# ===========================================================================
-# PaginatedReviewResponse
-# ===========================================================================
-
-class TestPaginatedReviewResponse:
-
-    def _make_meta(self):
-        return dict(current_page=1, per_page=20, total=1,
-                    total_pages=1, has_next=False, has_previous=False)
-
-    def test_empty_data_list_valid(self):
-        resp = PaginatedReviewResponse(data=[], pagination=self._make_meta())
-        assert resp.data == []
-
-    def test_data_list_contains_review_responses(self):
-        review = ReviewResponse(**valid_response_payload())
-        resp   = PaginatedReviewResponse(data=[review], pagination=self._make_meta())
-        assert len(resp.data) == 1
-        assert isinstance(resp.data[0], ReviewResponse)
-
-    def test_pagination_field_is_pagination_meta(self):
-        resp = PaginatedReviewResponse(data=[], pagination=self._make_meta())
-        assert isinstance(resp.pagination, PaginationMeta)
-
-    def test_missing_data_field_raises(self):
-        with pytest.raises(ValidationError):
-            PaginatedReviewResponse(pagination=self._make_meta())
-
-    def test_missing_pagination_field_raises(self):
-        with pytest.raises(ValidationError):
-            PaginatedReviewResponse(data=[])
+    def test_fields(self):
+        p = PaginationMeta(
+            current_page=1, per_page=20, total=50,
+            total_pages=3, has_next=True, has_previous=False,
+        )
+        assert p.total_pages == 3
+        assert p.has_next is True

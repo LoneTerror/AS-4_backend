@@ -7,7 +7,7 @@ import re
 # --- Nested Response Models ---
 
 class DesignationResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True) # V2 Standard
+    model_config = ConfigDict(from_attributes=True)
     designation_id: UUID
     designation_name: str
     designation_code: str
@@ -29,7 +29,7 @@ class ManagerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     employee_id: UUID
     username: str
-    email: EmailStr
+    email: str          # str not EmailStr — manager may be a system user
 
 class StatusResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -52,12 +52,15 @@ class RoleResponse(BaseModel):
     role_code: str
 
 # --- Main Response Models ---
+# Response models use str for email — the DB may contain system accounts
+# like system@internal that are valid internally but fail EmailStr validation.
+# EmailStr is only appropriate on request/input models where we control input.
 
 class EmployeeCreatedResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     employee_id: UUID
     username: str
-    email: EmailStr
+    email: str          # str — response model, DB value, not user input
     designation_id: UUID
     department_id: UUID
     manager_id: UUID
@@ -73,7 +76,7 @@ class EmployeeDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     employee_id: UUID
     username: str
-    email: EmailStr
+    email: str          # str — response model
     designation: Optional[DesignationResponse] = None
     department: Optional[DepartmentResponse] = None
     manager: Optional[ManagerResponse] = None
@@ -92,7 +95,7 @@ class EmployeeListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     employee_id: UUID
     username: str
-    email: EmailStr
+    email: str          # str — response model
     designation_id: Optional[UUID] = None
     designation_name: Optional[str] = None
     department_id: Optional[UUID] = None
@@ -119,10 +122,11 @@ class EmployeeListResponse(BaseModel):
     pagination: PaginationMeta
 
 # --- Request Models ---
+# Request models keep EmailStr — we DO want to validate email format on input.
 
 class CreateEmployeeRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=100)
-    email: EmailStr
+    email: EmailStr     # EmailStr — validate user-supplied input
     password: str = Field(..., min_length=8)
     designation_id: UUID
     department_id: UUID
@@ -160,7 +164,7 @@ class CreateEmployeeRequest(BaseModel):
 
 class UpdateEmployeeRequest(BaseModel):
     username: Optional[str] = Field(None, min_length=3, max_length=100)
-    email: Optional[EmailStr] = None
+    email: Optional[EmailStr] = None   # EmailStr — validate user-supplied input
     designation_id: Optional[UUID] = None
     department_id: Optional[UUID] = None
     manager_id: Optional[UUID] = None

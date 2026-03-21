@@ -1,5 +1,5 @@
 """
-src/auth/router.py  — unchanged from last session, included for completeness.
+src/auth/router.py
 """
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import io
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, status
 from fastapi.security import OAuth2PasswordBearer
 
 from src.auth.schemas import (
@@ -44,7 +44,11 @@ def _parse_xlsx(content: bytes) -> list[dict]:
     if not rows:
         return []
     headers = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
-    return [{headers[i]: (str(c).strip() if c is not None else "") for i, c in enumerate(row)} for row in rows[1:]]
+    return [
+        {headers[i]: (str(c).strip() if c is not None else "")
+         for i, c in enumerate(row)}
+        for row in rows[1:]
+    ]
 
 
 def _row_to_signup(row: dict) -> tuple[Optional[SignUpRequest], Optional[str]]:
@@ -57,8 +61,11 @@ def _row_to_signup(row: dict) -> tuple[Optional[SignUpRequest], Optional[str]]:
             return None, f"'{col}' is empty"
     try:
         return SignUpRequest(
-            username=row["username"], email=row["email"], password=row["password"],
-            designation_id=UUID(row["designation_id"]), department_id=UUID(row["department_id"]),
+            username=row["username"],
+            email=row["email"],
+            password=row["password"],
+            designation_id=UUID(row["designation_id"]),
+            department_id=UUID(row["department_id"]),
             manager_id=UUID(row["manager_id"]) if row.get("manager_id") else None,
             date_of_birth=row["date_of_birth"] if row.get("date_of_birth") else None,
         ), None
@@ -66,78 +73,147 @@ def _row_to_signup(row: dict) -> tuple[Optional[SignUpRequest], Optional[str]]:
         return None, str(exc)
 
 
+# ── Public endpoints (no auth required) ──────────────────────────────────────
+
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest):
-    return await authenticate_user(payload.username, payload.password)
+async def login(
+    request: Request,          # needed for IP / user-agent in audit log
+    payload: LoginRequest,
+):
+    return await authenticate_user(payload.username, payload.password, request)
+
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(payload: RefreshRequest):
+    # Refresh is stateless — no user context to audit beyond what the
+    # DB trigger already captures on refresh_tokens reads.
     return await refresh_access_token(payload.refresh_token)
 
+
 @router.post("/logout")
-async def logout(payload: LogoutRequest, token: str = Depends(oauth2_scheme)):
+async def logout(
+    request: Request,
+    payload: LogoutRequest,
+    token: str = Depends(oauth2_scheme),
+):
     user_data = decode_token(token)
     if not user_data:
         raise HTTPException(status_code=401, detail="Invalid session")
-    return await logout_user(payload.refresh_token, user_data["sub"])
+    return await logout_user(payload.refresh_token, user_data["sub"], request)
 
-@router.post("/signup", response_model=EmployeeResponse)
-async def signup(payload: SignUpRequest, current_user: CurrentUser = Depends(check_route_permission)):
-    """Create employee. Wallet provisioned asynchronously via Redis Stream event."""
-    return await create_employee(payload, current_user.id)
 
 @router.post("/validate", response_model=TokenValidationResponse)
 async def validate_token_endpoint(payload: TokenValidationRequest):
     return await validate_token(payload.token)
 
+
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
-async def forgot_password(payload: ForgotPasswordRequest):
-    return await request_password_reset(payload.email)
+async def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest,
+):
+    return await request_password_reset(payload.email, request)
+
 
 @router.post("/reset-password", response_model=ResetPasswordResponse)
-async def reset_password_endpoint(payload: ResetPasswordRequest):
-    return await reset_password(payload.token, payload.new_password)
+async def reset_password_endpoint(
+    request: Request,
+    payload: ResetPasswordRequest,
+):
+    return await reset_password(payload.token, payload.new_password, request)
 
 
-@router.post("/bulk-import", status_code=status.HTTP_200_OK,
-             summary="Bulk import employees via CSV or XLSX")
+# ── Protected endpoints ───────────────────────────────────────────────────────
+
+@router.post("/signup", response_model=EmployeeResponse)
+async def signup(
+    request: Request,
+    payload: SignUpRequest,
+    current_user: CurrentUser = Depends(check_route_permission),
+):
+    """Create employee. Wallet provisioned asynchronously via Redis Stream event."""
+    return await create_employee(payload, current_user.id, request, source="signup")
+
+
+@router.post(
+    "/bulk-import",
+    status_code=status.HTTP_200_OK,
+    summary="Bulk import employees via CSV or XLSX",
+)
 async def bulk_import_employees(
+    request: Request,
     file: UploadFile = File(...),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
     """
     Each successful row publishes an employee.created event so the
     Wallet service provisions wallets asynchronously.
+    Each row is audited individually with source='bulk_import'.
     """
     filename = (file.filename or "").lower()
     if not (filename.endswith(".csv") or filename.endswith(".xlsx")):
         raise HTTPException(status_code=400, detail="Only .csv and .xlsx are supported")
+
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="File is empty")
+
     try:
         rows = _parse_csv(content) if filename.endswith(".csv") else _parse_xlsx(content)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Parse error: {exc}")
+
     if not rows:
         raise HTTPException(status_code=400, detail="File has no data rows")
 
     results, succeeded, failed = [], 0, 0
+
     for idx, row in enumerate(rows, start=2):
         payload, err = _row_to_signup(row)
         if err:
             failed += 1
-            results.append({"row": idx, "username": row.get("username"), "email": row.get("email"), "status": "error", "error": err})
+            results.append({
+                "row":      idx,
+                "username": row.get("username"),
+                "email":    row.get("email"),
+                "status":   "error",
+                "error":    err,
+            })
             continue
         try:
-            emp = await create_employee(payload, current_user.id)
+            emp = await create_employee(
+                payload, current_user.id, request, source="bulk_import"
+            )
             succeeded += 1
-            results.append({"row": idx, "username": emp.username, "email": emp.email, "status": "success", "employee_id": str(emp.employee_id)})
+            results.append({
+                "row":         idx,
+                "username":    emp.username,
+                "email":       emp.email,
+                "status":      "success",
+                "employee_id": str(emp.employee_id),
+            })
         except HTTPException as exc:
             failed += 1
-            results.append({"row": idx, "username": payload.username, "email": payload.email, "status": "error", "error": exc.detail})
+            results.append({
+                "row":      idx,
+                "username": payload.username,
+                "email":    payload.email,
+                "status":   "error",
+                "error":    exc.detail,
+            })
         except Exception as exc:
             failed += 1
-            results.append({"row": idx, "username": payload.username, "email": payload.email, "status": "error", "error": str(exc)})
+            results.append({
+                "row":      idx,
+                "username": payload.username,
+                "email":    payload.email,
+                "status":   "error",
+                "error":    str(exc),
+            })
 
-    return {"total": len(rows), "succeeded": succeeded, "failed": failed, "results": results}
+    return {
+        "total":     len(rows),
+        "succeeded": succeeded,
+        "failed":    failed,
+        "results":   results,
+    }

@@ -219,16 +219,18 @@ class UpdateStatusRequest(BaseModel):
 
 class AuditLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    audit_id: UUID
-    table_name: str
-    record_id: UUID
+    audit_id:       UUID
+    table_name:     str
+    record_id:      UUID
     operation_type: str
-    old_values: Optional[Any] = None
-    new_values: Optional[Any] = None
-    performed_by: UUID
-    performed_at: datetime
-    ip_address: Optional[str] = None
-    user_agent: Optional[str] = None
+    old_values:     Optional[Any] = None
+    new_values:     Optional[Any] = None
+    performed_by:   UUID
+    performed_at:   datetime
+    ip_address:     Optional[str] = None
+    user_agent:     Optional[str] = None
+    employee_name:  Optional[str] = None  
+    employee_email: Optional[str] = None  
 
 
 class AuditLogListResponse(BaseModel):

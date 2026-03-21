@@ -31,6 +31,7 @@ model audit_log {
   @@index([table_name])
   @@index([table_name, record_id])
   @@index([table_name, record_id, performed_at])
+  @@index([performed_at], map: "idx_audit_log_archive_candidate")
 }
 
 model department_types {
