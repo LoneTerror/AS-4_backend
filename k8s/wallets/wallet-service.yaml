@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: wallet-container
-        image: 192.168.116.51:30500/rnr-backend-base:latest 
+        image: mrmonster786/rnr-backend-base:latest 
         imagePullPolicy: Always
         args: ["python", "-m", "uvicorn", "src.wallet.main:app", "--host", "0.0.0.0", "--port", "8004"]
         env:
