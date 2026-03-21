@@ -4,34 +4,33 @@ metadata:
   name: rnr-master-ingress
   annotations:
     kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/enable-cors: "true"
+    # Disable the default CORS annotation as we are handling it manually in the snippet
+    nginx.ingress.kubernetes.io/enable-cors: "false" 
     
-    # [FIX] Change this to a single origin or use the snippet below for multiple
-    nginx.ingress.kubernetes.io/cors-allow-origin: "http://localhost:3000" 
-    
-    # [CRITICAL] Since you use 'Authorization' headers, this MUST be true
-    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
-    
-    nginx.ingress.kubernetes.io/cors-allow-methods: "PUT, GET, POST, OPTIONS, DELETE"
-    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,X-Request-ID"
-
-    # [THE MAGIC FIX] This snippet handles the preflight 'OPTIONS' request manually
-    # It checks if the origin is one of yours and reflects it back.
     nginx.ingress.kubernetes.io/configuration-snippet: |
+      # 1. Check if the origin is allowed
       set $cors_origin "";
       if ($http_origin ~* (http://api.rnr.local|http://localhost:3000)) {
           set $cors_origin $http_origin;
       }
 
+      # 2. Handle the Preflight (OPTIONS)
       if ($request_method = 'OPTIONS') {
           add_header 'Access-Control-Allow-Origin' '$cors_origin' always;
           add_header 'Access-Control-Allow-Credentials' 'true' always;
           add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE' always;
           add_header 'Access-Control-Allow-Headers' 'DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,X-Request-ID' always;
+          add_header 'Access-Control-Max-Age' 1728000;
+          add_header 'Content-Type' 'text/plain charset=UTF-8';
           add_header 'Content-Length' 0;
-          add_header 'Content-Type' 'text/plain; charset=utf-8';
           return 204;
       }
+
+      # 3. Add headers for the actual requests (GET, POST, etc.)
+      add_header 'Access-Control-Allow-Origin' '$cors_origin' always;
+      add_header 'Access-Control-Allow-Credentials' 'true' always;
+      add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE' always;
+      add_header 'Access-Control-Allow-Headers' 'DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,X-Request-ID' always;
 spec:
   ingressClassName: nginx
   rules:
