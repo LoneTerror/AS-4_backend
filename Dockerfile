@@ -22,6 +22,8 @@ ENV PRISMA_CLIENT_PY_ENGINE_TYPE="binary"
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN prisma py fetch
+
 # 4. Generate Prisma Client (Using Python's built-in Prisma CLI)
 COPY prisma/ ./prisma/
 ENV PRISMA_BINARY_CACHE_DIR="/app/.cache/prisma-python"
