@@ -4,6 +4,8 @@ metadata:
   name: recognition-service
 spec:
   replicas: 2
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: recognition-service
@@ -12,6 +14,7 @@ spec:
       labels:
         app: recognition-service
     spec:
+      terminationGracePeriodSeconds: 5
       containers:
       - name: recognition-container
         image: mrmonster786/rnr-backend-base:latest 

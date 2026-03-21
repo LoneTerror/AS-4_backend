@@ -4,6 +4,8 @@ metadata:
   name: organization-service
 spec:
   replicas: 2
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: organization-service
@@ -12,6 +14,7 @@ spec:
       labels:
         app: organization-service
     spec:
+      terminationGracePeriodSeconds: 5
       containers:
       - name: organization-container
         image: mrmonster786/rnr-backend-base:latest 

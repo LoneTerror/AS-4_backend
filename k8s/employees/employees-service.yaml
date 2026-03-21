@@ -4,6 +4,8 @@ metadata:
   name: employees-service
 spec:
   replicas: 2
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: employees-service
@@ -12,6 +14,7 @@ spec:
       labels:
         app: employees-service
     spec:
+      terminationGracePeriodSeconds: 5
       containers:
       - name: employees-container
         image: mrmonster786/rnr-backend-base:latest 

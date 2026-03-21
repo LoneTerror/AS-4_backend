@@ -4,6 +4,8 @@ metadata:
   name: auth-service
 spec:
   replicas: 2
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: auth-service
@@ -12,6 +14,7 @@ spec:
       labels:
         app: auth-service
     spec:
+      terminationGracePeriodSeconds: 5
       containers:
       - name: auth-container
         # [FIX] Ensure the image name matches your Docker Hub repo

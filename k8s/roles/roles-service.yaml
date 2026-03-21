@@ -4,6 +4,8 @@ metadata:
   name: roles-service
 spec:
   replicas: 2
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: roles-service
@@ -12,6 +14,7 @@ spec:
       labels:
         app: roles-service
     spec:
+      terminationGracePeriodSeconds: 5
       containers:
       - name: roles-container
         image: mrmonster786/rnr-backend-base:latest 

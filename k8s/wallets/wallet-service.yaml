@@ -4,6 +4,8 @@ metadata:
   name: wallet-service
 spec:
   replicas: 2
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: wallet-service
@@ -12,6 +14,7 @@ spec:
       labels:
         app: wallet-service
     spec:
+      terminationGracePeriodSeconds: 5
       containers:
       - name: wallet-container
         image: mrmonster786/rnr-backend-base:latest 
