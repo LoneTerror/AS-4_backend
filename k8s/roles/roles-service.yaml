@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: roles-container
-        image: mnrmonster786/rnr-backend-base:latest 
+        image: mrmonster786/rnr-backend-base:latest 
         imagePullPolicy: Always
         # Match your local run.py entry point
         args: ["python", "-m", "uvicorn", "src.roles.main:app", "--host", "0.0.0.0", "--port", "8002"]
