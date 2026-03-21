@@ -21,14 +21,14 @@ ENV PRISMA_CLIENT_PY_ENGINE_TYPE="binary"
 # (Ensure 'prisma' is in your requirements.txt)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-RUN prisma py fetch
-
+ENV PRISMA_BINARY_CACHE_DIR="/app/.cache/prisma-python"
 # 4. Generate Prisma Client (Using Python's built-in Prisma CLI)
 COPY prisma/ ./prisma/
-ENV PRISMA_BINARY_CACHE_DIR="/app/.cache/prisma-python"
-# This fixes the "prisma-client-py not found" error
-RUN prisma generate && rm -rf /app/.cache/prisma-python
+
+RUN prisma py fetch && \
+    prisma generate && \
+    rm -rf /root/.cache/prisma-python
+
 
 # 5. Copy the rest of the application code
 COPY . .
