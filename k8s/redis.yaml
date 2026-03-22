@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: redis
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: redis
@@ -15,6 +15,7 @@ spec:
       containers:
       - name: redis
         image: redis:7-alpine
+        command: ["redis-server", "--requirepass", "kjft96bg69"] # SETS THE PASSWORD
         ports:
         - containerPort: 6379
         resources:

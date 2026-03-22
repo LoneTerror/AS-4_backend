@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: analytics-service
 spec:
-  replicas: 2
+  replicas: 1
   strategy:
     type: Recreate
   selector:
