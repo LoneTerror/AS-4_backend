@@ -28,6 +28,7 @@ from src.common.middleware import (
     prisma_unique_violation_handler, request_rate_limit_middleware,
     validation_exception_handler,
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 from src.common.route_registry import register_app_routes
 from src.employees.internal_router import router as internal_router
 from src.employees.router import router as emp_router
@@ -204,7 +205,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS MIDDLEWARE REMOVED FROM HERE
+initialize_cors_and_middleware(app)
 
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)

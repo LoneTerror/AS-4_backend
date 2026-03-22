@@ -23,6 +23,7 @@ from src.common.middleware import (
     generic_exception_handler,
     prisma_unique_violation_handler
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 from . import router as rewards_router
 from src.core.logger import logger
 from src.common.route_registry import register_app_routes
@@ -99,6 +100,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+initialize_cors_and_middleware(app)
 
 @app.get("/health", tags=["System"])
 async def health_check():

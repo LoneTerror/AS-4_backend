@@ -22,7 +22,8 @@ from src.common.middleware import (
     generic_exception_handler, http_exception_handler,
     prisma_unique_violation_handler, request_rate_limit_middleware,
     validation_exception_handler,
-)
+)   
+from src.common.cors_setup import initialize_cors_and_middleware
 from src.common.dependencies import register_public_paths
 from src.common.route_registry import register_app_routes
 from src.prisma.client import connect_with_retry, db
@@ -98,7 +99,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS MIDDLEWARE REMOVED
+initialize_cors_and_middleware(app)
 
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(UniqueViolationError,   prisma_unique_violation_handler)

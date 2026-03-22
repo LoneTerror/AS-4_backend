@@ -35,6 +35,7 @@ from src.common.middleware import (
     request_rate_limit_middleware,
     validation_exception_handler,
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 from src.common.route_registry import register_app_routes
 from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.prisma.client import connect_with_retry, db
@@ -119,6 +120,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+initialize_cors_and_middleware(app)
 
 @app.get("/health", tags=["System"])
 async def health_check():

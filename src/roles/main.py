@@ -13,6 +13,7 @@ from src.common.middleware import (
     generic_exception_handler,
     prisma_unique_violation_handler
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 
 # --- OpenTelemetry Imports ---
 from opentelemetry import trace
@@ -108,7 +109,7 @@ app = FastAPI(
     docs_url="/docs",
 )
 
-# CORS MIDDLEWARE REMOVED FROM HERE
+initialize_cors_and_middleware(app)
 
 app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)

@@ -15,6 +15,7 @@ from src.common.middleware import (
     generic_exception_handler,
     prisma_unique_violation_handler
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 
 # --- OpenTelemetry Imports ---
 from opentelemetry import trace
@@ -136,7 +137,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS LOGIC AND MIDDLEWARE REMOVED FROM HERE
+initialize_cors_and_middleware(app)
 
 app.middleware("http")(request_rate_limit_middleware)
 
