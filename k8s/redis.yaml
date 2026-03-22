@@ -15,7 +15,7 @@ spec:
       containers:
       - name: redis
         image: redis:7-alpine
-        command: ["redis-server", "--requirepass", "kjft96bg69"] # SETS THE PASSWORD
+        command: ["redis-server", "--requirepass", "kjft96bg69"]
         ports:
         - containerPort: 6379
         resources:

@@ -24,7 +24,10 @@ spec:
         args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.wallet.main:app", "--host", "0.0.0.0", "--port", "8004"]
         env:
         - name: REDIS_URL
-          value: "redis://redis:6379/0"
+          valueFrom:
+          secretKeyRef:
+          name: rnr-secrets
+      key: REDIS_URL
         - name: AUTH_SERVICE_URL
           value: "http://auth-service:8001"
         - name: OTEL_SERVICE_NAME
