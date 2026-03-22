@@ -25,9 +25,9 @@ spec:
         env:
         - name: REDIS_URL
           valueFrom:
-          secretKeyRef:
-          name: rnr-secrets
-      key: REDIS_URL
+            secretKeyRef:
+              name: rnr-secrets
+              key: REDIS_URL
         - name: AUTH_SERVICE_URL
           value: "http://auth-service:8001"
         - name: OTEL_SERVICE_NAME
