@@ -1,44 +1,34 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: rnr-master-ingress
+  name: aabhar-master-ingress
+  namespace: default
   annotations:
-    kubernetes.io/ingress.class: nginx
-    # Disable the default CORS annotation as we are handling it manually in the snippet
-    nginx.ingress.kubernetes.io/enable-cors: "false" 
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m" 
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      # 1. Check if the origin is allowed
-      set $cors_origin "";
-      if ($http_origin ~* (http://api.rnr.local|http://localhost:3000)) {
-          set $cors_origin $http_origin;
-      }
-
-      # 2. Handle the Preflight (OPTIONS)
-      if ($request_method = 'OPTIONS') {
-          add_header 'Access-Control-Allow-Origin' '$cors_origin' always;
-          add_header 'Access-Control-Allow-Credentials' 'true' always;
-          add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE' always;
-          add_header 'Access-Control-Allow-Headers' 'DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,X-Request-ID' always;
-          add_header 'Access-Control-Max-Age' 1728000;
-          add_header 'Content-Type' 'text/plain charset=UTF-8';
-          add_header 'Content-Length' 0;
-          return 204;
-      }
-
-      # 3. Add headers for the actual requests (GET, POST, etc.)
-      add_header 'Access-Control-Allow-Origin' '$cors_origin' always;
-      add_header 'Access-Control-Allow-Credentials' 'true' always;
-      add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE' always;
-      add_header 'Access-Control-Allow-Headers' 'DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,X-Request-ID' always;
+    # --- AWS ALB Core Configuration ---
+    # Creates an internet-facing Load Balancer
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    # Routes traffic directly to Pod IPs (best performance on EKS)
+    alb.ingress.kubernetes.io/target-type: ip
+    # CRITICAL: Grouping ensures ONE ALB handles all services to save costs
+    alb.ingress.kubernetes.io/group.name: aabhar-group
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    
+    # --- Health Checks (Vital for 200 OK status) ---
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '15'
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
+    alb.ingress.kubernetes.io/success-codes: '200-399'
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    
+    # --- Performance Settings ---
+    # Matches your local 300s timeout requirement
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
 spec:
-  ingressClassName: nginx
+  ingressClassName: alb
   rules:
-  - host: api.rnr.local
+  - host: api.aabhar.top
     http:
       paths:
+      # --- Microservices (Specific paths first) ---
       - path: /v1/auth
         pathType: Prefix
         backend:
@@ -46,7 +36,6 @@ spec:
             name: auth-service
             port:
               number: 8001
-
       - path: /v1/roles
         pathType: Prefix
         backend:
@@ -54,7 +43,6 @@ spec:
             name: roles-service
             port:
               number: 8002
-
       - path: /v1/employees
         pathType: Prefix
         backend:
@@ -76,7 +64,6 @@ spec:
             name: recognition-service
             port:
               number: 8005
-
       - path: /v1/rewards
         pathType: Prefix
         backend:
@@ -84,7 +71,6 @@ spec:
             name: rewards-service
             port:
               number: 8006
-
       - path: /v1/organizations
         pathType: Prefix
         backend:
@@ -92,7 +78,6 @@ spec:
             name: organization-service
             port:
               number: 8007
-
       - path: /v1/analytics
         pathType: Prefix
         backend:
@@ -100,4 +85,11 @@ spec:
             name: analytics-service
             port:
               number: 8008
-      
+      # --- Catch-all Fallback (Dashboard) ---
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: skooner
+            port:
+              number: 80
