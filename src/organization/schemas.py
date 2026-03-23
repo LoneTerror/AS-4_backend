@@ -41,7 +41,7 @@ class DepartmentListItem(BaseModel):
     department_name: str
     department_code: str
     department_type: Optional[DepartmentTypeResponse] = None
-    manager: Optional[ManagerBriefResponse] = None
+    # manager: Optional[ManagerBriefResponse] = None
     is_active: bool
     created_at: datetime
     created_by: Optional[UUID] = None
@@ -60,7 +60,7 @@ class DepartmentDetailResponse(BaseModel):
     department_name: str
     department_code: str
     department_type: Optional[DepartmentTypeResponse] = None
-    manager: Optional[ManagerBriefResponse] = None
+    # manager: Optional[ManagerBriefResponse] = None
     employee_count: int
     is_active: bool
     created_at: datetime
@@ -102,7 +102,7 @@ class DepartmentCreatedResponse(BaseModel):
     department_name: str
     department_code: str
     department_type: Optional[DepartmentTypeResponse] = None
-    manager: Optional[ManagerBriefResponse] = None
+    # manager: Optional[ManagerBriefResponse] = None
     is_active: bool
     created_at: datetime
     created_by: Optional[UUID] = None
@@ -115,7 +115,7 @@ class DepartmentUpdatedResponse(BaseModel):
     department_name: str
     department_code: str
     department_type: Optional[DepartmentTypeResponse] = None
-    manager: Optional[ManagerBriefResponse] = None
+    # manager: Optional[ManagerBriefResponse] = None
     is_active: bool
     updated_at: Optional[datetime] = None
     updated_by: Optional[UUID] = None
