@@ -372,6 +372,8 @@ async def _process_one(
                         to_email=employee["email"],
                         subject=notification.title,
                         body_html=html,
+                        type_=notification.type,
+                        employee_id=str(notification.employee_id),
                     )
 
             async def _slack_coro() -> None:

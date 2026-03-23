@@ -53,6 +53,20 @@ async def active_employee_count():
     )
     return {"now": now_count, "last_month": last_month_count}
 
+@router.get("/internal/employees/{employee_id}/manager-email")
+async def get_manager_email(employee_id: str):
+    from fastapi import HTTPException
+    emp = await db.employees.find_unique(where={"employee_id": employee_id})
+    if emp is None:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if emp.manager_id is None:
+        raise HTTPException(status_code=404, detail="Employee has no manager")
+    manager = await db.employees.find_unique(
+        where={"employee_id": str(emp.manager_id)}
+    )
+    if manager is None:
+        raise HTTPException(status_code=404, detail="Manager not found")
+    return {"email": manager.email}
 
 @router.get("/internal/employees/departments-with-members")
 async def departments_with_members():

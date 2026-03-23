@@ -30,6 +30,33 @@ from src.prisma.client import db
 router = APIRouter(tags=["Internal"])
 
 
+@router.get("/internal/employees/{employee_id}/manager-email")
+async def get_manager_email(employee_id: str):
+    """
+    Returns {"email": "manager@example.com"} if the employee has a manager,
+    or 404 if manager_id IS NULL.
+
+    Called by internal_client.get_employee_manager_email() which is used
+    by the email worker to CC the manager on REVIEW and REWARD notifications.
+    """
+    from fastapi import HTTPException
+
+    emp = await db.employees.find_unique(where={"employee_id": employee_id})
+    if emp is None:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if emp.manager_id is None:
+        raise HTTPException(status_code=404, detail="Employee has no manager")
+
+    manager = await db.employees.find_unique(
+        where={"employee_id": str(emp.manager_id)}
+    )
+    if manager is None:
+        raise HTTPException(status_code=404, detail="Manager not found")
+
+    return {"email": manager.email}
+
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 

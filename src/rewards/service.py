@@ -524,7 +524,7 @@ class RewardService:
             if employee_id:
                 await self._notif.create_notification(
                     employee_id=employee_id,
-                    title=f"You redeemed \"{reward_item.reward_name}\" 🎁",
+                    title=f"You redeemed \"{reward_item.reward_name}\"",
                     message=(
                         f"{request.points} points were used to redeem "
                         f"\"{reward_item.reward_name}\"."

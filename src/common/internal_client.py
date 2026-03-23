@@ -1,18 +1,18 @@
 """
-src/common/internal_client.py
-──────────────────────────────
+src/common/internal_client.py ──────────────────────────────
 Async HTTP client for internal service-to-service calls.
 
-Drop this in src/common/ — every service that needs to call another
-service imports from here.  All base URLs come from env vars so no
-hostnames are hardcoded.
+Drop this in src/common/ — every service that needs to call another service
+imports from here.
 
-Environment variables
-─────────────────────
+All base URLs come from env vars so no hostnames are hardcoded.
+
+Environment variables ─────────────────────
   WALLET_SERVICE_URL        http://wallet-service:8006
   RECOGNITION_SERVICE_URL   http://recognition-service:8005
   EMPLOYEES_SERVICE_URL     http://employee-service:8003
 """
+
 from __future__ import annotations
 
 import logging
@@ -203,3 +203,26 @@ async def get_departments_with_members() -> list:
                 username, designation_name}]}]
     """
     return await _get(f"{_EMPLOYEES_URL}/internal/employees/departments-with-members")
+
+
+async def get_employee_manager_email(employee_id: str) -> str | None:
+    """
+    GET /internal/employees/{employee_id}/manager-email
+
+    Returns the email address of the given employee's direct manager,
+    or None if the employee has no manager (manager_id IS NULL) or the
+    endpoint returns 404.
+
+    Expected success response: {"email": "manager@example.com"}
+    Expected no-manager response: 404  (treated as None, not an error)
+    """
+    try:
+        data = await _get(
+            f"{_EMPLOYEES_URL}/internal/employees/{employee_id}/manager-email"
+        )
+        return data.get("email") or None
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            # Employee exists but has no manager — caller should send without CC
+            return None
+        raise
