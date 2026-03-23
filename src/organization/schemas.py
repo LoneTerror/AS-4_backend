@@ -44,13 +44,16 @@ class DepartmentListItem(BaseModel):
     manager: Optional[ManagerBriefResponse] = None
     is_active: bool
     created_at: datetime
+    created_by: Optional[UUID] = None
+    created_by_info: Optional[ManagerBriefResponse] = None
+    updated_by: Optional[UUID] = None
+    updated_by_info: Optional[ManagerBriefResponse] = None
 
 
 class DepartmentListResponse(BaseModel):
     data: List[DepartmentListItem]
     pagination: PaginationMeta
-
-
+    
 class DepartmentDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     department_id: UUID
@@ -62,6 +65,10 @@ class DepartmentDetailResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
+    created_by: Optional[UUID] = None          
+    created_by_info: Optional[ManagerBriefResponse] = None   
+    updated_by: Optional[UUID] = None        
+    updated_by_info: Optional[ManagerBriefResponse] = None      
 
 
 class CreateDepartmentRequest(BaseModel):
@@ -99,6 +106,7 @@ class DepartmentCreatedResponse(BaseModel):
     is_active: bool
     created_at: datetime
     created_by: Optional[UUID] = None
+    created_by_info: Optional[ManagerBriefResponse] = None  
 
 
 class DepartmentUpdatedResponse(BaseModel):
@@ -111,6 +119,7 @@ class DepartmentUpdatedResponse(BaseModel):
     is_active: bool
     updated_at: Optional[datetime] = None
     updated_by: Optional[UUID] = None
+    updated_by_info: Optional[ManagerBriefResponse] = None   
 
 
 # ─────────────────────────────────────────────
