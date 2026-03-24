@@ -329,6 +329,8 @@ class RedeemRewardRequest(BaseModel):
 class MinimalCatalogInfo(BaseModel):
     reward_name: str
     reward_code: str
+    category_name: Optional[str] = None
+    category_code: Optional[str] = None
 
 class MinimalEmployeeInfo(BaseModel):
     username: str

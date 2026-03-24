@@ -663,22 +663,59 @@ class RewardService:
             take=size,
             order={"granted_at": "desc"},
             include={
-                "reward_catalog": True,
+                "reward_catalog": {"include": {"reward_categories": True}},
                 "employees_reward_history_granted_byToemployees": True,
             },
         )
 
         total_items = await self.db.reward_history.count(where=where_clause)
 
+        mapped_history = []
+        for item in history:
+            reward_catalog = None
+            if item.reward_catalog:
+                reward_catalog = schemas.MinimalCatalogInfo(
+                    reward_name=item.reward_catalog.reward_name,
+                    reward_code=item.reward_catalog.reward_code,
+                    category_name=(
+                        item.reward_catalog.reward_categories.category_name
+                        if item.reward_catalog.reward_categories
+                        else None
+                    ),
+                    category_code=(
+                        item.reward_catalog.reward_categories.category_code
+                        if item.reward_catalog.reward_categories
+                        else None
+                    ),
+                )
+
+            granted_by = None
+            if item.employees_reward_history_granted_byToemployees:
+                granted_by = schemas.MinimalEmployeeInfo(
+                    username=item.employees_reward_history_granted_byToemployees.username,
+                    email=item.employees_reward_history_granted_byToemployees.email,
+                )
+
+            mapped_history.append(
+                schemas.RewardHistoryResponse(
+                    history_id=item.history_id,
+                    points=item.points,
+                    comment=item.comment,
+                    granted_at=item.granted_at,
+                    reward_catalog=reward_catalog,
+                    employees_reward_history_granted_byToemployees=granted_by,
+                )
+            )
+
         result = {
-            "data":        [h.model_dump() for h in history],
+            "data":        [h.model_dump() for h in mapped_history],
             "total_items": total_items,
             "page":        page,
             "size":        size,
         }
 
         await cache_set(key, result, ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
-        return {**result, "data": history}
+        return {**result, "data": mapped_history}
 
     async def get_wallet_id_for_user(self, user_id: str) -> Optional[str]:
         """
