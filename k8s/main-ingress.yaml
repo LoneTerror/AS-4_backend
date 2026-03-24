@@ -87,10 +87,10 @@ spec:
             port:
               number: 8008
       # --- Catch-all Fallback (Dashboard) ---
-      - path: /
+      - path: /skooner
         pathType: Prefix
         backend:
           service:
             name: skooner
             port:
-              number: 80
+              number: 4654

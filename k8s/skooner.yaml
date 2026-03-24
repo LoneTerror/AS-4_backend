@@ -20,7 +20,7 @@ spec:
         livenessProbe:
           httpGet:
             scheme: HTTP
-            path: /
+            path: /skooner
             port: 4654
           initialDelaySeconds: 30
           timeoutSeconds: 30
@@ -31,7 +31,7 @@ metadata:
   name: skooner
 spec:
   ports:
-  - port: 80
+  - port: 4654
     targetPort: 4654
   selector:
     k8s-app: skooner
