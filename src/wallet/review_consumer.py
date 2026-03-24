@@ -148,21 +148,67 @@ async def _credit_points(review_id: str, receiver_id: str, raw_points: int, ip_a
         raw_points, wallet.wallet_id, review_id,
     )
 
+    # ── Notify receiver — triggers manager CC in the email worker ─────────────
+    try:
+        from src.notifications.service import NotificationService
+        from src.notifications.schemas import NotificationType
+        from src.notifications.redis_client import get_redis
+        try:
+            r = get_redis()
+        except RuntimeError:
+            r = None
+        notif_svc = NotificationService(db, redis=r)
+        notif = await notif_svc.create_notification(
+            employee_id=receiver_id,
+            title="A Performance Review Has Been Submitted",
+            message=(
+                "A new performance review has been submitted and recorded against "
+                "your employee profile on the Aabhar platform."
+            ),
+            type=NotificationType.REVIEW,
+        )
+        print(
+            f"REVIEW notification created: {notif['notification_id']} "
+            f"redis={'SET' if r is not None else 'NONE'}",
+            flush=True,
+        )
+        # If Redis is available, also directly enqueue so the worker picks it up
+        # immediately without waiting for recovery
+        if r is not None:
+            from src.notifications.cache import enqueue_notification
+            await enqueue_notification(r, str(notif["notification_id"]))
+            print(f"REVIEW notification enqueued: {notif['notification_id']}", flush=True)
+    except Exception as _notif_exc:
+        logger.warning(
+            "REVIEW notification failed for receiver %s (review %s) — "
+            "points were still credited: %s",
+            receiver_id, review_id, _notif_exc,
+            exc_info=True,
+        )
+        print(
+            f"REVIEW notification ERROR receiver={receiver_id} review={review_id}: {_notif_exc}",
+            flush=True,
+        )
+
 
 async def review_created_consumer_loop(shutdown_event: asyncio.Event) -> None:
     """
     Long-running coroutine — start as asyncio.Task in Wallet service lifespan.
     """
+    print("review.created consumer: loop entered", flush=True)
     from src.notifications.redis_client import get_redis
     try:
         r = get_redis()
     except RuntimeError:
         logger.warning("Redis not available — review.created consumer disabled")
+        print("review.created consumer: Redis unavailable — exiting", flush=True)
         return
 
+    print("review.created consumer: Redis OK, ensuring group...", flush=True)
     await _ensure_group(r)
     await _recover_pending(r)
     logger.info("review.created consumer started")
+    print("review.created consumer started ✅", flush=True)
 
     while not shutdown_event.is_set():
         try:

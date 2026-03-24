@@ -11,9 +11,9 @@ Tables seeded (in dependency order):
     transaction_types      — CREDIT, DEBIT, REWARD_REDEMPTION, BONUS, ADJUSTMENT, REVERSAL
     roles                  — SUPER_ADMIN, HR_ADMIN, MANAGER, EMPLOYEE, AUDITOR, TEAM_LEAD, DIRECTOR
     department_types       — TECH, MGMT, OPERATIONS, FINANCE, LEGAL, MARKETING
-    departments            — 10 departments
     designations           — 10 designations
     employees              — 30 employees (1 admin bootstrap + 29 rest)
+    departments            — 10 departments (seeded AFTER employees so manager_id FK is valid)
     wallets                — one per employee (auto via seed)
     employee_roles         — role assignments for all employees
     reward_categories      — GIFT_CARD, MERCHANDISE, EXPERIENCE, WELLNESS, LEARNING
@@ -71,10 +71,6 @@ TODAY = date.today()
 NOW = datetime.now(timezone.utc)
 
 # Sentinel UUID — must match migration.sql exactly.
-# This employee is the fallback "performed_by" for any DB write that happens
-# outside the application (migrations, DBA sessions, background jobs that
-# have no authenticated user).  It is created by the migration, NOT the seed,
-# because the triggers must already exist before any further seeding runs.
 SYSTEM_SENTINEL_ID = "00000000-0000-0000-0000-000000000000"
 
 
@@ -92,20 +88,16 @@ def dt(d: date) -> datetime:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Status Master ─────────────────────────────────────────────────────────────
-# IMPORTANT: S_EMP_ACTIVE must have entity_type='EMPLOYEE' and status_code='ACTIVE'
-# because the audit trigger migration looks for exactly that combination to assign
-# to the system sentinel employee row.
-S_EMP_ACTIVE     = "990e8400-e29b-41d4-a716-446655440000"   # EMPLOYEE / ACTIVE
-S_EMP_INACTIVE   = "990e8400-e29b-41d4-a716-446655440001"   # EMPLOYEE / INACTIVE
-S_TXN_PENDING    = "990e8400-e29b-41d4-a716-446655440002"   # TRANSACTION / PENDING
-S_TXN_APPROVED   = "990e8400-e29b-41d4-a716-446655440003"   # TRANSACTION / APPROVED
-S_TXN_REJECTED   = "990e8400-e29b-41d4-a716-446655440004"   # TRANSACTION / REJECTED
-S_TXN_SUCCESS    = "990e8400-e29b-41d4-a716-446655440007"   # TRANSACTION / SUCCESS
-S_TXN_FAILED     = "990e8400-e29b-41d4-a716-446655440008"   # TRANSACTION / FAILED
-S_REV_ACTIVE     = "990e8400-e29b-41d4-a716-446655440005"   # REVIEW / REVIEW_ACTIVE
-S_REV_DELETED    = "990e8400-e29b-41d4-a716-446655440006"   # REVIEW / REVIEW_DELETED
+S_EMP_ACTIVE     = "990e8400-e29b-41d4-a716-446655440000"
+S_EMP_INACTIVE   = "990e8400-e29b-41d4-a716-446655440001"
+S_TXN_PENDING    = "990e8400-e29b-41d4-a716-446655440002"
+S_TXN_APPROVED   = "990e8400-e29b-41d4-a716-446655440003"
+S_TXN_REJECTED   = "990e8400-e29b-41d4-a716-446655440004"
+S_TXN_SUCCESS    = "990e8400-e29b-41d4-a716-446655440007"
+S_TXN_FAILED     = "990e8400-e29b-41d4-a716-446655440008"
+S_REV_ACTIVE     = "990e8400-e29b-41d4-a716-446655440005"
+S_REV_DELETED    = "990e8400-e29b-41d4-a716-446655440006"
 
-# Convenience alias — use S_EMP_ACTIVE everywhere an employee status is needed
 S_ACTIVE   = S_EMP_ACTIVE
 S_INACTIVE = S_EMP_INACTIVE
 
@@ -248,36 +240,16 @@ CAT_CONF_001     = "ed0e8400-e29b-41d4-a716-44665544001e"
 async def clean_db():
     """
     Delete all seed data in the correct order, preserving the system sentinel.
-
-    The schema has circular created_by/updated_by FKs pointing back to
-    employees from almost every table (department_types, departments,
-    designations, roles, status_master, reward_categories, review_categories,
-    reward_catalog, wallets, employee_roles, etc.).
-
-    This means you CANNOT simply delete employees first — Postgres will refuse
-    because those other tables still reference employee UUIDs via created_by.
-
-    Correct approach:
-      Step 1 — NULL out all created_by/updated_by columns that point to
-                employees, across every table that has them.  This breaks the
-                circular references so employees can be deleted.
-      Step 2 — Delete leaf tables first (no other table FKs into them).
-      Step 3 — Delete employees (non-sentinel only).
-      Step 4 — Delete the remaining lookup tables (departments, designations,
-                department_types, status_master) which are now safe.
-
-    NOTE: status_master, departments, designations, and department_types are
-    seeded with upsert, so even if Step 4 fails because the sentinel still
-    holds FK references to them, the seed will not crash — upsert will just
-    update the existing rows instead of inserting new ones.
     """
     print("🧹 Cleaning existing data...")
 
     # ── Step 1: NULL out all created_by / updated_by back-references ──────────
+    # Null out each column individually so a missing column (e.g. manager_id
+    # before prisma db push) doesn't block the other columns from being cleared.
     null_refs = [
         ("audit_log",              ["performed_by"]),
         ("department_types",       ["created_by", "updated_by"]),
-        ("departments",            ["created_by", "updated_by"]),
+        ("departments",            ["created_by", "updated_by", "manager_id"]),
         ("designations",           ["created_by", "updated_by"]),
         ("roles",                  ["created_by", "updated_by"]),
         ("route_permissions",      ["created_by", "updated_by"]),
@@ -297,13 +269,20 @@ async def clean_db():
     for table, cols in null_refs:
         if not cols:
             continue
+        # Try all columns together first (fast path)
         set_clause = ", ".join(f"{c} = NULL" for c in cols)
         try:
             await db.execute_raw(f"UPDATE {table} SET {set_clause}")
-        except Exception as ex:
-            print(f"   ⚠ Could not null refs on {table}: {ex}")
+        except Exception:
+            # Fall back: null each column individually so one missing column
+            # (e.g. manager_id before prisma db push) doesn't block the others
+            for col in cols:
+                try:
+                    await db.execute_raw(f"UPDATE {table} SET {col} = NULL")
+                except Exception as col_ex:
+                    print(f"   ⚠ Could not null {table}.{col}: {col_ex}")
 
-    print("   ✓ Nulled all created_by/updated_by back-references")
+    print("   ✓ Nulled all created_by/updated_by/manager_id back-references")
 
     # ── Step 2: Delete leaf tables (strict dependency order) ──────────────────
     leaf_deletes = [
@@ -341,12 +320,7 @@ async def clean_db():
         print(f"   ⚠ Could not delete employees: {ex}")
 
     # ── Step 4: Delete lookup tables ──────────────────────────────────────────
-    # These may fail if the sentinel employee still holds FK references to them
-    # (status_id, designation_id, department_id are non-nullable on employees).
-    # That is fine — seed_status_master, seed_designations, seed_departments,
-    # and seed_department_types all use upsert, so they will update existing
-    # rows rather than failing on duplicate key violations.
-    for table in ["designations", "departments", "department_types", "status_master"]:
+    for table in ["departments", "designations", "department_types", "status_master"]:
         try:
             await db.execute_raw(f"DELETE FROM {table}")
         except Exception as ex:
@@ -361,24 +335,14 @@ async def clean_db():
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_status_master():
     print("📋 Seeding status_master...")
-    # ┌─────────────────────────────────────────────────────────────────────┐
-    # │  CRITICAL FOR AUDIT MIGRATION                                       │
-    # │  S_EMP_ACTIVE MUST have entity_type='EMPLOYEE' status_code='ACTIVE' │
-    # │  The migration.sql sentinel INSERT queries this exact combination.   │
-    # └─────────────────────────────────────────────────────────────────────┘
-    # Uses upsert so re-runs are idempotent even when the sentinel employee
-    # holds a non-nullable FK into status_master preventing deletion.
     rows = [
-        # Employee statuses — entity_type = 'EMPLOYEE'
         (S_EMP_ACTIVE,   "ACTIVE",         "Active",      "EMPLOYEE",    "Employee is active and operational"),
         (S_EMP_INACTIVE, "INACTIVE",       "Inactive",    "EMPLOYEE",    "Employee is inactive or disabled"),
-        # Transaction statuses — entity_type = 'TRANSACTION'
         (S_TXN_PENDING,  "PENDING",        "Pending",     "TRANSACTION", "Transaction awaiting approval"),
         (S_TXN_APPROVED, "APPROVED",       "Approved",    "TRANSACTION", "Transaction has been approved"),
         (S_TXN_REJECTED, "REJECTED",       "Rejected",    "TRANSACTION", "Transaction has been rejected"),
         (S_TXN_SUCCESS,  "SUCCESS",        "Success",     "TRANSACTION", "Transaction completed successfully"),
         (S_TXN_FAILED,   "FAILED",         "Failed",      "TRANSACTION", "Transaction failed to complete"),
-        # Review statuses — entity_type = 'REVIEW'
         (S_REV_ACTIVE,   "REVIEW_ACTIVE",  "Active",      "REVIEW",      "Review is active and visible"),
         (S_REV_DELETED,  "REVIEW_DELETED", "Deleted",     "REVIEW",      "Review has been soft-deleted"),
     ]
@@ -465,8 +429,6 @@ async def seed_roles():
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_department_types():
     print("🏗️  Seeding department_types...")
-    # Uses upsert — sentinel employee may hold an indirect FK via departments
-    # → department_types, preventing deletion of department_types rows.
     rows = [
         (DT_TECH,      "Technology",  "TECH"),
         (DT_MGMT,      "Management",  "MGMT"),
@@ -496,53 +458,10 @@ async def seed_department_types():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DEPARTMENTS
-# ─────────────────────────────────────────────────────────────────────────────
-async def seed_departments():
-    print("🏢 Seeding departments...")
-    # Uses upsert — sentinel employee holds a non-nullable FK into departments,
-    # so the DELETE in clean_db may have been skipped for this table.
-    rows = [
-        (D_ENG,       "Engineering",             "ENG",       DT_TECH),
-        (D_PLATFORM,  "Platform Engineering",    "PLATFORM",  DT_TECH),
-        (D_QA,        "Quality Assurance",       "QA",        DT_TECH),
-        (D_DEVOPS,    "DevOps & Infrastructure", "DEVOPS",    DT_TECH),
-        (D_HR,        "Human Resources",         "HR",        DT_MGMT),
-        (D_EXEC,      "Executive",               "EXEC",      DT_MGMT),
-        (D_OPS,       "Operations",              "OPS",       DT_OPS),
-        (D_FINANCE,   "Finance & Accounting",    "FINANCE",   DT_FINANCE),
-        (D_LEGAL,     "Legal & Compliance",      "LEGAL",     DT_LEGAL),
-        (D_MARKETING, "Marketing & Growth",      "MARKETING", DT_MARKETING),
-    ]
-    for dept_id, name, code, type_id in rows:
-        await db.departments.upsert(
-            where={"department_id": dept_id},
-            data={
-                "create": {
-                    "department_id":      dept_id,
-                    "department_name":    name,
-                    "department_code":    code,
-                    "department_type_id": type_id,
-                    "updated_at":         NOW,
-                },
-                "update": {
-                    "department_name":    name,
-                    "department_code":    code,
-                    "department_type_id": type_id,
-                    "updated_at":         NOW,
-                },
-            }
-        )
-    print(f"   ✅ Seeded {len(rows)} departments\n")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # DESIGNATIONS
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_designations():
     print("🎖️  Seeding designations...")
-    # Uses upsert — sentinel employee holds a non-nullable FK into designations,
-    # so the DELETE in clean_db may have been skipped for this table.
     rows = [
         (DES_SYS_ADMIN, "System Administrator", "SYS_ADMIN", 0, "Top-level system administrator with full access"),
         (DES_DIRECTOR,  "Director",             "DIRECTOR",  1, "Senior director overseeing a business unit"),
@@ -583,12 +502,12 @@ async def seed_designations():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ADMIN EMPLOYEE
+# ADMIN EMPLOYEE  (bootstrap — seeded before other employees)
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_admin_employee():
     print("👤 Bootstrapping admin employee...")
     hashed = hash_password(TEST_PASSWORD)
-    await db.employees.create(data={
+    emp_data = {
         "employee_id":     EMP_ADMIN,
         "username":        "admin.user",
         "email":           "admin@company.com",
@@ -601,18 +520,101 @@ async def seed_admin_employee():
         "created_by":      EMP_ADMIN,
         "updated_by":      EMP_ADMIN,
         "updated_at":      NOW,
-    })
-    await db.wallets.create(data={
-        "employee_id":         EMP_ADMIN,
-        "available_points":    999999,
-        "redeemed_points":     0,
-        "total_earned_points": 999999,
-        "version":             1,
-        "created_by":          EMP_ADMIN,
-        "updated_by":          EMP_ADMIN,
-        "updated_at":          NOW,
-    })
+    }
+    await db.employees.upsert(
+        where={"employee_id": EMP_ADMIN},
+        data={
+            "create": emp_data,
+            "update": {
+                "username":        "admin.user",
+                "email":           "admin@company.com",
+                "password_hash":   hashed,
+                "designation_id":  DES_SYS_ADMIN,
+                "department_id":   D_HR,
+                "status_id":       S_ACTIVE,
+                "updated_by":      EMP_ADMIN,
+                "updated_at":      NOW,
+            },
+        }
+    )
+
+    # Upsert wallet — admin may already have one if clean_db couldn't delete it
+    existing_wallet = await db.wallets.find_unique(where={"employee_id": EMP_ADMIN})
+    if existing_wallet:
+        await db.wallets.update(
+            where={"employee_id": EMP_ADMIN},
+            data={
+                "available_points":    999999,
+                "redeemed_points":     0,
+                "total_earned_points": 999999,
+                "version":             1,
+                "updated_by":          EMP_ADMIN,
+                "updated_at":          NOW,
+            }
+        )
+    else:
+        await db.wallets.create(data={
+            "employee_id":         EMP_ADMIN,
+            "available_points":    999999,
+            "redeemed_points":     0,
+            "total_earned_points": 999999,
+            "version":             1,
+            "created_by":          EMP_ADMIN,
+            "updated_by":          EMP_ADMIN,
+            "updated_at":          NOW,
+        })
     print(f"   ✅ admin.user  (system bootstrap)\n")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEPARTMENTS  (seeded AFTER admin employee so EMP_ADMIN FK is valid)
+# ─────────────────────────────────────────────────────────────────────────────
+async def seed_departments():
+    print("🏢 Seeding departments...")
+    # We use raw SQL (ON CONFLICT DO UPDATE) instead of the Prisma upsert here
+    # because:
+    #   1. manager_id may not exist in the generated Prisma client yet if
+    #      `prisma db push` hasn't been run — passing it causes a type error.
+    #   2. department_type_id is a required relation field; Prisma Python expects
+    #      a connect block in upsert create, but raw SQL takes the plain UUID.
+    # manager_id is set later in update_department_managers() once all employees
+    # are in the DB.
+    rows = [
+        # (dept_id,    name,                        code,        type_id)
+        (D_ENG,       "Engineering",                "ENG",       DT_TECH),
+        (D_PLATFORM,  "Platform Engineering",       "PLATFORM",  DT_TECH),
+        (D_QA,        "Quality Assurance",          "QA",        DT_TECH),
+        (D_DEVOPS,    "DevOps & Infrastructure",    "DEVOPS",    DT_TECH),
+        (D_HR,        "Human Resources",            "HR",        DT_MGMT),
+        (D_EXEC,      "Executive",                  "EXEC",      DT_MGMT),
+        (D_OPS,       "Operations",                 "OPS",       DT_OPS),
+        (D_FINANCE,   "Finance & Accounting",       "FINANCE",   DT_FINANCE),
+        (D_LEGAL,     "Legal & Compliance",         "LEGAL",     DT_LEGAL),
+        (D_MARKETING, "Marketing & Growth",         "MARKETING", DT_MARKETING),
+    ]
+    for dept_id, name, code, type_id in rows:
+        # Escape single quotes in name (safety for raw SQL)
+        safe_name = name.replace("'", "''")
+        await db.execute_raw(f"""
+            INSERT INTO departments
+                (department_id, department_name, department_code,
+                 department_type_id, is_active,
+                 created_by, updated_by, updated_at, created_at)
+            VALUES
+                ('{dept_id}', '{safe_name}', '{code}',
+                 '{type_id}', true,
+                 '{EMP_ADMIN}', '{EMP_ADMIN}', NOW(), NOW())
+            ON CONFLICT (department_id) DO UPDATE SET
+                department_name    = EXCLUDED.department_name,
+                department_code    = EXCLUDED.department_code,
+                department_type_id = EXCLUDED.department_type_id,
+                is_active          = EXCLUDED.is_active,
+                created_by         = EXCLUDED.created_by,
+                updated_by         = EXCLUDED.updated_by,
+                updated_at         = EXCLUDED.updated_at
+        """)
+        print(f"   ✅ {code:12s}  is_active=True  created_by=admin.user")
+    print()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -623,9 +625,9 @@ async def seed_employees():
     hashed = hash_password(TEST_PASSWORD)
 
     employees = [
-        (EMP_JANE,      "jane.smith",         "jane.smith@company.com",         DES_ENG_MGR,   D_ENG,       None,      date(1988, 4, 12), date(2019, 3,  1), 8000,  500,  8500,  3),
-        (EMP_ALICE,     "alice.wong",         "alice.wong@company.com",         DES_DIRECTOR,  D_EXEC,      None,      date(1982, 9,  5), date(2017, 6, 15), 12000, 1000, 13000, 5),
-        (EMP_GRACE,     "grace.hopper",       "grace.hopper@company.com",       DES_HR_MGR,    D_HR,        None,      date(1986, 11, 3), date(2018, 2, 10), 7000,  300,  7300,  4),
+        (EMP_JANE,      "jane.smith",         "jane.smith@company.com",         DES_ENG_MGR,   D_ENG,       EMP_ALICE, date(1988, 4, 12), date(2019, 3,  1), 8000,  500,  8500,  3),
+        (EMP_ALICE,     "alice.wong",         "alice.wong@company.com",         DES_DIRECTOR,  D_EXEC,      EMP_ADMIN, date(1982, 9,  5), date(2017, 6, 15), 12000, 1000, 13000, 5),
+        (EMP_GRACE,     "grace.hopper",       "grace.hopper@company.com",       DES_HR_MGR,    D_HR,        EMP_ALICE, date(1986, 11, 3), date(2018, 2, 10), 7000,  300,  7300,  4),
         (EMP_HENRY,     "henry.ford",         "henry.ford@company.com",         DES_TEAM_LEAD, D_ENG,       EMP_JANE,  date(1990, 7, 22), date(2020, 5,  1), 5000,  200,  5200,  2),
         (EMP_IVY,       "ivy.league",         "ivy.league@company.com",         DES_QA_LEAD,   D_QA,        EMP_JANE,  date(1991, 1, 30), date(2021, 1, 20), 4500,  100,  4600,  2),
         (EMP_JAMES,     "james.bond",         "james.bond@company.com",         DES_TEAM_LEAD, D_PLATFORM,  EMP_JANE,  date(1989, 12, 7), date(2020, 8,  1), 6000,  400,  6400,  3),
@@ -647,18 +649,23 @@ async def seed_employees():
         (EMP_QUINN,     "quinn.harley",       "quinn.harley@company.com",       DES_QA_ENG,    D_QA,        EMP_IVY,   date(1998, 5, 11), date(2023, 5,  1), 1400,  50,   1450,  2),
         (EMP_RACHEL,    "rachel.green",       "rachel.green@company.com",       DES_HR_EXEC,   D_HR,        EMP_GRACE, date(1992, 10,22), date(2022, 9,  1), 1600,  0,    1600,  1),
         (EMP_SAM,       "sam.winchester",     "sam.winchester@company.com",     DES_HR_EXEC,   D_HR,        EMP_GRACE, date(1996, 1, 19), date(2023, 1, 10), 1300,  100,  1400,  2),
-        (EMP_TINA,      "tina.turner",        "tina.turner@company.com",        DES_SR_DEV,    D_OPS,       None,      date(1990, 11,26), date(2021, 4, 15), 2400,  200,  2600,  3),
-        (EMP_UMAR,      "umar.farooq",        "umar.farooq@company.com",        DES_DEV,       D_FINANCE,   None,      date(1994, 8,  7), date(2022, 8,  1), 1700,  0,    1700,  1),
-        (EMP_VERA,      "vera.farmiga",       "vera.farmiga@company.com",       DES_DEV,       D_LEGAL,     None,      date(1993, 4,  6), date(2023, 2,  1), 1500,  0,    1500,  1),
-        (EMP_WILL,      "will.smith",         "will.smith@company.com",         DES_SR_DEV,    D_MARKETING, None,      date(1991, 9, 25), date(2021, 12, 1), 2600,  300,  2900,  3),
+        (EMP_TINA,      "tina.turner",        "tina.turner@company.com",        DES_SR_DEV,    D_OPS,       EMP_ALICE, date(1990, 11,26), date(2021, 4, 15), 2400,  200,  2600,  3),
+        (EMP_UMAR,      "umar.farooq",        "umar.farooq@company.com",        DES_DEV,       D_FINANCE,   EMP_ALICE, date(1994, 8,  7), date(2022, 8,  1), 1700,  0,    1700,  1),
+        (EMP_VERA,      "vera.farmiga",       "vera.farmiga@company.com",       DES_DEV,       D_LEGAL,     EMP_ALICE, date(1993, 4,  6), date(2023, 2,  1), 1500,  0,    1500,  1),
+        (EMP_WILL,      "will.smith",         "will.smith@company.com",         DES_SR_DEV,    D_MARKETING, EMP_ALICE, date(1991, 9, 25), date(2021, 12, 1), 2600,  300,  2900,  3),
         (EMP_XENA,      "xena.warrior",       "xena.warrior@company.com",       DES_DEV,       D_ENG,       EMP_HENRY, date(1998, 3, 14), date(2024, 4,  1), 800,   0,    800,   1),
     ]
 
+    # ── Pass 1: insert every employee WITHOUT manager_id ─────────────────────
+    # manager_id is a self-referential FK on employees. Setting it during insert
+    # fails if the referenced manager hasn't been inserted yet (e.g. EMP_JANE
+    # references EMP_ALICE who is row 2 in the list). We skip it here and
+    # backfill all manager IDs in Pass 2 once every employee exists.
     for (
         emp_id, username, email, desig_id, dept_id,
         manager_id, dob, doj, avail, redeemed, total, version
     ) in employees:
-        data = {
+        await db.employees.create(data={
             "employee_id":     emp_id,
             "username":        username,
             "email":           email,
@@ -671,11 +678,7 @@ async def seed_employees():
             "created_by":      EMP_ADMIN,
             "updated_by":      EMP_ADMIN,
             "updated_at":      NOW,
-        }
-        if manager_id:
-            data["manager_id"] = manager_id
-
-        await db.employees.create(data=data)
+        })
         await db.wallets.create(data={
             "employee_id":         emp_id,
             "available_points":    avail,
@@ -688,21 +691,74 @@ async def seed_employees():
         })
         print(f"   ✅ {username:25s}  wallet: {avail:>6} pts")
 
+    # ── Pass 2: backfill manager_id now that all employees exist ──────────────
+    print("   🔧 Backfilling employee manager_id...")
+    for (
+        emp_id, username, email, desig_id, dept_id,
+        manager_id, dob, doj, avail, redeemed, total, version
+    ) in employees:
+        if manager_id:
+            await db.employees.update(
+                where={"employee_id": emp_id},
+                data={"manager_id": manager_id},
+            )
+
     print()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BACKFILL created_by / updated_by on early tables
+# UPDATE DEPARTMENT MANAGERS  (runs after all employees are seeded)
 # ─────────────────────────────────────────────────────────────────────────────
-async def backfill_audit_fields():
-    print("🔧 Backfilling created_by / updated_by on early tables...")
-    for table in ["department_types", "departments", "designations"]:
+async def update_department_managers():
+    """
+    Now that all employees exist, set the real manager on each department.
+    Also backfills created_by / updated_by on department_types and designations.
+    """
+    print("🔧 Setting department managers + backfilling audit fields...")
+
+    manager_assignments = [
+        (D_ENG,       EMP_JANE),    # Jane Smith    → Engineering
+        (D_PLATFORM,  EMP_JAMES),   # James Bond    → Platform Engineering
+        (D_QA,        EMP_IVY),     # Ivy League    → Quality Assurance
+        (D_DEVOPS,    EMP_JANE),    # Jane Smith    → DevOps & Infrastructure
+        (D_HR,        EMP_GRACE),   # Grace Hopper  → Human Resources
+        (D_EXEC,      EMP_ALICE),   # Alice Wong    → Executive
+        (D_OPS,       EMP_TINA),    # Tina Turner   → Operations
+        (D_FINANCE,   EMP_ALICE),   # Alice Wong    → Finance & Accounting (director oversight)
+        (D_LEGAL,     EMP_ALICE),   # Alice Wong    → Legal & Compliance   (director oversight)
+        (D_MARKETING, EMP_WILL),    # Will Smith    → Marketing & Growth
+    ]
+
+    manager_col_exists = True
+    try:
+        await db.execute_raw("SELECT manager_id FROM departments LIMIT 1")
+    except Exception:
+        manager_col_exists = False
+        print("   ⚠ manager_id column not found — run 'prisma db push' then re-seed to set managers")
+
+    if manager_col_exists:
+        for dept_id, manager_id in manager_assignments:
+            await db.departments.update(
+                where={"department_id": dept_id},
+                data={
+                    "manager_id": manager_id,
+                    "updated_by": EMP_ADMIN,
+                    "updated_at": NOW,
+                },
+            )
+        print(f"   ✅ Updated managers for {len(manager_assignments)} departments")
+    else:
+        print(f"   ⏭  Skipped manager assignments (column missing)")
+
+    # Backfill created_by / updated_by on department_types and designations
+    for table in ["department_types", "designations"]:
         await db.execute_raw(
             f"UPDATE {table} "
             f"SET created_by = '{EMP_ADMIN}', updated_by = '{EMP_ADMIN}' "
             f"WHERE created_by IS NULL"
         )
-        print(f"   ✅ {table}")
+        print(f"   ✅ Backfilled audit fields on {table}")
+
     print()
 
 
@@ -1158,12 +1214,12 @@ async def seed_audit_log():
         ("transactions",      uid(),          "INSERT", None,                                        {"amount": 200, "type": "BONUS", "employee": "mrinmoy.kashyap"},             EMP_ADMIN),
         ("transactions",      uid(),          "UPDATE", {"status": "PENDING"},                       {"status": "APPROVED"},                                                      EMP_ADMIN),
         ("departments",       D_ENG,          "UPDATE", {"department_name": "Software Engineering"}, {"department_name": "Engineering"},                                          EMP_ADMIN),
+        ("departments",       D_ENG,          "UPDATE", {"is_active": True},                         {"is_active": False},                                                        EMP_ADMIN),
         ("designations",      DES_SR_DEV,     "UPDATE", {"level": 3},                                {"level": 4},                                                                EMP_ADMIN),
         ("review_categories", RC_OWNERSHIP,   "UPDATE", {"multiplier": "1.1000"},                    {"multiplier": "1.2000"},                                                    EMP_ADMIN),
         ("review_categories", RC_INNOVATION,  "UPDATE", {"multiplier": "1.2000"},                    {"multiplier": "1.3000"},                                                    EMP_ADMIN),
         ("reward_history",    uid(),          "INSERT", None,                                        {"reward": "Company Hoodie", "points": 400, "employee": "john.doe"},         EMP_ADMIN),
         ("reward_history",    uid(),          "INSERT", None,                                        {"reward": "AWS exam voucher", "points": 1200, "employee": "swarup.das"},    EMP_ADMIN),
-        ("employees",         EMP_XENA,       "INSERT", None,                                        {"username": "xena.warrior", "status": "ACTIVE"},                            EMP_ADMIN),
     ]
 
     for table, record_id, operation, old_vals, new_vals, performer in entries:
@@ -1196,15 +1252,26 @@ async def main():
 
         await clean_db()
 
-        await seed_status_master()        # upsert — safe even if sentinel holds FK
+        # ── Lookup tables that don't need employees yet ────────────────────────
+        await seed_status_master()          # upsert — safe even if sentinel holds FK
         await seed_transaction_types()
         await seed_roles()
-        await seed_department_types()     # upsert — safe even if sentinel holds FK
-        await seed_departments()          # upsert — safe even if sentinel holds FK
-        await seed_designations()         # upsert — safe even if sentinel holds FK
+        await seed_department_types()       # upsert — safe even if sentinel holds FK
+        await seed_designations()           # upsert — safe even if sentinel holds FK
+
+        # ── Bootstrap admin first so EMP_ADMIN FK is valid for departments ────
         await seed_admin_employee()
+
+        # ── Departments seeded AFTER admin so created_by / manager_id are valid
+        await seed_departments()
+
+        # ── Remaining employees (managers seeded here too) ────────────────────
         await seed_employees()
-        await backfill_audit_fields()
+
+        # ── Now all employees exist — set real managers + backfill audit fields
+        await update_department_managers()
+
+        # ── Everything else ───────────────────────────────────────────────────
         await seed_employee_roles()
         await seed_review_categories()
         await seed_reward_categories()

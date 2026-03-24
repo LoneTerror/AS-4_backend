@@ -9,6 +9,27 @@ Design language: Authentic HDFC Bank transactional email style.
   - Security/info banner at the bottom (teal/info tone)
   - Minimal padding, no decorative elements
   - Footer: thin divider → small print → copyright line
+
+Manager CC behaviour
+────────────────────
+  REVIEW and REWARD notification emails are CC'd to the employee's direct
+  manager.  The manager's address is resolved lazily via
+  ``internal_client.get_employee_manager_email`` and is injected as the
+  ``cc_emails`` argument to ``send_notification_email``.  If no manager
+  address is found the email is sent without a CC — it is never suppressed.
+
+  Callers that already know the employee ID should pass it; the mailer then
+  resolves the manager address internally so call-sites stay clean:
+
+      await email_sender.send_notification_email(
+          to_email   = employee.email,
+          subject    = subject,
+          body_html  = html,
+          type_      = "REVIEW",
+          employee_id = employee.employee_id,   # ← triggers manager CC
+      )
+
+  Alternatively, callers may pass ``cc_emails`` directly (e.g. in tests).
 """
 
 from __future__ import annotations
@@ -21,7 +42,13 @@ from email.mime.text import MIMEText
 
 import aiosmtplib
 
+from src.common import internal_client
+
 logger = logging.getLogger(__name__)
+
+
+# ── Types that trigger a manager CC ──────────────────────────────────────────
+_MANAGER_CC_TYPES: frozenset[str] = frozenset({"REVIEW", "REWARD"})
 
 
 # ── Brand palette (HDFC-authentic) ────────────────────────────────────────────
@@ -101,31 +128,103 @@ class EmailSender:
         subject: str,
         body_html: str,
         body_text: str | None = None,
+        # ── Manager CC ────────────────────────────────────────────────────────
+        type_: str | None = None,
+        employee_id: str | None = None,
+        cc_emails: list[str] | None = None,
     ) -> None:
+        """
+        Send a notification email, optionally CC'ing the employee's manager.
+
+        Manager CC is triggered automatically when:
+          - ``type_`` is "REVIEW" or "REWARD", AND
+          - ``employee_id`` is provided (used to look up the manager's address).
+
+        ``cc_emails`` can be passed directly to override / supplement the
+        automatic lookup (e.g. in unit tests or when the caller has already
+        resolved the address).
+
+        If the manager lookup returns None (no manager configured) the email
+        is sent without CC — it is never suppressed.
+        """
         if to_email.lower() == self._cfg.from_email.lower():
             logger.info("Email suppressed — recipient matches SMTP sender.")
             return
+
+        # Resolve manager CC address when needed
+        resolved_cc: list[str] = list(cc_emails or [])
+
+        if (
+            type_ in _MANAGER_CC_TYPES
+            and employee_id
+            and not resolved_cc          # skip lookup if caller supplied cc_emails
+        ):
+            try:
+                manager_email = await internal_client.get_employee_manager_email(
+                    employee_id
+                )
+                if manager_email:
+                    resolved_cc.append(manager_email)
+                    logger.debug(
+                        "Manager CC resolved for employee %s: %s",
+                        employee_id,
+                        manager_email,
+                    )
+                else:
+                    logger.debug(
+                        "No manager found for employee %s — sending without CC.",
+                        employee_id,
+                    )
+            except Exception:
+                # Never let a failed CC lookup block the primary email.
+                logger.warning(
+                    "Manager email lookup failed for employee %s — sending without CC.",
+                    employee_id,
+                    exc_info=True,
+                )
+
         msg = self._build_message(
             to_email=to_email,
             subject=subject,
             body_html=body_html,
             body_text=body_text or _html_to_plain(body_html),
+            cc_emails=resolved_cc,
         )
         await self._send(msg)
-        logger.info("Email sent to %s | subject=%r", to_email, subject)
+        logger.info(
+            "Email sent to %s%s | subject=%r",
+            to_email,
+            f" (CC: {', '.join(resolved_cc)})" if resolved_cc else "",
+            subject,
+        )
 
     def _build_message(
-        self, *, to_email: str, subject: str, body_html: str, body_text: str
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        body_html: str,
+        body_text: str,
+        cc_emails: list[str] | None = None,
     ) -> MIMEMultipart:
         msg            = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = f"Aabhar Recognition Platform <{self._cfg.from_email}>"
         msg["To"]      = to_email
+        if cc_emails:
+            msg["Cc"]  = ", ".join(cc_emails)
         msg.attach(MIMEText(body_text, "plain", "utf-8"))
         msg.attach(MIMEText(body_html, "html",  "utf-8"))
         return msg
 
     async def _send(self, message: MIMEMultipart) -> None:
+        # Collect all recipients (To + Cc) so aiosmtplib delivers to everyone
+        recipients: list[str] = [message["To"]]
+        if message["Cc"]:
+            recipients.extend(
+                addr.strip() for addr in message["Cc"].split(",") if addr.strip()
+            )
+
         kw: dict = dict(
             hostname=self._cfg.host,
             port=self._cfg.port,
@@ -137,7 +236,7 @@ class EmailSender:
         else:
             kw["start_tls"] = self._cfg.use_tls
         async with aiosmtplib.SMTP(**kw) as smtp:
-            await smtp.send_message(message)
+            await smtp.send_message(message, recipients=recipients)
 
 
 # ── Shared HTML shell ─────────────────────────────────────────────────────────
@@ -322,17 +421,18 @@ def build_notification_html(*, title: str, message: str, type_: str) -> str:
     label   = _TYPE_LABEL.get(type_, type_.replace("_", " ").title())
 
     if type_ == "REVIEW":
-        display_title   = "A Performance Review Has Been Submitted"
+        display_title   = "Your Performance Review Is Ready"
         display_message = (
-            "A new performance review has been submitted and recorded against your "
-            "employee profile on the Aabhar platform. In the interest of "
-            "confidentiality, the full content of this review is not included "
-            "in this communication."
+            "Your manager has shared a performance review on your profile. "
+            "This is a moment to pause, reflect on the work you have put in, "
+            "and hear how your contributions are being seen by those around you. "
+            "We hope the feedback feels encouraging and gives you clarity on "
+            "where you are headed."
         )
         action_text = (
-            "Please log in to the Aabhar Employee Recognition &amp; Rewards Platform "
-            "at your earliest convenience to access the full review and take any "
-            "action that may be required."
+            "Your review is available on the Aabhar platform whenever you are ready. "
+            "Take your time going through it, and feel free to add your own "
+            "response or acknowledgement once you have had a chance to reflect."
         )
     else:
         display_title   = title

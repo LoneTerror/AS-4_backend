@@ -158,10 +158,9 @@ async def create_transaction(
 
         try:
             direction = "credited to" if txn_type.is_credit else "debited from"
-            emoji     = "💰" if txn_type.is_credit else "💸"
             await _get_notif().create_notification(
                 employee_id=wallet.employee_id,
-                title=f"{amount} points {direction} your wallet {emoji}",
+                title=f"{amount} points {direction} your wallet",
                 message=(
                     f"{amount} points have been {direction} your wallet "
                     f"via {txn_type.type_name}."

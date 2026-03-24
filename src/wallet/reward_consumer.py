@@ -151,6 +151,31 @@ async def _deduct_points(
     )
     print(f"reward.redeemed: deducted {points} pts wallet={wallet_id} redemption={history_id} ✅", flush=True)
 
+    # ── Notify employee — triggers manager CC in the email worker ─────────────
+    try:
+        from src.notifications.service import NotificationService
+        from src.notifications.schemas import NotificationType
+        from src.notifications.redis_client import get_redis
+        try:
+            r = get_redis()
+        except RuntimeError:
+            r = None
+        await NotificationService(db, redis=r).create_notification(
+            employee_id=wallet.employee_id,
+            title=f"Reward Redeemed — {points} points deducted",
+            message=(
+                f"{points} points have been deducted from your wallet "
+                f"for reward redemption (Ref: {history_id})."
+            ),
+            type=NotificationType.REWARD,
+        )
+    except Exception:
+        logger.warning(
+            "REWARD notification failed for wallet %s (redemption %s) — "
+            "points were still deducted",
+            wallet_id, history_id,
+        )
+
 
 async def reward_redeemed_consumer_loop(shutdown_event: asyncio.Event) -> None:
     from src.notifications.redis_client import get_redis

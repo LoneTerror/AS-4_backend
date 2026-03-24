@@ -46,7 +46,7 @@ async def list_departments(
     if cached is not None:
         return schemas.DepartmentListResponse(**cached)
 
-    where: dict  = {}
+    where: dict = {}
     and_conditions = []
     if is_active is not None:
         and_conditions.append({"is_active": is_active})
@@ -70,6 +70,19 @@ async def list_departments(
         include={"department_types": True},
     )
 
+    # Bulk-resolve creator + updater employees in one query
+    actor_ids = list({
+        dept.created_by for dept in departments if dept.created_by
+    } | {
+        dept.updated_by for dept in departments if dept.updated_by
+    })
+    actors_map: dict = {}
+    if actor_ids:
+        actors = await db.employees.find_many(
+            where={"employee_id": {"in": actor_ids}}
+        )
+        actors_map = {str(e.employee_id): e for e in actors}
+
     data = []
     for dept in departments:
         dept_type = None
@@ -79,14 +92,30 @@ async def list_departments(
                 type_name=dept.department_types.type_name,
                 type_code=dept.department_types.type_code,
             )
+
+        creator = actors_map.get(str(dept.created_by)) if dept.created_by else None
+        updater = actors_map.get(str(dept.updated_by)) if dept.updated_by else None
+
         data.append(schemas.DepartmentListItem(
             department_id=dept.department_id,
             department_name=dept.department_name,
             department_code=dept.department_code,
             department_type=dept_type,
             manager=None,
-            is_active=True,
+            is_active=dept.is_active,
             created_at=dept.created_at,
+            created_by=dept.created_by,
+            created_by_info=schemas.ManagerBriefResponse(
+                employee_id=creator.employee_id,
+                username=creator.username,
+                email=creator.email,
+            ) if creator else None,
+            updated_by=dept.updated_by,
+            updated_by_info=schemas.ManagerBriefResponse(
+                employee_id=updater.employee_id,
+                username=updater.username,
+                email=updater.email,
+            ) if updater else None,
         ))
 
     result = schemas.DepartmentListResponse(
@@ -112,6 +141,8 @@ async def get_department_detail(department_id: str) -> schemas.DepartmentDetailR
         include={
             "department_types": True,
             "employees_employees_department_idTodepartments": True,
+            "employees_departments_created_byToemployees": True,
+            "employees_departments_updated_byToemployees": True,
         },
     )
     if not dept:
@@ -126,16 +157,31 @@ async def get_department_detail(department_id: str) -> schemas.DepartmentDetailR
         )
 
     emp_list = dept.employees_employees_department_idTodepartments or []
-    result   = schemas.DepartmentDetailResponse(
+    creator  = dept.employees_departments_created_byToemployees
+    updater  = dept.employees_departments_updated_byToemployees
+
+    result = schemas.DepartmentDetailResponse(
         department_id=dept.department_id,
         department_name=dept.department_name,
         department_code=dept.department_code,
         department_type=dept_type,
         manager=None,
         employee_count=len(emp_list),
-        is_active=True,
+        is_active=dept.is_active,
         created_at=dept.created_at,
         updated_at=dept.updated_at,
+        created_by=dept.created_by,
+        created_by_info=schemas.ManagerBriefResponse(
+            employee_id=creator.employee_id,
+            username=creator.username,
+            email=creator.email,
+        ) if creator else None,
+        updated_by=dept.updated_by,
+        updated_by_info=schemas.ManagerBriefResponse(
+            employee_id=updater.employee_id,
+            username=updater.username,
+            email=updater.email,
+        ) if updater else None,
     )
     await cache_set(key, result.model_dump(), ttl=TTL_DEPARTMENTS)
     return result
@@ -176,11 +222,15 @@ async def create_department(
                 "department_name":    data.department_name,
                 "department_code":    data.department_code,
                 "department_type_id": str(data.department_type_id),
+                "is_active":          True,
                 "created_by":         created_by_id,
                 "updated_by":         created_by_id,
                 "updated_at":         datetime.now(),
             },
-            include={"department_types": True},
+            include={
+                "department_types": True,
+                "employees_departments_created_byToemployees": True,
+            },
         )
 
     await invalidate_departments()
@@ -192,15 +242,23 @@ async def create_department(
             type_name=new_dept.department_types.type_name,
             type_code=new_dept.department_types.type_code,
         )
+
+    creator = new_dept.employees_departments_created_byToemployees
+
     return schemas.DepartmentCreatedResponse(
         department_id=new_dept.department_id,
         department_name=new_dept.department_name,
         department_code=new_dept.department_code,
         department_type=dept_type_resp,
         manager=None,
-        is_active=True,
+        is_active=new_dept.is_active,
         created_at=new_dept.created_at,
         created_by=new_dept.created_by,
+        created_by_info=schemas.ManagerBriefResponse(
+            employee_id=creator.employee_id,
+            username=creator.username,
+            email=creator.email,
+        ) if creator else None,
     )
 
 
@@ -217,8 +275,7 @@ async def update_department(
 
     old_snapshot = existing.model_dump()
 
-    update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items()
-                   if k not in ("is_active",)}
+    update_data = data.model_dump(exclude_unset=True)
     if "department_type_id" in update_data and update_data["department_type_id"]:
         update_data["department_type_id"] = str(update_data["department_type_id"])
     if not update_data:
@@ -240,7 +297,10 @@ async def update_department(
         updated = await db.departments.update(
             where={"department_id": department_id},
             data=update_data,
-            include={"department_types": True},
+            include={
+                "department_types": True,
+                "employees_departments_updated_byToemployees": True,
+            },
         )
 
     await cache_delete(_key_dept(department_id))
@@ -253,17 +313,24 @@ async def update_department(
             type_name=updated.department_types.type_name,
             type_code=updated.department_types.type_code,
         )
+
+    updater = updated.employees_departments_updated_byToemployees
+
     return schemas.DepartmentUpdatedResponse(
         department_id=updated.department_id,
         department_name=updated.department_name,
         department_code=updated.department_code,
         department_type=dept_type_resp,
         manager=None,
-        is_active=True,
+        is_active=updated.is_active,
         updated_at=updated.updated_at,
         updated_by=updated.updated_by,
+        updated_by_info=schemas.ManagerBriefResponse(
+            employee_id=updater.employee_id,
+            username=updater.username,
+            email=updater.email,
+        ) if updater else None,
     )
-
 
 async def list_department_types() -> list[schemas.DepartmentTypeResponse]:
     key    = _key_dept_types()

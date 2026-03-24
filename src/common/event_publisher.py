@@ -39,9 +39,12 @@ async def publish(stream: str, fields: dict[str, str]) -> None:
             fields = {**fields, "occurred_at": datetime.now(timezone.utc).isoformat()}
 
         await r.xadd(stream, fields, maxlen=_STREAM_MAXLEN, approximate=True)
+        print(f"PUBLISHED OK → {stream} fields={list(fields.keys())}", flush=True)
         logger.debug("Published %s: %s", stream, fields)
 
-    except RuntimeError:
+    except RuntimeError as exc:
+        print(f"PUBLISH FAILED (RuntimeError) → {stream}: {exc}", flush=True)
         logger.warning("publish(%s): Redis not initialised — event dropped", stream)
     except Exception as exc:
+        print(f"PUBLISH FAILED (Exception) → {stream}: {type(exc).__name__}: {exc}", flush=True)
         logger.warning("publish(%s) failed: %s — event dropped", stream, exc)
