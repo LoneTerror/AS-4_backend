@@ -26,7 +26,7 @@ metadata:
 spec:
   ingressClassName: alb
   rules:
-  - host: api.aabhar.top
+  - host: aabhar.top
     http:
       paths:
       # --- Microservices (Specific paths first) ---
@@ -86,3 +86,12 @@ spec:
             name: analytics-service
             port:
               number: 8008
+
+      # --- Frontend Public Layer (Catch-all) ---
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: aabhar-frontend
+            port:
+              number: 80
