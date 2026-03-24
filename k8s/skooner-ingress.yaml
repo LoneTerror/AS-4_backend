@@ -8,6 +8,9 @@ metadata:
     alb.ingress.kubernetes.io/target-type: ip
     # This joins your existing ALB group without changing other services
     alb.ingress.kubernetes.io/group.name: aabhar-group
+    alb.ingress.kubernetes.io/healthcheck-path: /skooner/favicon.ico
+    alb.ingress.kubernetes.io/healthcheck-port: '4654'
+    alb.ingress.kubernetes.io/success-codes: '200'
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
     
     # Custom health check JUST for Skooner

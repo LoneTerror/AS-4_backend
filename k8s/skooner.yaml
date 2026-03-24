@@ -23,7 +23,7 @@ spec:
         # Internal K8s check matches the UI path
         livenessProbe:
           httpGet:
-            path: /skooner/
+            path: /skooner/favicon.ico
             port: 4654
           initialDelaySeconds: 30
 ---
