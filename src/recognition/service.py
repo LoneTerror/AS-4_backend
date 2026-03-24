@@ -509,9 +509,11 @@ def _serialize_review(row) -> dict:
     if row is None:
         return {}
     tags = row.review_category_tags or []
+    reviewer = row.employees_reviews_reviewer_idToemployees  # already included
     return {
         "review_id":      row.review_id,
         "reviewer_id":    row.reviewer_id,
+        "reviewer_name":  reviewer.username if reviewer else "Someone", 
         "receiver_id":    row.receiver_id,
         "comment":        row.comment,
         "image_url":      row.image_url,
