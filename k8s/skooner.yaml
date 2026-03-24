@@ -15,12 +15,17 @@ spec:
       containers:
       - name: skooner
         image: ghcr.io/skooner-k8s/skooner:stable
+        env:
+        # --- CRITICAL: Tell Skooner it is living at /skooner ---
+        - name: BASE_PATH
+          value: "/skooner"
         ports:
         - containerPort: 4654
         livenessProbe:
           httpGet:
             scheme: HTTP
-            path: /skooner
+            # Use /skooner/ for the health check path
+            path: /skooner/
             port: 4654
           initialDelaySeconds: 30
           timeoutSeconds: 30
