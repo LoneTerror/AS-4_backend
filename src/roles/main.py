@@ -73,6 +73,7 @@ ROUTE_TITLES: dict[str, str] = {
     "POST:/v1/roles/route-permissions":             "Add Route Permission",
     "PATCH:/v1/roles/route-permissions":            "Remove Route Permission",
     "PATCH:/v1/roles/route-permissions/title":      "Update Route Display Title",
+    "GET:/v1/roles/my-permissions": "Get My Route Permissions",
 }
 
 # ── OpenTelemetry ─────────────────────────────────────────────────────────────
@@ -103,6 +104,9 @@ async def lifespan(app: FastAPI):
         default_roles=["SUPER_ADMIN"],
         role_overrides=ROLE_OVERRIDES,
         route_titles=ROUTE_TITLES,
+        always_public_routes={
+            "GET:/v1/roles/my-permissions",   # <-- ADD THIS LINE
+        },
     )
 
     yield
