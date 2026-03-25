@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        IMAGE = "mrmonster786/rnr-backend"
+        IMAGE = "mrmonster786/rnr-backend-base"
         TAG = "${env.BUILD_NUMBER}"
         TARGET_EC2_HOST="bn1.aabhar.top"
         DOCKER_BUILDKIT = "1"
@@ -112,6 +112,8 @@ pipeline {
                                         -e FRONTEND_URL="$FRONTEND_URL" \
                                         -e FRONTEND_CORS_ORIGINS="$FRONTEND_CORS_ORIGINS" \
                                         -e ACCESS_TOKEN_EXPIRE_MINUTES="30" \
+                                        -e CELEBRATION_CRON_HOUR=0 \
+                                        -e CELEBRATION_CRON_MINUTE=5 \
                                         ${IMAGE}:${TAG}
                                         """
                                         sh """
@@ -164,80 +166,80 @@ pipeline {
             }
         } 
 
-        stage('Deploy to EC2 (AWS)') {
-            when { branch 'pipeline-branch' } 
-            steps {
-                script {
-                    sshagent(credentials: ['ec2-ssh-key']) {
-                        withCredentials([
-                            string(credentialsId: 'rr-backend-db-url', variable: 'DATABASE_URL'),
-                            string(credentialsId: 'rr-backend-algorithm', variable: 'ALGORITHM'),
-                            string(credentialsId: 'rr-backend-redis-url',variable: 'REDIS_URL'),
-                            string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
-                            string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
-                            string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
-                            string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME'),
-                            string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
-                            string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'), 
-                            string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL'),
-                            string(credentialsId: 'rr-backend-cors-origins', variable: 'FRONTEND_CORS_ORIGINS'),
-                            string(credentialsId: 'rr-backend-frontend-url', variable: 'FRONTEND_URL')
-                        ]) {
-                            sh """
-                            ssh -o StrictHostKeyChecking=no ubuntu@${TARGET_EC2_HOST} "
-                                docker stop rnr-backend-test || true
-                                docker rm rnr-backend-test || true
+        // stage('Deploy to EC2 (AWS)') {
+        //     when { branch 'pipeline-branch' } 
+        //     steps {
+        //         script {
+        //             sshagent(credentials: ['ec2-ssh-key']) {
+        //                 withCredentials([
+        //                     string(credentialsId: 'rr-backend-db-url', variable: 'DATABASE_URL'),
+        //                     string(credentialsId: 'rr-backend-algorithm', variable: 'ALGORITHM'),
+        //                     string(credentialsId: 'rr-backend-redis-url',variable: 'REDIS_URL'),
+        //                     string(credentialsId: 'rr-backend-secret-key', variable: 'SECRET_KEY'),
+        //                     string(credentialsId: 'rr-backend-smtp-password', variable: 'SMTP_PASSWORD'),
+        //                     string(credentialsId: 'rr-backend-smtp-from-email', variable: 'SMTP_FROM_EMAIL'),
+        //                     string(credentialsId: 'rr-backend-smtp-username', variable: 'SMTP_USERNAME'),
+        //                     string(credentialsId: 'rr-backend-auth-service-url', variable: 'AUTH_SERVICE_URL'),
+        //                     string(credentialsId: 'rr-backend-slack-bot-token', variable: 'SLACK_TOKEN'), 
+        //                     string(credentialsId: 'rr-backend-slack-default-channel-id', variable: 'SLACK_CHANNEL'),
+        //                     string(credentialsId: 'rr-backend-cors-origins', variable: 'FRONTEND_CORS_ORIGINS'),
+        //                     string(credentialsId: 'rr-backend-frontend-url', variable: 'FRONTEND_URL')
+        //                 ]) {
+        //                     sh """
+        //                     ssh -o StrictHostKeyChecking=no ubuntu@${TARGET_EC2_HOST} "
+        //                         docker stop rnr-backend-test || true
+        //                         docker rm rnr-backend-test || true
                                 
-                                docker run -d \\
-                                --name rnr-backend-test \\
-                                --restart always \\
-                                --add-host host.docker.internal:host-gateway \\
-                                -p 8000:8000 \\
-                                -e DATABASE_URL='${DATABASE_URL}' \\
-                                -e ALGORITHM='${ALGORITHM}'\\
-                                -e REDIS_URL='${REDIS_URL}' \\
-                                -e SECRET_KEY='${SECRET_KEY}' \\
-                                -e AUTH_SERVICE_URL='${AUTH_SERVICE_URL}' \\
-                                -e SLACK_BOT_TOKEN='${SLACK_TOKEN}' \\
-                                -e SLACK_DEFAULT_CHANNEL_ID='${SLACK_CHANNEL}' \\
-                                -e SMTP_PASSWORD='${SMTP_PASSWORD}' \\
-                                -e SMTP_USERNAME='${SMTP_USERNAME}' \\
-                                -e SMTP_HOST='smtp.gmail.com' \\
-                                -e SMTP_PORT='587' \\
-                                -e SMTP_FROM_EMAIL='${SMTP_FROM_EMAIL}' \\
-                                -e SMTP_USE_TLS='true' \\
-                                -e SMTP_USE_SSL='false' \\
-                                -e FRONTEND_URL='${FRONTEND_URL}' \\
-                                -e ACCESS_TOKEN_EXPIRE_MINUTES='30' \\
-                                -e FRONTEND_CORS_ORIGINS='${FRONTEND_CORS_ORIGINS}' \\
-                                -e OTEL_SERVICE_NAME='rnr-backend' \\
-                                -e OTEL_EXPORTER_OTLP_ENDPOINT='http://host.docker.internal:4317' \\
-                                -e OTEL_EXPORTER_OTLP_INSECURE='true' \\
-                                ${IMAGE}:${TAG}
+        //                         docker run -d \\
+        //                         --name rnr-backend-test \\
+        //                         --restart always \\
+        //                         --add-host host.docker.internal:host-gateway \\
+        //                         -p 8000:8000 \\
+        //                         -e DATABASE_URL='${DATABASE_URL}' \\
+        //                         -e ALGORITHM='${ALGORITHM}'\\
+        //                         -e REDIS_URL='${REDIS_URL}' \\
+        //                         -e SECRET_KEY='${SECRET_KEY}' \\
+        //                         -e AUTH_SERVICE_URL='${AUTH_SERVICE_URL}' \\
+        //                         -e SLACK_BOT_TOKEN='${SLACK_TOKEN}' \\
+        //                         -e SLACK_DEFAULT_CHANNEL_ID='${SLACK_CHANNEL}' \\
+        //                         -e SMTP_PASSWORD='${SMTP_PASSWORD}' \\
+        //                         -e SMTP_USERNAME='${SMTP_USERNAME}' \\
+        //                         -e SMTP_HOST='smtp.gmail.com' \\
+        //                         -e SMTP_PORT='587' \\
+        //                         -e SMTP_FROM_EMAIL='${SMTP_FROM_EMAIL}' \\
+        //                         -e SMTP_USE_TLS='true' \\
+        //                         -e SMTP_USE_SSL='false' \\
+        //                         -e FRONTEND_URL='${FRONTEND_URL}' \\
+        //                         -e ACCESS_TOKEN_EXPIRE_MINUTES='30' \\
+        //                         -e FRONTEND_CORS_ORIGINS='${FRONTEND_CORS_ORIGINS}' \\
+        //                         -e OTEL_SERVICE_NAME='rnr-backend' \\
+        //                         -e OTEL_EXPORTER_OTLP_ENDPOINT='http://host.docker.internal:4317' \\
+        //                         -e OTEL_EXPORTER_OTLP_INSECURE='true' \\
+        //                         ${IMAGE}:${TAG}
                                 
-                                # Give the container 5 seconds to attempt its first boot
-                                sleep 5
+        //                         # Give the container 5 seconds to attempt its first boot
+        //                         sleep 5
                                 
-                                # Force restart to resolve startup race conditions
-                                docker restart rnr-backend-test
+        //                         # Force restart to resolve startup race conditions
+        //                         docker restart rnr-backend-test
                                 
-                                docker system prune -f
-                            "
-                            """
-                        }
-                    }
-                    // Wait for staggered boot
-                    timeout(time: 3, unit: 'MINUTES') { 
-                        waitUntil {
-                            script {
-                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://${TARGET_EC2_HOST}/v1/auth/health || true", returnStdout: true).trim()
-                                return (r == "200")
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        //                         docker system prune -f
+        //                     "
+        //                     """
+        //                 }
+        //             }
+        //             // Wait for staggered boot
+        //             timeout(time: 3, unit: 'MINUTES') { 
+        //                 waitUntil {
+        //                     script {
+        //                         def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://${TARGET_EC2_HOST}/v1/auth/health || true", returnStdout: true).trim()
+        //                         return (r == "200")
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     post {
