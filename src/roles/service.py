@@ -7,7 +7,7 @@ from src.prisma.client import db
 from src.common.audit import audit_ctx
 from src.common.dependencies import CurrentUser
 from src.common.cache import (
-    cache_get, cache_set, cache_delete,
+    cache_get, cache_set, cache_delete,invalidate_pattern,
     TTL_VOLATILE,  L1_VOLATILE,
     TTL_MEDIUM,    L1_MEDIUM,
     TTL_PERMANENT, L1_PERMANENT,
@@ -31,7 +31,9 @@ _KEY_PERMISSIONS = "roles:route_permissions"
 
 async def invalidate_roles():         await cache_delete(_KEY_ROLES)
 async def invalidate_employee_roles(): await cache_delete(_KEY_EMP_ROLES)
-async def invalidate_permissions():   await cache_delete(_KEY_PERMISSIONS)
+async def invalidate_permissions():
+    await cache_delete(_KEY_PERMISSIONS)
+    await invalidate_pattern("roles:route_permissions:*")
 
 
 # ── Roles ─────────────────────────────────────────────────────────────────────
@@ -272,6 +274,39 @@ async def add_route_permission(
     await invalidate_permissions()
     return result
 
+# ── Add this to src/roles/service.py ─────────────────────────────────────────
+
+async def get_my_permissions(current_user: CurrentUser) -> list[str]:
+    """
+    Returns all route_keys the current user is permitted to access,
+    based on their assigned role codes.
+
+    Steps:
+    1. Look up the user's active role assignments to get their role_ids.
+    2. Find all active route_permissions for those role_ids.
+    3. Return the deduplicated list of route_keys.
+
+    This is intentionally lean — no titles, no role metadata. The frontend
+    only needs the route_key strings to decide visibility.
+    """
+    # 1. Get the user's active role assignments
+    assignments = await db.employee_roles.find_many(
+        where={"employee_id": current_user.id, "is_active": True},
+        include={"roles": True},
+    )
+
+    if not assignments:
+        return []
+
+    role_ids = [a.role_id for a in assignments]
+
+    # 2. Fetch all active permissions for those roles
+    permissions = await db.route_permissions.find_many(
+        where={"role_id": {"in": role_ids}, "is_active": True},
+    )
+
+    # 3. Deduplicate and return just the route_keys
+    return list({p.route_key for p in permissions})
 
 async def remove_route_permission(
     body: DeleteRoutePermissionRequest,

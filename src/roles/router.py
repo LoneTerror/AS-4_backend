@@ -8,7 +8,7 @@
 # Your ROLE_OVERRIDES and ROUTE_TITLES in main.py MUST use those full keys.
 
 from fastapi import APIRouter, Depends
-
+from src.common.dependencies import CurrentUser, get_current_user
 from src.common.dependencies import check_route_permission, CurrentUser
 from src.roles.schemas import (
     CreateRoleRequest,
@@ -66,6 +66,16 @@ async def revoke_role(
 
 
 # ── Route permissions ─────────────────────────────────────────────────────────
+@router.get("/my-permissions")
+async def my_permissions(
+    current_user: CurrentUser = Depends(get_current_user),  # auth required, no role check
+):
+    """
+    Returns the list of route_keys the calling user is permitted to access,
+    derived from their assigned roles. Used by the frontend navbar to decide
+    which Control Panel sections to show.
+    """
+    return await service.get_my_permissions(current_user)
 
 @router.get("/route-permissions")
 async def list_route_permissions(
