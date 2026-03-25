@@ -4,7 +4,7 @@ pipeline {
     environment {
         IMAGE = "mrmonster786/rnr-backend-base"
         TAG = "${env.BUILD_NUMBER}"
-        TARGET_EC2_HOST="bn1.aabhar.top"
+        TARGET_EC2_HOST="aabhar.top"
         DOCKER_BUILDKIT = "1"
     }
 
@@ -61,7 +61,7 @@ pipeline {
 
         stage('Build Docker Image') {
             steps { 
-                sh 'docker build -t $IMAGE:$TAG .' 
+                sh 'docker build --no-cache -t $IMAGE:$TAG .' 
             }
         }
 

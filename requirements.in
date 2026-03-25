@@ -47,3 +47,7 @@ opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp
 opentelemetry-instrumentation-fastapi
+
+strenum; python_version < "3.11"
+exceptiongroup; python_version < "3.11"
+backports-asyncio-runner; python_version < "3.11"
