@@ -1,9 +1,9 @@
 generator client {
   provider                    = "prisma-client-py"
   binaryTargets               = ["native", "linux-static-x64"]
-  recursive_type_depth        = "5"
-  enable_experimental_decimal = "true"
   interface                   = "asyncio"
+  enable_experimental_decimal = "true"
+  recursive_type_depth        = "5"
 }
 
 datasource db {
@@ -197,9 +197,9 @@ model notifications {
   send_attempts   Int       @default(0)
 
   @@index([created_at])
+  @@index([email_sent, type, send_attempts, created_at])
   @@index([employee_id])
   @@index([employee_id, is_read])
-  @@index([email_sent, type, send_attempts, created_at])
 }
 
 model refresh_tokens {
