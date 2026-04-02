@@ -44,6 +44,10 @@ spec:
     spec:
       accessModes: [ "ReadWriteOnce" ]
       storageClassName: "ebs-sc"
+      dataSource:
+        name: aabhar-db-latest-snapshot
+        kind: VolumeSnapshot
+        apiGroup: snapshot.storage.k8s.io
       resources:
         requests:
           storage: 4Gi
