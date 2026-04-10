@@ -2,8 +2,8 @@ generator client {
   provider                    = "prisma-client-py"
   binaryTargets               = ["native", "linux-static-x64"]
   recursive_type_depth        = "5"
-  enable_experimental_decimal = "true"
   interface                   = "asyncio"
+  enable_experimental_decimal = "true"
 }
 
 datasource db {
@@ -55,6 +55,7 @@ model departments {
   created_by                                     String?          @db.Uuid
   updated_at                                     DateTime         @db.Timestamptz(6)
   updated_by                                     String?          @db.Uuid
+  is_active                                      Boolean          @default(true)
   employees_departments_created_byToemployees    employees?       @relation("departments_created_byToemployees", fields: [created_by], references: [employee_id], onDelete: Restrict)
   department_types                               department_types @relation(fields: [department_type_id], references: [department_type_id])
   employees_departments_updated_byToemployees    employees?       @relation("departments_updated_byToemployees", fields: [updated_by], references: [employee_id], onDelete: Restrict)
@@ -197,9 +198,9 @@ model notifications {
   send_attempts   Int       @default(0)
 
   @@index([created_at])
+  @@index([email_sent, type, send_attempts, created_at])
   @@index([employee_id])
   @@index([employee_id, is_read])
-  @@index([email_sent, type, send_attempts, created_at])
 }
 
 model refresh_tokens {
