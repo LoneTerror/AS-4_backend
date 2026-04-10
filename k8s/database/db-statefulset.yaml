@@ -38,16 +38,13 @@ spec:
         volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data
+          subPath: postgres-db-data
   volumeClaimTemplates:
   - metadata:
       name: postgres-data
     spec:
       accessModes: [ "ReadWriteOnce" ]
-      storageClassName: "ebs-sc"
-      dataSource:
-        name: aabhar-db-latest-snapshot
-        kind: VolumeSnapshot
-        apiGroup: snapshot.storage.k8s.io
+      storageClassName: "gp3"
       resources:
         requests:
           storage: 4Gi
