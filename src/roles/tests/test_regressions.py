@@ -177,7 +177,7 @@ class TestAddPermissionReactivatesInactiveRows:
         mock_rp.update.assert_awaited_once()
 
     async def test_active_row_raises_409_not_duplicate_create(self):
-        body   = SetRoutePermissionRequest(route_key="GET:/v1/x", role_id=make_uuid())
+        body   = SetRoutePermissionRequest(route_key="GET:/aabhar/v1/x", role_id=make_uuid())
         user   = _current_user()
         active = _fake_route_permission(is_active=True)
         with patch.object(svc.db, "route_permissions") as mock_rp:
@@ -189,7 +189,7 @@ class TestAddPermissionReactivatesInactiveRows:
 
     async def test_reactivation_preserves_existing_title_when_none_provided(self):
         """If body.title is None, the existing row's title should be kept."""
-        body     = SetRoutePermissionRequest(route_key="GET:/v1/x", role_id=make_uuid(), title=None)
+        body     = SetRoutePermissionRequest(route_key="GET:/aabhar/v1/x", role_id=make_uuid(), title=None)
         user     = _current_user()
         inactive = _fake_route_permission(is_active=False, title="Original Title")
         with (
@@ -205,7 +205,7 @@ class TestAddPermissionReactivatesInactiveRows:
         assert update_data["title"] == "Original Title"
 
     async def test_reactivation_uses_new_title_when_provided(self):
-        body     = SetRoutePermissionRequest(route_key="GET:/v1/x", role_id=make_uuid(), title="New Title")
+        body     = SetRoutePermissionRequest(route_key="GET:/aabhar/v1/x", role_id=make_uuid(), title="New Title")
         user     = _current_user()
         inactive = _fake_route_permission(is_active=False, title="Old Title")
         with (
@@ -265,9 +265,9 @@ class TestSoftDeleteRoutePermission:
 
 class TestRoutePermissionGrouping:
     async def test_three_roles_same_key_grouped_into_one_entry(self):
-        rp1 = _fake_route_permission(route_key="GET:/v1/x", role=_fake_role(role_code="SUPER_ADMIN"))
-        rp2 = _fake_route_permission(route_key="GET:/v1/x", role=_fake_role(role_code="HR_ADMIN"))
-        rp3 = _fake_route_permission(route_key="GET:/v1/x", role=_fake_role(role_code="MANAGER"))
+        rp1 = _fake_route_permission(route_key="GET:/aabhar/v1/x", role=_fake_role(role_code="SUPER_ADMIN"))
+        rp2 = _fake_route_permission(route_key="GET:/aabhar/v1/x", role=_fake_role(role_code="HR_ADMIN"))
+        rp3 = _fake_route_permission(route_key="GET:/aabhar/v1/x", role=_fake_role(role_code="MANAGER"))
         with (
             patch(f"{_SVC}.cache_get", new_callable=AsyncMock, return_value=None),
             patch(f"{_SVC}.cache_set", new_callable=AsyncMock),
@@ -279,8 +279,8 @@ class TestRoutePermissionGrouping:
         assert len(result[0]["roles"]) == 3
 
     async def test_two_different_keys_produce_two_entries(self):
-        rp1 = _fake_route_permission(route_key="GET:/v1/x")
-        rp2 = _fake_route_permission(route_key="POST:/v1/y")
+        rp1 = _fake_route_permission(route_key="GET:/aabhar/v1/x")
+        rp2 = _fake_route_permission(route_key="POST:/aabhar/v1/y")
         with (
             patch(f"{_SVC}.cache_get", new_callable=AsyncMock, return_value=None),
             patch(f"{_SVC}.cache_set", new_callable=AsyncMock),
@@ -289,12 +289,12 @@ class TestRoutePermissionGrouping:
             mock_rp.find_many = AsyncMock(return_value=[rp1, rp2])
             result = await svc.list_route_permissions()
         keys = {r["route_key"] for r in result}
-        assert keys == {"GET:/v1/x", "POST:/v1/y"}
+        assert keys == {"GET:/aabhar/v1/x", "POST:/aabhar/v1/y"}
 
     async def test_title_not_overwritten_by_later_none_title(self):
         """First row sets title; second row has None → title should be kept."""
-        rp1 = _fake_route_permission(route_key="GET:/v1/x", title="My Title")
-        rp2 = _fake_route_permission(route_key="GET:/v1/x", title=None)
+        rp1 = _fake_route_permission(route_key="GET:/aabhar/v1/x", title="My Title")
+        rp2 = _fake_route_permission(route_key="GET:/aabhar/v1/x", title=None)
         with (
             patch(f"{_SVC}.cache_get", new_callable=AsyncMock, return_value=None),
             patch(f"{_SVC}.cache_set", new_callable=AsyncMock),
@@ -312,7 +312,7 @@ class TestRoutePermissionGrouping:
 class TestUpdateRouteTitleUsesUpdateMany:
     async def test_update_many_called_once_regardless_of_row_count(self):
         rows = [_fake_route_permission() for _ in range(5)]
-        body = UpdateRouteTitleRequest(route_key="GET:/v1/x", title="Bulk")
+        body = UpdateRouteTitleRequest(route_key="GET:/aabhar/v1/x", title="Bulk")
         user = _current_user()
         with (
             patch.object(svc.db, "route_permissions") as mock_rp,
@@ -328,7 +328,7 @@ class TestUpdateRouteTitleUsesUpdateMany:
 
     async def test_updated_rows_count_matches_found_rows(self):
         rows = [_fake_route_permission() for _ in range(3)]
-        body = UpdateRouteTitleRequest(route_key="GET:/v1/x", title="New")
+        body = UpdateRouteTitleRequest(route_key="GET:/aabhar/v1/x", title="New")
         user = _current_user()
         with (
             patch.object(svc.db, "route_permissions") as mock_rp,

@@ -18,9 +18,9 @@ HOW IT WORKS
 
 ROUTE KEY FORMAT
 ────────────────
-Keys are always:  METHOD:/v1/<service>/<endpoint>
-e.g.             GET:/v1/roles/list
-                 POST:/v1/rewards/redeem
+Keys are always:  METHOD:/aabhar/v1/<service>/<endpoint>
+e.g.             GET:/aabhar/v1/roles/list
+                 POST:/aabhar/v1/rewards/redeem
 
 The key is built as:  f"{METHOD}:{root_path}{route.path}"
 where root_path = FastAPI(root_path="/v1/roles") — the reverse-proxy prefix.
@@ -59,14 +59,14 @@ USAGE
 
 ROLE_OVERRIDES — per-route role lists (optional):
     ROLE_OVERRIDES = {
-        "GET:/v1/dashboard/leaderboard": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-        "POST:/v1/rewards/redeem":       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+        "GET:/aabhar/v1/dashboard/leaderboard": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+        "POST:/aabhar/v1/rewards/redeem":       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     }
 
 ROUTE_TITLES — human-readable labels (optional, auto-generated if absent):
     ROUTE_TITLES = {
-        "GET:/v1/dashboard/leaderboard": "View Leaderboard",
-        "POST:/v1/rewards/redeem":       "Redeem Reward",
+        "GET:/aabhar/v1/dashboard/leaderboard": "View Leaderboard",
+        "POST:/aabhar/v1/rewards/redeem":       "Redeem Reward",
     }
 """
 
@@ -112,10 +112,10 @@ def _auto_title(route_key: str) -> str:
     Derive a human-readable title from a route key.
 
     Examples:
-        "GET:/v1/rewards/catalog"               → "Get Rewards Catalog"
-        "POST:/v1/employees/create"             → "Post Employees Create"
-        "PATCH:/v1/rewards/catalog/{id}/stock"  → "Patch Rewards Catalog Stock"
-        "DELETE:/v1/orgs/seasonal-multipliers/{id}" → "Delete Orgs Seasonal Multipliers"
+        "GET:/aabhar/v1/rewards/catalog"               → "Get Rewards Catalog"
+        "POST:/aabhar/v1/employees/create"             → "Post Employees Create"
+        "PATCH:/aabhar/v1/rewards/catalog/{id}/stock"  → "Patch Rewards Catalog Stock"
+        "DELETE:/aabhar/v1/orgs/seasonal-multipliers/{id}" → "Delete Orgs Seasonal Multipliers"
     """
     method, _, path = route_key.partition(":")
     parts = path.strip("/").split("/")
@@ -135,7 +135,7 @@ def _extract_routes(
     Walk app.routes and return a DEDUPLICATED list of (METHOD, full_path) tuples.
 
     full_path = root_path + route.path
-    e.g. root_path="/v1/roles", route.path="/list"  →  "/v1/roles/list"
+    e.g. root_path="/aabhar/v1/roles", route.path="/list"  →  "/aabhar/v1/roles/list"
 
     FastAPI's root_path is the reverse-proxy prefix. It is NOT automatically
     prepended to route.path at the ASGI level — we do it here so the route
@@ -159,7 +159,7 @@ def _extract_routes(
             continue
 
         short_path = route.path  # e.g. "/list"
-        full_path  = root_path + short_path  # e.g. "/v1/roles/list"
+        full_path  = root_path + short_path  # e.g. "/aabhar/v1/roles/list"
 
         # Skip system/utility routes
         if short_path in _SKIP_EXACT or full_path in _SKIP_EXACT:
@@ -393,7 +393,7 @@ async def register_app_routes(
         role_overrides:       {route_key: [role_codes]} for per-route overrides.
         route_titles:         {route_key: "Human Readable Title"}.
                               Routes without an entry get an auto-generated label.
-        always_public_routes: Set of route keys (e.g. "POST:/v1/auth/login") that
+        always_public_routes: Set of route keys (e.g. "POST:/aabhar/v1/auth/login") that
                               are unconditionally public. These are NEVER written to
                               route_permissions and any existing stale rows for them
                               are deactivated. Use this for pre-auth endpoints like

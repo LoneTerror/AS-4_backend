@@ -14,7 +14,7 @@ class ReviewCreateRequest(BaseModel):
 
     - receiver_id  : UUID of the employee being reviewed
     - comment      : 10–2000 characters
-    - category_ids : 1–5 unique UUIDs from GET /v1/review-categories.
+    - category_ids : 1–5 unique UUIDs from GET /aabhar/v1/review-categories.
                      Points = sum of all selected multipliers × reviewer weight.
     - image_url    : Optional HTTPS URL (max 500 chars)
     - video_url    : Optional HTTPS URL (max 500 chars)
@@ -26,7 +26,7 @@ class ReviewCreateRequest(BaseModel):
         min_length=1,
         max_length=5,
         description=(
-            "1–5 review category UUIDs from GET /v1/review-categories. "
+            "1–5 review category UUIDs from GET /aabhar/v1/review-categories. "
             "Points = sum of all selected category multipliers × reviewer weight."
         )
     )
@@ -155,7 +155,7 @@ class ReviewCategoryUpdateRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REVIEW CATEGORY RESPONSE  (for GET /v1/review-categories)
+# REVIEW CATEGORY RESPONSE  (for GET /aabhar/v1/review-categories)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ReviewCategoryResponse(BaseModel):

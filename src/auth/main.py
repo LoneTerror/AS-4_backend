@@ -36,32 +36,32 @@ provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
 trace.set_tracer_provider(provider)
 
 ROLE_OVERRIDES: dict[str, list[str]] = {
-    "POST:/v1/auth/login":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/auth/logout":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/auth/refresh":         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/auth/forgot-password": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/auth/reset-password":  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/auth/signup":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/auth/validate":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/auth/bulk-import":     ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/auth/login":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/auth/logout":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/auth/refresh":         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/auth/forgot-password": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/auth/reset-password":  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/auth/signup":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/auth/validate":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/auth/bulk-import":     ["SUPER_ADMIN", "HR_ADMIN"],
 }
 ROUTE_TITLES: dict[str, str] = {
-    "POST:/v1/auth/login":           "Login",
-    "POST:/v1/auth/logout":          "Logout",
-    "POST:/v1/auth/refresh":         "Refresh Access Token",
-    "POST:/v1/auth/forgot-password": "Request Password Reset",
-    "POST:/v1/auth/reset-password":  "Reset Password",
-    "POST:/v1/auth/signup":          "Sign Up",
-    "POST:/v1/auth/validate":        "Validate Token",
-    "POST:/v1/auth/bulk-import":     "Bulk Import Employees",
+    "POST:/aabhar/v1/auth/login":           "Login",
+    "POST:/aabhar/v1/auth/logout":          "Logout",
+    "POST:/aabhar/v1/auth/refresh":         "Refresh Access Token",
+    "POST:/aabhar/v1/auth/forgot-password": "Request Password Reset",
+    "POST:/aabhar/v1/auth/reset-password":  "Reset Password",
+    "POST:/aabhar/v1/auth/signup":          "Sign Up",
+    "POST:/aabhar/v1/auth/validate":        "Validate Token",
+    "POST:/aabhar/v1/auth/bulk-import":     "Bulk Import Employees",
 }
 
 ALWAYS_PUBLIC_ROUTES: set[str] = {
-    "POST:/v1/auth/login",
-    "POST:/v1/auth/refresh",
-    "POST:/v1/auth/validate",
-    "POST:/v1/auth/forgot-password",
-    "POST:/v1/auth/reset-password",
+    "POST:/aabhar/v1/auth/login",
+    "POST:/aabhar/v1/auth/refresh",
+    "POST:/aabhar/v1/auth/validate",
+    "POST:/aabhar/v1/auth/forgot-password",
+    "POST:/aabhar/v1/auth/reset-password",
 }
 
 _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json",
@@ -74,11 +74,11 @@ async def lifespan(app: FastAPI):
     print("Auth Service: 🟢 Database Connected")
 
     register_public_paths(
-        "/login",           "/v1/auth/login",
-        "/refresh",         "/v1/auth/refresh",
-        "/validate",        "/v1/auth/validate",
-        "/forgot-password", "/v1/auth/forgot-password",
-        "/reset-password",  "/v1/auth/reset-password",
+        "/login",           "/aabhar/v1/auth/login",
+        "/refresh",         "/aabhar/v1/auth/refresh",
+        "/validate",        "/aabhar/v1/auth/validate",
+        "/forgot-password", "/aabhar/v1/auth/forgot-password",
+        "/reset-password",  "/aabhar/v1/auth/reset-password",
     )
 
     await register_app_routes(
@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Auth Service", version="1.0.0",
-    root_path="/v1/auth", openapi_url="/openapi.json", docs_url="/docs",
+    root_path="/aabhar/v1/auth", openapi_url="/openapi.json", docs_url="/docs",
     lifespan=lifespan,
 )
 

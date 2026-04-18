@@ -4,7 +4,7 @@ src/wallet/review_consumer.py
 Redis Stream consumer — listens on 'events:review.created'
 and credits points to the receiver's wallet.
 
-Previously the Recognition service called POST /v1/wallets/credit-from-review
+Previously the Recognition service called POST /aabhar/v1/wallets/credit-from-review
 synchronously.  That endpoint is now DEPRECATED.  This consumer replaces it:
 
   Recognition service  →  XADD events:review.created

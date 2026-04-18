@@ -29,29 +29,29 @@ from src.core.logger import logger
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    "GET:/v1/rewards/catalog":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/rewards/categories":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/rewards/history":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/rewards/history/me":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/rewards/redeem":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/rewards/catalog":                     ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/v1/rewards/catalog/{catalog_id}":       ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/v1/rewards/catalog/{catalog_id}/stock": ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/rewards/categories":                  ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/v1/rewards/categories/{category_id}":   ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/rewards/catalog":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/rewards/categories":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/rewards/history":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/rewards/history/me":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/rewards/redeem":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/rewards/catalog":                     ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/aabhar/v1/rewards/catalog/{catalog_id}":       ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/aabhar/v1/rewards/catalog/{catalog_id}/stock": ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/rewards/categories":                  ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/aabhar/v1/rewards/categories/{category_id}":   ["SUPER_ADMIN", "HR_ADMIN"],
 }
 # ── Rewards Service ───────────────────────────────────────────────────────────
 ROUTE_TITLES = {
-    "GET:/v1/rewards/catalog":                        "Browse Rewards Catalog",
-    "GET:/v1/rewards/categories":                     "List Reward Categories",
-    "GET:/v1/rewards/history":                        "View All Redemption History",
-    "GET:/v1/rewards/history/me":                     "View My Redemption History",
-    "POST:/v1/rewards/redeem":                        "Redeem Reward",
-    "POST:/v1/rewards/catalog":                       "Add Catalog Item",
-    "PATCH:/v1/rewards/catalog/{catalog_id}":         "Update Catalog Item",
-    "PATCH:/v1/rewards/catalog/{catalog_id}/stock":   "Update Catalog Item Stock",
-    "POST:/v1/rewards/categories":                    "Create Reward Category",
-    "PATCH:/v1/rewards/categories/{category_id}":     "Update Reward Category",
+    "GET:/aabhar/v1/rewards/catalog":                        "Browse Rewards Catalog",
+    "GET:/aabhar/v1/rewards/categories":                     "List Reward Categories",
+    "GET:/aabhar/v1/rewards/history":                        "View All Redemption History",
+    "GET:/aabhar/v1/rewards/history/me":                     "View My Redemption History",
+    "POST:/aabhar/v1/rewards/redeem":                        "Redeem Reward",
+    "POST:/aabhar/v1/rewards/catalog":                       "Add Catalog Item",
+    "PATCH:/aabhar/v1/rewards/catalog/{catalog_id}":         "Update Catalog Item",
+    "PATCH:/aabhar/v1/rewards/catalog/{catalog_id}/stock":   "Update Catalog Item Stock",
+    "POST:/aabhar/v1/rewards/categories":                    "Create Reward Category",
+    "PATCH:/aabhar/v1/rewards/categories/{category_id}":     "Update Reward Category",
 }
 
 resource = Resource.create({"service.name": "rnr-rewards"})
@@ -93,7 +93,7 @@ app = FastAPI(
     title="Reward Microservice",
     description="API for managing the reward catalog and point redemptions.",
     version="1.0.0",
-    root_path="/v1/rewards", 
+    root_path="/aabhar/v1/rewards", 
     openapi_url="/openapi.json", 
     docs_url="/docs",
     redoc_url="/redoc",

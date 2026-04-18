@@ -46,22 +46,22 @@ provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
 trace.set_tracer_provider(provider)
 
 ROLE_OVERRIDES = {
-    "GET:/v1/wallets/employees/{employee_id}":       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/{wallet_id}/balance":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/{wallet_id}/points-summary":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/transactions":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/transactions/{transaction_id}": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/transactions/types":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/wallets/transactions":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
+    "GET:/aabhar/v1/wallets/employees/{employee_id}":       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/{wallet_id}/balance":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/{wallet_id}/points-summary":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/transactions":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/transactions/{transaction_id}": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/transactions/types":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/wallets/transactions":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
 }
 ROUTE_TITLES = {
-    "GET:/v1/wallets/employees/{employee_id}":        "Get Employee Wallet",
-    "GET:/v1/wallets/{wallet_id}/balance":            "Get Wallet Balance",
-    "GET:/v1/wallets/{wallet_id}/points-summary":     "Get Points Summary",
-    "GET:/v1/wallets/transactions":                   "List All Transactions",
-    "GET:/v1/wallets/transactions/{transaction_id}":  "Get Transaction Details",
-    "GET:/v1/wallets/transactions/types":             "List Transaction Types",
-    "POST:/v1/wallets/transactions":                  "Create Transaction",
+    "GET:/aabhar/v1/wallets/employees/{employee_id}":        "Get Employee Wallet",
+    "GET:/aabhar/v1/wallets/{wallet_id}/balance":            "Get Wallet Balance",
+    "GET:/aabhar/v1/wallets/{wallet_id}/points-summary":     "Get Points Summary",
+    "GET:/aabhar/v1/wallets/transactions":                   "List All Transactions",
+    "GET:/aabhar/v1/wallets/transactions/{transaction_id}":  "Get Transaction Details",
+    "GET:/aabhar/v1/wallets/transactions/types":             "List Transaction Types",
+    "POST:/aabhar/v1/wallets/transactions":                  "Create Transaction",
 }
 
 cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "")
@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Wallet Service",
     version="1.0.0",
-    root_path="/v1/wallets",
+    root_path="/aabhar/v1/wallets",
     openapi_url="/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",

@@ -1,15 +1,15 @@
 # src/roles/router.py
 #
-# Route paths registered here are BARE paths (no /v1/roles prefix).
+# Route paths registered here are BARE paths (no /aabhar/v1/roles prefix).
 # route_registry builds the full DB key as:
 #   f"{METHOD}:{app.root_path}{route.path}"
-#   e.g.  GET  +  /v1/roles  +  /list  =  GET:/v1/roles/list
+#   e.g.  GET  +  /aabhar/v1/roles  +  /list  =  GET:/aabhar/v1/roles/list
 #
 # Your ROLE_OVERRIDES and ROUTE_TITLES in main.py MUST use those full keys.
 
 from fastapi import APIRouter, Depends
-from src.common.dependencies import CurrentUser, get_current_user
-from src.common.dependencies import check_route_permission, CurrentUser
+
+from src.common.dependencies import check_route_permission, CurrentUser, get_current_user
 from src.roles.schemas import (
     CreateRoleRequest,
     AssignRoleRequest,
@@ -107,3 +107,14 @@ async def update_route_title(
 ):
     """Set or update the human-readable display title for a route key."""
     return await service.update_route_title(body, current_user)
+
+
+@router.get("/my-permissions")
+async def get_my_permissions(
+    current_user: CurrentUser = Depends(get_current_user), 
+):
+    """
+    Returns a list of route_keys the current user has access to.
+    Used by the frontend Navbar to toggle the Control Panel visibility.
+    """
+    return await service.get_my_permissions(current_user)

@@ -69,7 +69,7 @@ for name, app, port in services:
 
 print("\nAll services launched.\n")
 for name, _, port in processes:
-    print("  {:<15} -> http://localhost:{}/v1/{}/docs".format(name, port, name))
+    print("  {:<15} -> http://localhost:{}/aabhar/v1/{}/docs".format(name, port, name))
 
 try:
     while True:

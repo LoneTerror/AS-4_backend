@@ -135,7 +135,7 @@ print(f"\n✅ {len(healthy)}/{len(services)} services healthy:\n")
 
 for name, _, port in services:
     status = "✓" if results.get(name) else "⚠"
-    print(f"  {status}  {name:<15} -> http://localhost:{port}/v1/docs")
+    print(f"  {status}  {name:<15} -> http://localhost:{port}/aabhar/v1/docs")
 
 if unhealthy:
     print(f"\n⚠ Timed-out services ({', '.join(unhealthy)}) may still be starting.\n")

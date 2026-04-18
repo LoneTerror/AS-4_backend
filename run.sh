@@ -63,7 +63,7 @@ fi
 for entry in "${SERVICES[@]}"; do
   IFS='|' read -r NAME MODULE PORT <<< "$entry"
 
-  echo -e "${GREEN}🚀 Starting ${NAME} service → http://localhost:${PORT}/v1/docs${NC}"
+  echo -e "${GREEN}🚀 Starting ${NAME} service → http://localhost:${PORT}/aabhar/v1/docs${NC}"
   uvicorn "$MODULE" --host 0.0.0.0 --port "$PORT" --reload &
   PIDS+=($!)
 done
@@ -73,12 +73,12 @@ echo -e "${CYAN}═════════════════════�
 echo -e "${CYAN}  All services are running!${NC}"
 echo -e "${CYAN}══════════════════════════════════════════════════${NC}"
 echo ""
-echo -e "  ${GREEN}Auth${NC}          → http://localhost:8001/v1/docs"
-echo -e "  ${GREEN}Employees${NC}     → http://localhost:8002/v1/docs"
-echo -e "  ${GREEN}Rewards${NC}       → http://localhost:8006/v1/docs"
-echo -e "  ${GREEN}Wallets${NC}       → http://localhost:8004/v1/docs"
-echo -e "  ${GREEN}Recognition${NC}   → http://localhost:8005/v1/docs"
-echo -e "  ${GREEN}Analytics${NC}     → http://localhost:8007/v1/docs"
+echo -e "  ${GREEN}Auth${NC}          → http://localhost:8001/aabhar/v1/docs"
+echo -e "  ${GREEN}Employees${NC}     → http://localhost:8002/aabhar/v1/docs"
+echo -e "  ${GREEN}Rewards${NC}       → http://localhost:8006/aabhar/v1/docs"
+echo -e "  ${GREEN}Wallets${NC}       → http://localhost:8004/aabhar/v1/docs"
+echo -e "  ${GREEN}Recognition${NC}   → http://localhost:8005/aabhar/v1/docs"
+echo -e "  ${GREEN}Analytics${NC}     → http://localhost:8007/aabhar/v1/docs"
 echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop all services.${NC}"
 

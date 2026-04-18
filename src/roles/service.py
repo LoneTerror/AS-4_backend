@@ -372,3 +372,28 @@ async def update_route_title(
 
     await invalidate_permissions()
     return {"route_key": body.route_key, "title": body.title, "updated_rows": len(rows)}
+
+
+async def get_my_permissions(current_user: CurrentUser):
+    # Find all active role IDs assigned to currently logged in employee
+    user_roles = await db.employee_roles.find_many(
+        where={
+            "employee_id": current_user.id,
+            "is_active": True
+        }
+    )
+    role_ids = [r.role_id for r in user_roles]
+
+    if not role_ids:
+        return []
+
+    # Find all unique active route keys for those roles
+    permissions = await db.route_permissions.find_many(
+        where={
+            "role_id": {"in": role_ids},
+            "is_active": True
+        }
+    )
+
+    # Return a unique list of route_keys as expected by the frontend
+    return list(set(p.route_key for p in permissions))

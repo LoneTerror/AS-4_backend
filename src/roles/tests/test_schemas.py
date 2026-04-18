@@ -174,12 +174,12 @@ class TestRevokeRoleRequest:
 class TestSetRoutePermissionRequest:
     def _valid(self, **ov):
         from conftest import make_uuid
-        base = dict(route_key="GET:/v1/roles/list", role_id=make_uuid())
+        base = dict(route_key="GET:/aabhar/v1/roles/list", role_id=make_uuid())
         base.update(ov); return SetRoutePermissionRequest(**base)
 
     def test_valid_minimal(self):
         r = self._valid()
-        assert r.route_key == "GET:/v1/roles/list"
+        assert r.route_key == "GET:/aabhar/v1/roles/list"
 
     def test_title_optional_none(self):
         r = self._valid()
@@ -196,7 +196,7 @@ class TestSetRoutePermissionRequest:
 
     def test_missing_role_id_raises(self):
         with pytest.raises(ValidationError):
-            SetRoutePermissionRequest(route_key="GET:/v1/roles/list")
+            SetRoutePermissionRequest(route_key="GET:/aabhar/v1/roles/list")
 
     def test_both_missing_raises(self):
         with pytest.raises(ValidationError):
@@ -206,14 +206,14 @@ class TestSetRoutePermissionRequest:
         from conftest import make_uuid
         for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
             r = SetRoutePermissionRequest(
-                route_key=f"{method}:/v1/roles/list", role_id=make_uuid()
+                route_key=f"{method}:/aabhar/v1/roles/list", role_id=make_uuid()
             )
             assert r.route_key.startswith(method)
 
     def test_route_key_with_path_params(self):
         from conftest import make_uuid
         r = SetRoutePermissionRequest(
-            route_key="GET:/v1/employees/{employee_id}", role_id=make_uuid()
+            route_key="GET:/aabhar/v1/employees/{employee_id}", role_id=make_uuid()
         )
         assert "{employee_id}" in r.route_key
 
@@ -225,12 +225,12 @@ class TestSetRoutePermissionRequest:
 class TestDeleteRoutePermissionRequest:
     def _valid(self, **ov):
         from conftest import make_uuid
-        base = dict(route_key="POST:/v1/roles/assign", role_id=make_uuid())
+        base = dict(route_key="POST:/aabhar/v1/roles/assign", role_id=make_uuid())
         base.update(ov); return DeleteRoutePermissionRequest(**base)
 
     def test_valid(self):
         r = self._valid()
-        assert r.route_key == "POST:/v1/roles/assign"
+        assert r.route_key == "POST:/aabhar/v1/roles/assign"
 
     def test_missing_route_key_raises(self):
         from conftest import make_uuid
@@ -239,7 +239,7 @@ class TestDeleteRoutePermissionRequest:
 
     def test_missing_role_id_raises(self):
         with pytest.raises(ValidationError):
-            DeleteRoutePermissionRequest(route_key="GET:/v1/x")
+            DeleteRoutePermissionRequest(route_key="GET:/aabhar/v1/x")
 
     def test_no_title_field(self):
         # DeleteRoutePermissionRequest has no title — unlike Set
@@ -249,8 +249,8 @@ class TestDeleteRoutePermissionRequest:
     def test_route_key_and_role_id_stored(self):
         from conftest import make_uuid
         rid = make_uuid()
-        r = DeleteRoutePermissionRequest(route_key="DELETE:/v1/x", role_id=rid)
-        assert r.route_key == "DELETE:/v1/x"
+        r = DeleteRoutePermissionRequest(route_key="DELETE:/aabhar/v1/x", role_id=rid)
+        assert r.route_key == "DELETE:/aabhar/v1/x"
         assert r.role_id   == rid
 
 
@@ -260,8 +260,8 @@ class TestDeleteRoutePermissionRequest:
 
 class TestUpdateRouteTitleRequest:
     def test_valid(self):
-        r = UpdateRouteTitleRequest(route_key="GET:/v1/roles/list", title="List All Roles")
-        assert r.route_key == "GET:/v1/roles/list"
+        r = UpdateRouteTitleRequest(route_key="GET:/aabhar/v1/roles/list", title="List All Roles")
+        assert r.route_key == "GET:/aabhar/v1/roles/list"
         assert r.title     == "List All Roles"
 
     def test_missing_route_key_raises(self):
@@ -270,23 +270,23 @@ class TestUpdateRouteTitleRequest:
 
     def test_missing_title_raises(self):
         with pytest.raises(ValidationError):
-            UpdateRouteTitleRequest(route_key="GET:/v1/roles/list")
+            UpdateRouteTitleRequest(route_key="GET:/aabhar/v1/roles/list")
 
     def test_both_missing_raises(self):
         with pytest.raises(ValidationError):
             UpdateRouteTitleRequest()
 
     def test_empty_title_accepted(self):
-        r = UpdateRouteTitleRequest(route_key="GET:/v1/x", title="")
+        r = UpdateRouteTitleRequest(route_key="GET:/aabhar/v1/x", title="")
         assert r.title == ""
 
     def test_long_title_accepted(self):
-        r = UpdateRouteTitleRequest(route_key="GET:/v1/x", title="x" * 500)
+        r = UpdateRouteTitleRequest(route_key="GET:/aabhar/v1/x", title="x" * 500)
         assert len(r.title) == 500
 
     def test_route_key_any_format_accepted(self):
         r = UpdateRouteTitleRequest(
-            route_key="PATCH:/v1/roles/route-permissions/title",
+            route_key="PATCH:/aabhar/v1/roles/route-permissions/title",
             title="Update Route Display Title",
         )
         assert "PATCH" in r.route_key

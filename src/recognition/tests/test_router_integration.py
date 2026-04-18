@@ -35,7 +35,7 @@ from src.recognition.internal_router import router as internal_router
 _ROUTER = "src.recognition.router"
 
 def _make_app() -> FastAPI:
-    app = FastAPI(root_path="/v1/recognitions")
+    app = FastAPI(root_path="/aabhar/v1/recognitions")
     app.include_router(recognition_router)
     app.include_router(categories_router)
     app.include_router(internal_router)

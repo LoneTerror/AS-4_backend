@@ -31,32 +31,32 @@ from src.common.route_registry import register_app_routes
 # ── Route configuration ───────────────────────────────────────────────────────
 ROLE_OVERRIDES: dict[str, list[str]] = {
     # ── Roles ─────────────────────────────────────────────────────────────────
-    "GET:/v1/roles/list":                           ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/roles/create":                        ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/roles/list":                           ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/roles/create":                        ["SUPER_ADMIN"],
 
     # ── Employee ↔ Role ───────────────────────────────────────────────────────
-    "GET:/v1/roles/employees":                      ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/roles/assign":                        ["SUPER_ADMIN"],
-    "POST:/v1/roles/revoke":                        ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/roles/employees":                      ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/roles/assign":                        ["SUPER_ADMIN"],
+    "POST:/aabhar/v1/roles/revoke":                        ["SUPER_ADMIN"],
 
     # ── Route permissions ─────────────────────────────────────────────────────
-    "GET:/v1/roles/route-permissions":              ["SUPER_ADMIN"],
-    "POST:/v1/roles/route-permissions":             ["SUPER_ADMIN"],
-    "PATCH:/v1/roles/route-permissions":            ["SUPER_ADMIN"],
-    "PATCH:/v1/roles/route-permissions/title":      ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/roles/route-permissions":              ["SUPER_ADMIN"],
+    "POST:/aabhar/v1/roles/route-permissions":             ["SUPER_ADMIN"],
+    "PATCH:/aabhar/v1/roles/route-permissions":            ["SUPER_ADMIN"],
+    "PATCH:/aabhar/v1/roles/route-permissions/title":      ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/roles/my-permissions":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
 }
 
 ROUTE_TITLES: dict[str, str] = {
-    "GET:/v1/roles/list":                           "List Roles",
-    "POST:/v1/roles/create":                        "Create Role",
-    "GET:/v1/roles/employees":                      "List Employee Role Assignments",
-    "POST:/v1/roles/assign":                        "Assign Role to Employee",
-    "POST:/v1/roles/revoke":                        "Revoke Role from Employee",
-    "GET:/v1/roles/route-permissions":              "List Route Permissions",
-    "POST:/v1/roles/route-permissions":             "Add Route Permission",
-    "PATCH:/v1/roles/route-permissions":            "Remove Route Permission",
-    "PATCH:/v1/roles/route-permissions/title":      "Update Route Display Title",
-    "GET:/v1/roles/my-permissions": "Get My Route Permissions",
+    "GET:/aabhar/v1/roles/list":                           "List Roles",
+    "POST:/aabhar/v1/roles/create":                        "Create Role",
+    "GET:/aabhar/v1/roles/employees":                      "List Employee Role Assignments",
+    "POST:/aabhar/v1/roles/assign":                        "Assign Role to Employee",
+    "POST:/aabhar/v1/roles/revoke":                        "Revoke Role from Employee",
+    "GET:/aabhar/v1/roles/route-permissions":              "List Route Permissions",
+    "POST:/aabhar/v1/roles/route-permissions":             "Add Route Permission",
+    "PATCH:/aabhar/v1/roles/route-permissions":            "Remove Route Permission",
+    "PATCH:/aabhar/v1/roles/route-permissions/title":      "Update Route Display Title",
 }
 
 # ── OpenTelemetry ─────────────────────────────────────────────────────────────
@@ -73,6 +73,15 @@ trace.set_tracer_provider(provider)
 async def lifespan(app: FastAPI):
     print("Roles Service: Connecting to Database...")
     await db.connect()
+
+    # Uncomment and Restart the backend if you have changed any routes or need to remove old lingering routes
+    # # This deletes any active route that doesn't start with '/aabhar' prefix
+    # await db.route_permissions.delete_many(
+    #     where={
+    #         "route_key": {"not": {"contains": "/aabhar/v1/"}}
+    #     }
+    # )
+    
     print("Roles Service: 🟢 Database Connected")
 
     print("Roles Service: Connecting to Redis...")
@@ -108,7 +117,7 @@ app = FastAPI(
     title="Roles & Permissions Service",
     version="1.0.0",
     lifespan=lifespan,
-    root_path="/v1/roles",
+    root_path="/aabhar/v1/roles",
     openapi_url="/openapi.json",
     docs_url="/docs",
 )

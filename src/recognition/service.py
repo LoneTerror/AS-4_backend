@@ -5,7 +5,7 @@ Recognition service — owns: reviews, review_categories, review_category_tags.
 
 DECOUPLING CHANGE
 ──────────────────
-Previously create_review() called POST /v1/wallets/credit-from-review
+Previously create_review() called POST /aabhar/v1/wallets/credit-from-review
 synchronously.  Replaced with a fire-and-forget publish() to the
 'events:review.created' Redis Stream.  The Wallet service's
 review_created_consumer_loop credits points asynchronously.
@@ -221,7 +221,7 @@ async def create_review(body: ReviewCreateRequest, reviewer_id: str):
         })
 
     # ── Publish event — replaces synchronous HTTP call to Wallet ─────────────
-    # Previously: httpx.post("/v1/wallets/credit-from-review")
+    # Previously: httpx.post("/aabhar/v1/wallets/credit-from-review")
     # Now: fire-and-forget; Wallet's review_created_consumer credits asynchronously.
     await publish("events:review.created", {
         "review_id":   str(review.review_id),

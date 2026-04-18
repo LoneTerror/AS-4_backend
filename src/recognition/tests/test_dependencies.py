@@ -74,7 +74,7 @@ class TestPublicPaths:
         assert deps._is_public(self._make_request("/docs")) is True
 
     def test_api_route_is_not_public(self):
-        assert deps._is_public(self._make_request("/v1/recognitions/reviews")) is False
+        assert deps._is_public(self._make_request("/aabhar/v1/recognitions/reviews")) is False
 
     def test_register_public_paths(self):
         deps.register_public_paths("/custom-public")
@@ -89,7 +89,7 @@ class TestPublicPaths:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestBuildRouteKey:
-    def _make_request(self, method: str, bare_path: str, root_path: str = "/v1/recognitions") -> MagicMock:
+    def _make_request(self, method: str, bare_path: str, root_path: str = "/aabhar/v1/recognitions") -> MagicMock:
         app = MagicMock()
         app.root_path = root_path
 
@@ -106,17 +106,17 @@ class TestBuildRouteKey:
     def test_builds_key_with_root_path(self):
         req = self._make_request("GET", "/reviews")
         key = deps._build_route_key(req)
-        assert key == "GET:/v1/recognitions/reviews"
+        assert key == "GET:/aabhar/v1/recognitions/reviews"
 
     def test_post_method(self):
         req = self._make_request("POST", "/reviews")
         key = deps._build_route_key(req)
-        assert key == "POST:/v1/recognitions/reviews"
+        assert key == "POST:/aabhar/v1/recognitions/reviews"
 
     def test_parameterised_path(self):
         req = self._make_request("GET", "/reviews/{id}")
         key = deps._build_route_key(req)
-        assert key == "GET:/v1/recognitions/reviews/{id}"
+        assert key == "GET:/aabhar/v1/recognitions/reviews/{id}"
 
     def test_no_root_path(self):
         req = self._make_request("GET", "/health", root_path="")
@@ -124,20 +124,20 @@ class TestBuildRouteKey:
         assert key == "GET:/health"
 
     def test_trailing_slash_stripped_from_root_path(self):
-        req = self._make_request("GET", "/reviews", root_path="/v1/recognitions/")
+        req = self._make_request("GET", "/reviews", root_path="/aabhar/v1/recognitions/")
         key = deps._build_route_key(req)
-        assert key == "GET:/v1/recognitions/reviews"
+        assert key == "GET:/aabhar/v1/recognitions/reviews"
 
     def test_non_api_route_falls_back_to_scope_path(self):
         app = MagicMock()
-        app.root_path = "/v1/svc"
+        app.root_path = "/aabhar/v1/svc"
         req = MagicMock()
         req.method   = "GET"
         req.scope    = {"path": "/some/path"}  # no "route" key
         req.url.path = "/some/path"
         req.app = app
         key = deps._build_route_key(req)
-        assert key == "GET:/v1/svc/some/path"
+        assert key == "GET:/aabhar/v1/svc/some/path"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ class TestGetCurrentUser:
         req.url.path = path
         return req
 
-    def _authed_request(self, path="/v1/recognitions/reviews"):
+    def _authed_request(self, path="/aabhar/v1/recognitions/reviews"):
         req = MagicMock()
         req.scope = {"path": path}
         req.url.path = path
@@ -273,7 +273,7 @@ class TestGetCurrentUser:
 
 class TestCheckRoutePermission:
     def _make_request(self, method="GET", path="/reviews"):
-        app = MagicMock(); app.root_path = "/v1/recognitions"
+        app = MagicMock(); app.root_path = "/aabhar/v1/recognitions"
         route = MagicMock(spec=APIRoute); route.path = path
         req = MagicMock()
         req.method = method
