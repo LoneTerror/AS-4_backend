@@ -223,23 +223,23 @@ pipeline {
         //                         # Force restart to resolve startup race conditions
         //                         docker restart rnr-backend-test
                                 
-            //                     docker system prune -f
-            //                 "
-            //                 """
-            //             }
-            //         }
-            //         // Wait for staggered boot
-            //         timeout(time: 3, unit: 'MINUTES') { 
-            //             waitUntil {
-            //                 script {
-            //                     def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://${TARGET_EC2_HOST}/aabhar/v1/auth/health || true", returnStdout: true).trim()
-            //                     return (r == "200")
-            //                 }
-            //             }
-            //         }
+                    //             docker system prune -f
+                    //         "
+                    //         """
+                    //     }
+                    // }
+                    // // Wait for staggered boot
+                    // timeout(time: 3, unit: 'MINUTES') { 
+                    //     waitUntil {
+                    //         script {
+                    //             def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://${TARGET_EC2_HOST}/aabhar/v1/auth/health || true", returnStdout: true).trim()
+                    //             return (r == "200")
+                    //         }
+                    //     }
+                    // }
             //     }
             // }
-        }
+        // }
     }
 
     post {
