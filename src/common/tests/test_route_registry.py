@@ -19,7 +19,7 @@ REG = "src.common.route_registry"
 @pytest.fixture
 def mock_app():
     app = MagicMock(spec=FastAPI)
-    app.root_path = "/v1/analytics"
+    app.root_path = "/aabhar/v1/analytics"
     route1 = MagicMock(spec=APIRoute); route1.path = "/leaderboard"; route1.methods = {"GET"}
     route2 = MagicMock(spec=APIRoute); route2.path = "/redeem";      route2.methods = {"POST"}
     app.routes = [route1, route2]
@@ -71,13 +71,13 @@ def inject_db(mock_db):
 class TestRouteRegistry:
 
     def test_auto_title(self):
-        assert _auto_title("GET:/v1/rewards/catalog")   == "Get Rewards Catalog"
-        assert _auto_title("POST:/v1/employees/create") == "Post Employees Create"
+        assert _auto_title("GET:/aabhar/v1/rewards/catalog")   == "Get Rewards Catalog"
+        assert _auto_title("POST:/aabhar/v1/employees/create") == "Post Employees Create"
 
     def test_extract_routes(self, mock_app):
         routes = _extract_routes(mock_app)
         assert len(routes) == 2
-        assert ("GET", "/v1/analytics/leaderboard") in routes
+        assert ("GET", "/aabhar/v1/analytics/leaderboard") in routes
 
     # ===========================================================================
     # CORE REGISTRATION LOGIC
@@ -109,7 +109,7 @@ class TestRouteRegistry:
         ]
 
         mock_inactive = MagicMock(
-            route_key="GET:/v1/analytics/leaderboard",
+            route_key="GET:/aabhar/v1/analytics/leaderboard",
             role_id="r1",
             is_active=False,
             id="row-999",

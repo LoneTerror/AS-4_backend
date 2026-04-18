@@ -45,7 +45,7 @@ NOW  = utcnow()
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_app() -> FastAPI:
-    app = FastAPI(root_path="/v1/organizations")
+    app = FastAPI(root_path="/aabhar/v1/organizations")
     app.include_router(departments_router,      prefix="/departments")
     app.include_router(designations_router,     prefix="/designations")
     app.include_router(department_types_router, prefix="/department-types")

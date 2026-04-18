@@ -555,8 +555,8 @@ class TestRevokeRole:
 class TestListRoutePermissions:
     async def test_returns_grouped_list(self):
         role = _fake_role(role_code="SUPER_ADMIN")
-        rp1  = _fake_route_permission(route_key="GET:/v1/roles/list", role=role)
-        rp2  = _fake_route_permission(route_key="GET:/v1/roles/list", role=_fake_role(role_code="HR_ADMIN"))
+        rp1  = _fake_route_permission(route_key="GET:/aabhar/v1/roles/list", role=role)
+        rp2  = _fake_route_permission(route_key="GET:/aabhar/v1/roles/list", role=_fake_role(role_code="HR_ADMIN"))
         with (
             patch(f"{_SVC}.cache_get", new_callable=AsyncMock, return_value=None),
             patch(f"{_SVC}.cache_set", new_callable=AsyncMock),
@@ -569,7 +569,7 @@ class TestListRoutePermissions:
         assert len(result[0]["roles"]) == 2
 
     async def test_cache_hit_skips_db(self):
-        cached = [{"route_key": "GET:/v1/roles/list", "roles": []}]
+        cached = [{"route_key": "GET:/aabhar/v1/roles/list", "roles": []}]
         with (
             patch(f"{_SVC}.cache_get", new_callable=AsyncMock, return_value=cached),
             patch.object(svc.db, "route_permissions") as mock_rp,
@@ -600,8 +600,8 @@ class TestListRoutePermissions:
         assert kw["where"]["is_active"] is True
 
     async def test_different_route_keys_not_merged(self):
-        rp1 = _fake_route_permission(route_key="GET:/v1/roles/list")
-        rp2 = _fake_route_permission(route_key="POST:/v1/roles/create")
+        rp1 = _fake_route_permission(route_key="GET:/aabhar/v1/roles/list")
+        rp2 = _fake_route_permission(route_key="POST:/aabhar/v1/roles/create")
         with (
             patch(f"{_SVC}.cache_get", new_callable=AsyncMock, return_value=None),
             patch(f"{_SVC}.cache_set", new_callable=AsyncMock),
@@ -612,8 +612,8 @@ class TestListRoutePermissions:
         assert len(result) == 2
 
     async def test_title_taken_from_first_row_with_title(self):
-        rp1 = _fake_route_permission(route_key="GET:/v1/x", title=None)
-        rp2 = _fake_route_permission(route_key="GET:/v1/x", title="My Route")
+        rp1 = _fake_route_permission(route_key="GET:/aabhar/v1/x", title=None)
+        rp2 = _fake_route_permission(route_key="GET:/aabhar/v1/x", title="My Route")
         with (
             patch(f"{_SVC}.cache_get", new_callable=AsyncMock, return_value=None),
             patch(f"{_SVC}.cache_set", new_callable=AsyncMock),
@@ -656,7 +656,7 @@ class TestAddRoutePermission:
     def _body(self, route_key=None, role_id=None, title=None):
         from src.roles.schemas import SetRoutePermissionRequest
         return SetRoutePermissionRequest(
-            route_key=route_key or "GET:/v1/roles/list",
+            route_key=route_key or "GET:/aabhar/v1/roles/list",
             role_id=role_id or make_uuid(),
             title=title,
         )
@@ -722,7 +722,7 @@ class TestAddRoutePermission:
         assert update_data["is_active"] is True
 
     async def test_create_stores_route_key(self):
-        body = self._body(route_key="POST:/v1/rewards/grant"); user = _current_user()
+        body = self._body(route_key="POST:/aabhar/v1/rewards/grant"); user = _current_user()
         with (
             patch.object(svc.db, "route_permissions") as mock_rp,
             patch(f"{_SVC}.audit_ctx", side_effect=_noop_audit_ctx),
@@ -732,7 +732,7 @@ class TestAddRoutePermission:
             mock_rp.create     = AsyncMock(return_value=_fake_route_permission())
             await svc.add_route_permission(body, user)
         create_data = mock_rp.create.call_args.kwargs["data"]
-        assert create_data["route_key"] == "POST:/v1/rewards/grant"
+        assert create_data["route_key"] == "POST:/aabhar/v1/rewards/grant"
 
     async def test_create_stores_title(self):
         body = self._body(title="Grant Reward"); user = _current_user()
@@ -781,7 +781,7 @@ class TestRemoveRoutePermission:
     def _body(self, route_key=None, role_id=None):
         from src.roles.schemas import DeleteRoutePermissionRequest
         return DeleteRoutePermissionRequest(
-            route_key=route_key or "GET:/v1/roles/list",
+            route_key=route_key or "GET:/aabhar/v1/roles/list",
             role_id=role_id or make_uuid(),
         )
 
@@ -876,7 +876,7 @@ class TestUpdateRouteTitle:
     def _body(self, route_key=None, title=None):
         from src.roles.schemas import UpdateRouteTitleRequest
         return UpdateRouteTitleRequest(
-            route_key=route_key or "GET:/v1/roles/list",
+            route_key=route_key or "GET:/aabhar/v1/roles/list",
             title=title or "Updated Title",
         )
 
@@ -925,7 +925,7 @@ class TestUpdateRouteTitle:
 
     async def test_returns_route_key_and_title_and_updated_rows(self):
         rows = [_fake_route_permission(), _fake_route_permission()]
-        body = self._body(route_key="GET:/v1/x", title="My Title"); user = _current_user()
+        body = self._body(route_key="GET:/aabhar/v1/x", title="My Title"); user = _current_user()
         with (
             patch.object(svc.db, "route_permissions") as mock_rp,
             patch(f"{_SVC}.audit", new_callable=AsyncMock),
@@ -934,7 +934,7 @@ class TestUpdateRouteTitle:
             mock_rp.find_many   = AsyncMock(return_value=rows)
             mock_rp.update_many = AsyncMock(return_value=MagicMock())
             result = await svc.update_route_title(body, user)
-        assert result["route_key"]    == "GET:/v1/x"
+        assert result["route_key"]    == "GET:/aabhar/v1/x"
         assert result["title"]        == "My Title"
         assert result["updated_rows"] == 2
 
@@ -963,7 +963,7 @@ class TestUpdateRouteTitle:
         mock_inv.assert_awaited_once()
 
     async def test_update_many_where_uses_route_key(self):
-        rows = [_fake_route_permission()]; body = self._body(route_key="PATCH:/v1/x"); user = _current_user()
+        rows = [_fake_route_permission()]; body = self._body(route_key="PATCH:/aabhar/v1/x"); user = _current_user()
         with (
             patch.object(svc.db, "route_permissions") as mock_rp,
             patch(f"{_SVC}.audit", new_callable=AsyncMock),
@@ -973,7 +973,7 @@ class TestUpdateRouteTitle:
             mock_rp.update_many = AsyncMock(return_value=MagicMock())
             await svc.update_route_title(body, user)
         where_clause = mock_rp.update_many.call_args.kwargs["where"]
-        assert where_clause["route_key"] == "PATCH:/v1/x"
+        assert where_clause["route_key"] == "PATCH:/aabhar/v1/x"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

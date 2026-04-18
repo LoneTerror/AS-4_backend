@@ -230,7 +230,7 @@ pipeline {
                     timeout(time: 3, unit: 'MINUTES') { 
                         waitUntil {
                             script {
-                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://${TARGET_EC2_HOST}/v1/auth/health || true", returnStdout: true).trim()
+                                def r = sh(script: "curl -s -o /dev/null -w '%{http_code}' https://${TARGET_EC2_HOST}/aabhar/v1/auth/health || true", returnStdout: true).trim()
                                 return (r == "200")
                             }
                         }

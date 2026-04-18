@@ -31,7 +31,7 @@ DOJ = date(2020, 3, 1)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _make_app():
-    app = FastAPI(root_path="/v1/employees")
+    app = FastAPI(root_path="/aabhar/v1/employees")
     app.include_router(emp_router)
     app.include_router(internal_router)
     return app

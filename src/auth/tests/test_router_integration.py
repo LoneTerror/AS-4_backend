@@ -37,7 +37,7 @@ _ROUTER = "src.auth.router"
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_app() -> FastAPI:
-    app = FastAPI(root_path="/v1/auth")
+    app = FastAPI(root_path="/aabhar/v1/auth")
     app.include_router(auth_router)
     return app
 

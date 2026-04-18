@@ -24,7 +24,7 @@ from src.auth.service import (
 from src.common.dependencies import check_route_permission, CurrentUser
 from src.core.security import decode_token
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/aabhar/v1/auth/login")
 router        = APIRouter()
 
 REQUIRED_COLUMNS = {"username", "email", "password", "designation_id", "department_id"}

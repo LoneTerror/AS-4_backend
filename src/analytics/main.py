@@ -48,26 +48,26 @@ provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
 trace.set_tracer_provider(provider)
 
 ROLE_OVERRIDES = {
-    "GET:/v1/analytics/dashboard/leaderboard":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/recent-reviews":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/platform-stats":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/analytics/dashboard/teams":                 ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/teams/{department_id}": ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/participation":         ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/recognition-trend":     ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/recognition/teams":     ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/analytics/dashboard/recognition/users":     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/analytics/dashboard/leaderboard":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/analytics/dashboard/recent-reviews":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/analytics/dashboard/platform-stats":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/analytics/dashboard/teams":                 ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/analytics/dashboard/teams/{department_id}": ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/analytics/dashboard/participation":         ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/analytics/dashboard/recognition-trend":     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/analytics/dashboard/recognition/teams":     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/analytics/dashboard/recognition/users":     ["SUPER_ADMIN", "HR_ADMIN"],
 }
 ROUTE_TITLES = {
-    "GET:/v1/analytics/dashboard/leaderboard":           "View Leaderboard",
-    "GET:/v1/analytics/dashboard/recent-reviews":        "View Recent Reviews",
-    "GET:/v1/analytics/dashboard/platform-stats":        "View Platform Statistics",
-    "GET:/v1/analytics/dashboard/teams":                 "View All Teams Overview",
-    "GET:/v1/analytics/dashboard/teams/{department_id}": "View Team Details",
-    "GET:/v1/analytics/dashboard/participation":         "View Participation Stats",
-    "GET:/v1/analytics/dashboard/recognition-trend":     "View Recognition Trends",
-    "GET:/v1/analytics/dashboard/recognition/teams":     "View Team Recognition",
-    "GET:/v1/analytics/dashboard/recognition/users":     "View User Recognition",
+    "GET:/aabhar/v1/analytics/dashboard/leaderboard":           "View Leaderboard",
+    "GET:/aabhar/v1/analytics/dashboard/recent-reviews":        "View Recent Reviews",
+    "GET:/aabhar/v1/analytics/dashboard/platform-stats":        "View Platform Statistics",
+    "GET:/aabhar/v1/analytics/dashboard/teams":                 "View All Teams Overview",
+    "GET:/aabhar/v1/analytics/dashboard/teams/{department_id}": "View Team Details",
+    "GET:/aabhar/v1/analytics/dashboard/participation":         "View Participation Stats",
+    "GET:/aabhar/v1/analytics/dashboard/recognition-trend":     "View Recognition Trends",
+    "GET:/aabhar/v1/analytics/dashboard/recognition/teams":     "View Team Recognition",
+    "GET:/aabhar/v1/analytics/dashboard/recognition/users":     "View User Recognition",
 }
 
 @asynccontextmanager
@@ -113,7 +113,7 @@ app = FastAPI(
     title="Analytics Service",
     description="Dashboard analytics — reads from owning services via internal HTTP",
     version="1.0.0",
-    root_path="/v1/analytics",
+    root_path="/aabhar/v1/analytics",
     openapi_url="/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",

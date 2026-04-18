@@ -44,26 +44,26 @@ provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
 trace.set_tracer_provider(provider)
 
 ROLE_OVERRIDES = {
-    "GET:/v1/recognitions/reviews":                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/recognitions/reviews/{id}":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/recognitions/reviews":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "PUT:/v1/recognitions/reviews/{id}":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/recognitions/review-categories":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/recognitions/review-categories":         ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/recognitions/review-categories/{id}":     ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/recognitions/digest":                     ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/recognitions/digest/send":               ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/recognitions/reviews":                    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/recognitions/reviews/{id}":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/recognitions/reviews":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "PUT:/aabhar/v1/recognitions/reviews/{id}":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/recognitions/review-categories":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/recognitions/review-categories":         ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/aabhar/v1/recognitions/review-categories/{id}":     ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/recognitions/digest":                     ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/recognitions/digest/send":               ["SUPER_ADMIN", "HR_ADMIN"],
 }
 ROUTE_TITLES = {
-    "GET:/v1/recognitions/reviews":                    "List Reviews",
-    "GET:/v1/recognitions/reviews/{id}":               "Get Review Details",
-    "POST:/v1/recognitions/reviews":                   "Submit Review",
-    "PUT:/v1/recognitions/reviews/{id}":               "Update Review",
-    "GET:/v1/recognitions/review-categories":          "List Review Categories",
-    "POST:/v1/recognitions/review-categories":         "Create Review Category",
-    "PUT:/v1/recognitions/review-categories/{id}":     "Update Review Category",
-    "GET:/v1/recognitions/digest":                     "View Recognition Digest",
-    "POST:/v1/recognitions/digest/send":               "Send Recognition Digest",
+    "GET:/aabhar/v1/recognitions/reviews":                    "List Reviews",
+    "GET:/aabhar/v1/recognitions/reviews/{id}":               "Get Review Details",
+    "POST:/aabhar/v1/recognitions/reviews":                   "Submit Review",
+    "PUT:/aabhar/v1/recognitions/reviews/{id}":               "Update Review",
+    "GET:/aabhar/v1/recognitions/review-categories":          "List Review Categories",
+    "POST:/aabhar/v1/recognitions/review-categories":         "Create Review Category",
+    "PUT:/aabhar/v1/recognitions/review-categories/{id}":     "Update Review Category",
+    "GET:/aabhar/v1/recognitions/digest":                     "View Recognition Digest",
+    "POST:/aabhar/v1/recognitions/digest/send":               "Send Recognition Digest",
 }
 
 @asynccontextmanager
@@ -104,7 +104,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Recognition Service",
     version="1.0.0",
-    root_path="/v1/recognitions",
+    root_path="/aabhar/v1/recognitions",
     openapi_url="/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",

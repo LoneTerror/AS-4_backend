@@ -273,7 +273,7 @@ _CREATE_REQUEST_BODY = {
                         "maxItems": 5,
                         "uniqueItems": True,
                         "description": (
-                            "1–5 category UUIDs from GET /v1/review-categories. "
+                            "1–5 category UUIDs from GET /aabhar/v1/review-categories. "
                             "Points = sum of all selected multipliers × reviewer weight."
                         ),
                         "example": [
@@ -367,7 +367,7 @@ _UPDATE_REQUEST_BODY = {
         "Each additional tag adds its full multiplier weight — "
         "selecting INNOVATION (1.4) + TEAMWORK (1.2) gives 2.6 × reviewer_weight.\n\n"
         "## Steps\n"
-        "1. Call **`GET /v1/review-categories`** → copy one or more `category_id` UUIDs\n"
+        "1. Call **`GET /aabhar/v1/review-categories`** → copy one or more `category_id` UUIDs\n"
         "2. Pass them as the `category_ids` array\n"
         "3. Replace `receiver_id` with a real active employee UUID (not your own)\n\n"
         "All multipliers are frozen as snapshots at write time."
@@ -390,7 +390,7 @@ async def create_review_route(
         "Update an existing review. At least one field must be supplied.\n\n"
         "Sending a new `category_ids` array **replaces** all existing tags and "
         "triggers points recalculation. The receiver's wallet is adjusted by the delta.\n\n"
-        "> ⚠️ Call `GET /v1/review-categories` first to get valid category UUIDs."
+        "> ⚠️ Call `GET /aabhar/v1/review-categories` first to get valid category UUIDs."
     ),
     openapi_extra={"requestBody": _UPDATE_REQUEST_BODY},
 )

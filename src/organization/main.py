@@ -41,49 +41,49 @@ from src.common.route_registry import register_app_routes
 # ── Role overrides ────────────────────────────────────────────────────────────
 ROLE_OVERRIDES: dict[str, list[str]] = {
     # Departments
-    "GET:/v1/organizations/departments":                            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/organizations/departments/{department_id}":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/organizations/departments":                           ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/organizations/departments/{department_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/organizations/departments":                            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/organizations/departments/{department_id}":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/organizations/departments":                           ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/aabhar/v1/organizations/departments/{department_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
     # Department Types
-    "GET:/v1/organizations/department-types":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/organizations/department-types":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     # Designations
-    "GET:/v1/organizations/designations":                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/organizations/designations/{designation_id}":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/organizations/designations":                          ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/organizations/designations/{designation_id}":          ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/organizations/designations":                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/organizations/designations/{designation_id}":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/organizations/designations":                          ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/aabhar/v1/organizations/designations/{designation_id}":          ["SUPER_ADMIN", "HR_ADMIN"],
     # Statuses
-    "GET:/v1/organizations/statuses":                               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/organizations/statuses":                              ["SUPER_ADMIN"],
-    "PUT:/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/organizations/statuses":                               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/organizations/statuses":                              ["SUPER_ADMIN"],
+    "PUT:/aabhar/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN"],
     # Audit Logs
-    "GET:/v1/organizations/audit-logs":                             ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/organizations/audit-logs/{audit_id}":                  ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/organizations/audit-logs":                             ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/organizations/audit-logs/{audit_id}":                  ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 # ── Route titles ──────────────────────────────────────────────────────────────
 ROUTE_TITLES: dict[str, str] = {
     # Departments
-    "GET:/v1/organizations/departments":                            "List Departments",
-    "GET:/v1/organizations/departments/{department_id}":            "Get Department Details",
-    "POST:/v1/organizations/departments":                           "Create Department",
-    "PUT:/v1/organizations/departments/{department_id}":            "Update Department",
+    "GET:/aabhar/v1/organizations/departments":                            "List Departments",
+    "GET:/aabhar/v1/organizations/departments/{department_id}":            "Get Department Details",
+    "POST:/aabhar/v1/organizations/departments":                           "Create Department",
+    "PUT:/aabhar/v1/organizations/departments/{department_id}":            "Update Department",
     # Department Types
-    "GET:/v1/organizations/department-types":                       "List Department Types",
+    "GET:/aabhar/v1/organizations/department-types":                       "List Department Types",
     # Designations
-    "GET:/v1/organizations/designations":                           "List Designations",
-    "GET:/v1/organizations/designations/{designation_id}":          "Get Designation Details",
-    "POST:/v1/organizations/designations":                          "Create Designation",
-    "PUT:/v1/organizations/designations/{designation_id}":          "Update Designation",
+    "GET:/aabhar/v1/organizations/designations":                           "List Designations",
+    "GET:/aabhar/v1/organizations/designations/{designation_id}":          "Get Designation Details",
+    "POST:/aabhar/v1/organizations/designations":                          "Create Designation",
+    "PUT:/aabhar/v1/organizations/designations/{designation_id}":          "Update Designation",
     # Statuses
-    "GET:/v1/organizations/statuses":                               "List Statuses",
-    "GET:/v1/organizations/statuses/{status_id}":                   "Get Status Details",
-    "POST:/v1/organizations/statuses":                              "Create Status",
-    "PUT:/v1/organizations/statuses/{status_id}":                   "Update Status",
+    "GET:/aabhar/v1/organizations/statuses":                               "List Statuses",
+    "GET:/aabhar/v1/organizations/statuses/{status_id}":                   "Get Status Details",
+    "POST:/aabhar/v1/organizations/statuses":                              "Create Status",
+    "PUT:/aabhar/v1/organizations/statuses/{status_id}":                   "Update Status",
     # Audit Logs
-    "GET:/v1/organizations/audit-logs":                             "List Audit Logs",
-    "GET:/v1/organizations/audit-logs/{audit_id}":                  "Get Audit Log Details",
+    "GET:/aabhar/v1/organizations/audit-logs":                             "List Audit Logs",
+    "GET:/aabhar/v1/organizations/audit-logs/{audit_id}":                  "Get Audit Log Details",
 }
 
 _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
@@ -131,7 +131,7 @@ app = FastAPI(
     title="Organization Service",
     description="Microservice for handling company structure: Departments and Designations",
     version="1.0.0",
-    root_path="/v1/organizations",
+    root_path="/aabhar/v1/organizations",
     openapi_url="/openapi.json",
     docs_url="/docs",
     lifespan=lifespan,

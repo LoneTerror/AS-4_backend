@@ -27,7 +27,7 @@ _R = "src.roles.router"
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _make_app():
-    app = FastAPI(root_path="/v1/roles")
+    app = FastAPI(root_path="/aabhar/v1/roles")
     app.include_router(roles_router)
     return app
 
@@ -255,7 +255,7 @@ class TestRevokeRoleRoute:
 
 class TestListRoutePermissionsRoute:
     def test_200_returns_list(self, client):
-        perms = [{"route_key": "GET:/v1/roles/list", "roles": []}]
+        perms = [{"route_key": "GET:/aabhar/v1/roles/list", "roles": []}]
         with patch(f"{_R}.service.list_route_permissions", new_callable=AsyncMock) as m:
             m.return_value = perms
             resp = client.get("/route-permissions")
@@ -280,7 +280,7 @@ class TestListRoutePermissionsRoute:
 
 class TestAddRoutePermissionRoute:
     def _payload(self, **ov):
-        base = {"route_key": "GET:/v1/roles/list", "role_id": make_uuid()}
+        base = {"route_key": "GET:/aabhar/v1/roles/list", "role_id": make_uuid()}
         base.update(ov); return base
 
     def test_201_on_valid_payload(self, client):
@@ -301,7 +301,7 @@ class TestAddRoutePermissionRoute:
         assert resp.status_code == 422
 
     def test_missing_role_id_returns_422(self, client):
-        resp = client.post("/route-permissions", json={"route_key": "GET:/v1/x"})
+        resp = client.post("/route-permissions", json={"route_key": "GET:/aabhar/v1/x"})
         assert resp.status_code == 422
 
     def test_title_optional(self, client):
@@ -316,9 +316,9 @@ class TestAddRoutePermissionRoute:
         with patch(f"{_R}.service.add_route_permission", new_callable=AsyncMock) as m:
             m.return_value = rp
             client.post("/route-permissions",
-                        json={"route_key": "POST:/v1/x", "role_id": rid, "title": "Test"})
+                        json={"route_key": "POST:/aabhar/v1/x", "role_id": rid, "title": "Test"})
         body_arg = m.call_args.args[0]
-        assert body_arg.route_key == "POST:/v1/x"
+        assert body_arg.route_key == "POST:/aabhar/v1/x"
         assert body_arg.role_id   == rid
         assert body_arg.title     == "Test"
 
@@ -329,7 +329,7 @@ class TestAddRoutePermissionRoute:
 
 class TestRemoveRoutePermissionRoute:
     def _payload(self, **ov):
-        base = {"route_key": "GET:/v1/roles/list", "role_id": make_uuid()}
+        base = {"route_key": "GET:/aabhar/v1/roles/list", "role_id": make_uuid()}
         base.update(ov); return base
 
     def test_200_on_valid_remove(self, client):
@@ -359,7 +359,7 @@ class TestRemoveRoutePermissionRoute:
         with patch(f"{_R}.service.remove_route_permission", new_callable=AsyncMock) as m:
             m.return_value = rp
             client.patch("/route-permissions",
-                         json={"route_key": "GET:/v1/roles/list", "role_id": rid})
+                         json={"route_key": "GET:/aabhar/v1/roles/list", "role_id": rid})
         body_arg = m.call_args.args[0]
         assert body_arg.role_id == rid
 
@@ -370,11 +370,11 @@ class TestRemoveRoutePermissionRoute:
 
 class TestUpdateRouteTitleRoute:
     def _payload(self, **ov):
-        base = {"route_key": "GET:/v1/roles/list", "title": "List All Roles"}
+        base = {"route_key": "GET:/aabhar/v1/roles/list", "title": "List All Roles"}
         base.update(ov); return base
 
     def test_200_on_valid_update(self, client):
-        result = {"route_key": "GET:/v1/roles/list", "title": "List All Roles", "updated_rows": 2}
+        result = {"route_key": "GET:/aabhar/v1/roles/list", "title": "List All Roles", "updated_rows": 2}
         with patch(f"{_R}.service.update_route_title", new_callable=AsyncMock) as m:
             m.return_value = result
             resp = client.patch("/route-permissions/title", json=self._payload())
@@ -391,22 +391,22 @@ class TestUpdateRouteTitleRoute:
         assert resp.status_code == 422
 
     def test_missing_title_returns_422(self, client):
-        resp = client.patch("/route-permissions/title", json={"route_key": "GET:/v1/x"})
+        resp = client.patch("/route-permissions/title", json={"route_key": "GET:/aabhar/v1/x"})
         assert resp.status_code == 422
 
     def test_response_contains_updated_rows(self, client):
-        result = {"route_key": "GET:/v1/x", "title": "New", "updated_rows": 3}
+        result = {"route_key": "GET:/aabhar/v1/x", "title": "New", "updated_rows": 3}
         with patch(f"{_R}.service.update_route_title", new_callable=AsyncMock) as m:
             m.return_value = result
             resp = client.patch("/route-permissions/title", json=self._payload())
         assert "updated_rows" in resp.json()
 
     def test_body_forwarded_correctly(self, client):
-        result = {"route_key": "PATCH:/v1/x", "title": "My Title", "updated_rows": 1}
+        result = {"route_key": "PATCH:/aabhar/v1/x", "title": "My Title", "updated_rows": 1}
         with patch(f"{_R}.service.update_route_title", new_callable=AsyncMock) as m:
             m.return_value = result
             client.patch("/route-permissions/title",
-                         json={"route_key": "PATCH:/v1/x", "title": "My Title"})
+                         json={"route_key": "PATCH:/aabhar/v1/x", "title": "My Title"})
         body_arg = m.call_args.args[0]
-        assert body_arg.route_key == "PATCH:/v1/x"
+        assert body_arg.route_key == "PATCH:/aabhar/v1/x"
         assert body_arg.title     == "My Title"
