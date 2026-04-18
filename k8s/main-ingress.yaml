@@ -30,56 +30,56 @@ spec:
     http:
       paths:
       # --- Microservices (Specific paths first) ---
-      - path: /v1/auth
+      - path: /aabhar/v1/auth
         pathType: Prefix
         backend:
           service:
             name: auth-service
             port:
               number: 8001
-      - path: /v1/roles
+      - path: /aabhar/v1/roles
         pathType: Prefix
         backend:
           service:
             name: roles-service
             port:
               number: 8002
-      - path: /v1/employees
+      - path: /aabhar/v1/employees
         pathType: Prefix
         backend:
           service:
             name: employees-service
             port:
               number: 8003
-      - path: /v1/wallets
+      - path: /aabhar/v1/wallets
         pathType: Prefix
         backend:
           service:
             name: wallet-service
             port:
               number: 8004
-      - path: /v1/recognitions
+      - path: /aabhar/v1/recognitions
         pathType: Prefix
         backend:
           service:
             name: recognition-service
             port:
               number: 8005
-      - path: /v1/rewards
+      - path: /aabhar/v1/rewards
         pathType: Prefix
         backend:
           service:
             name: rewards-service
             port:
               number: 8006
-      - path: /v1/organizations
+      - path: /aabhar/v1/organizations
         pathType: Prefix
         backend:
           service:
             name: organization-service
             port:
               number: 8007
-      - path: /v1/analytics
+      - path: /aabhar/v1/analytics
         pathType: Prefix
         backend:
           service:
