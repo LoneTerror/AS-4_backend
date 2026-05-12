@@ -15,8 +15,6 @@ spec:
         app: recognition-service
     spec:
       terminationGracePeriodSeconds: 5
-      imagePullSecrets:
-      - name: regcred
       containers:
       - name: recognition-container
         image: mrmonster786/rnr-backend-base:latest 

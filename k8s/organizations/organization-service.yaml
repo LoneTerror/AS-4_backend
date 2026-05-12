@@ -15,8 +15,6 @@ spec:
         app: organization-service
     spec:
       terminationGracePeriodSeconds: 5
-      imagePullSecrets:
-      - name: regcred
       containers:
       - name: organization-container
         image: mrmonster786/rnr-backend-base:latest 

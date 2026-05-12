@@ -15,8 +15,6 @@ spec:
         app: auth-service
     spec:
       terminationGracePeriodSeconds: 5
-      imagePullSecrets:
-      - name: regcred
       containers:
       - name: auth-container
         image: mrmonster786/rnr-backend-base:latest 

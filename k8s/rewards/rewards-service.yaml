@@ -15,8 +15,6 @@ spec:
         app: rewards-service
     spec:
       terminationGracePeriodSeconds: 5
-      imagePullSecrets:
-      - name: regcred
       containers:
       - name: rewards-container
         image: mrmonster786/rnr-backend-base:latest 

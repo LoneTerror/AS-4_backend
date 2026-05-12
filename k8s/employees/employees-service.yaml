@@ -15,8 +15,6 @@ spec:
         app: employees-service
     spec:
       terminationGracePeriodSeconds: 5
-      imagePullSecrets:
-      - name: regcred
       containers:
       - name: employees-container
         image: mrmonster786/rnr-backend-base:latest 

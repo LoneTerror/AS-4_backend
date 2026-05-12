@@ -15,8 +15,6 @@ spec:
         app: analytics-service
     spec:
       terminationGracePeriodSeconds: 5
-      imagePullSecrets:
-      - name: regcred
       containers:
       - name: analytics-container
         image: mrmonster786/rnr-backend-base:latest 

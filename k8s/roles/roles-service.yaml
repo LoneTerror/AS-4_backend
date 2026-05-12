@@ -15,8 +15,6 @@ spec:
         app: roles-service
     spec:
       terminationGracePeriodSeconds: 5
-      imagePullSecrets:
-      - name: regcred
       containers:
       - name: roles-container
         image: mrmonster786/rnr-backend-base:latest 
