@@ -1,0 +1,158 @@
+version: '3.8'
+
+services:
+  # 1. The Auth Microservice
+  auth-service:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-auth
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    command: uvicorn src.auth.main:app --host 0.0.0.0 --port 8001 --reload
+    depends_on:
+      - redis
+
+  # 7. The Roles & Permissions Microservice
+  roles-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-roles
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      # Networking overrides for service discovery & cache
+      - REDIS_URL=redis://redis:6379/0
+      # Overriding standard database URL if necessary for Docker internal network
+      - DATABASE_URL=postgresql://user:password@rnr-db:5432/rnr_db?schema=public
+      # - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+    depends_on:
+      - redis
+    command: uvicorn src.roles.main:app --host 0.0.0.0 --port 8002 --reload
+
+  # 2. The Employees Microservice
+  employees-service:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-employees
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    command: uvicorn src.employees.main:app --host 0.0.0.0 --port 8003 --reload
+    depends_on:
+      - redis
+
+  wallet-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-wallet
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    environment:
+      # Only override what is Docker-specific
+      - REDIS_URL=redis://redis:6379/0
+      - AUTH_SERVICE_URL=http://auth-service:8001
+
+    depends_on:
+      - redis
+      - auth-service
+
+    command: uvicorn src.wallet.main:app --host 0.0.0.0 --port 8004 --reload
+
+  # 6. The Recognition Microservice
+  recognition-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-recognition
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    environment:
+      # Networking overrides for service-to-service communication
+      - REDIS_URL=redis://redis:6379/0
+      - AUTH_SERVICE_URL=http://auth-service:8001/v1/auth/validate
+    depends_on:
+      - redis
+      - auth-service
+    command: uvicorn src.recognition.main:app --host 0.0.0.0 --port 8005 --reload
+
+  rewards-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-rewards
+    ports:
+      - "8006:8006"
+    env_file:
+      - .env
+    environment:
+      # Standardizing to your internal service discovery naming
+      - REDIS_URL=redis://redis:6379/0
+      - AUTH_SERVICE_URL=http://auth-service:8001/v1/auth/validate
+      - WALLET_SERVICE_URL=http://wallet-service:8000
+    depends_on:
+      - redis
+      - auth-service
+    command: uvicorn src.rewards.main:app --host 0.0.0.0 --port 8006 --reload
+
+  organization-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-organization
+    ports:
+      - "8007:8007"
+    env_file:
+      - .env
+    environment:
+      # Overriding internal URLs for Docker networking
+      - AUTH_SERVICE_URL=http://auth-service:8001/v1/auth/validate
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: uvicorn src.organization.main:app --host 0.0.0.0 --port 8007 --reload
+
+  # 3. The Analytics Microservice (New)
+  analytics-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rnr-analytics
+    ports:
+      - "8008:8008"
+    env_file:
+      - .env
+    environment:
+      # Overriding Redis and internal URLs for Docker networking
+      - REDIS_URL=redis://redis:6379/0
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - EMPLOYEES_SERVICE_URL=http://employees-service:8003
+    depends_on:
+      - redis
+      - auth-service
+      - employees-service
+    command: uvicorn src.analytics.main:app --host 0.0.0.0 --port 8008 --reload
+
+  # 4. Redis (Event Stream & Caching)
+  redis:
+    image: redis:7-alpine
+    container_name: rnr-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+networks:
+  default:
+    name: rnr-network

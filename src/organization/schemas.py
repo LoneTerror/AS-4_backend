@@ -41,27 +41,34 @@ class DepartmentListItem(BaseModel):
     department_name: str
     department_code: str
     department_type: Optional[DepartmentTypeResponse] = None
-    manager: Optional[ManagerBriefResponse] = None
+    # manager: Optional[ManagerBriefResponse] = None
     is_active: bool
     created_at: datetime
+    created_by: Optional[UUID] = None
+    created_by_info: Optional[ManagerBriefResponse] = None
+    updated_by: Optional[UUID] = None
+    updated_by_info: Optional[ManagerBriefResponse] = None
 
 
 class DepartmentListResponse(BaseModel):
     data: List[DepartmentListItem]
     pagination: PaginationMeta
-
-
+    
 class DepartmentDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     department_id: UUID
     department_name: str
     department_code: str
     department_type: Optional[DepartmentTypeResponse] = None
-    manager: Optional[ManagerBriefResponse] = None
+    # manager: Optional[ManagerBriefResponse] = None
     employee_count: int
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
+    created_by: Optional[UUID] = None          
+    created_by_info: Optional[ManagerBriefResponse] = None   
+    updated_by: Optional[UUID] = None        
+    updated_by_info: Optional[ManagerBriefResponse] = None      
 
 
 class CreateDepartmentRequest(BaseModel):
@@ -95,10 +102,11 @@ class DepartmentCreatedResponse(BaseModel):
     department_name: str
     department_code: str
     department_type: Optional[DepartmentTypeResponse] = None
-    manager: Optional[ManagerBriefResponse] = None
+    # manager: Optional[ManagerBriefResponse] = None
     is_active: bool
     created_at: datetime
     created_by: Optional[UUID] = None
+    created_by_info: Optional[ManagerBriefResponse] = None  
 
 
 class DepartmentUpdatedResponse(BaseModel):
@@ -107,10 +115,11 @@ class DepartmentUpdatedResponse(BaseModel):
     department_name: str
     department_code: str
     department_type: Optional[DepartmentTypeResponse] = None
-    manager: Optional[ManagerBriefResponse] = None
+    # manager: Optional[ManagerBriefResponse] = None
     is_active: bool
     updated_at: Optional[datetime] = None
     updated_by: Optional[UUID] = None
+    updated_by_info: Optional[ManagerBriefResponse] = None   
 
 
 # ─────────────────────────────────────────────
@@ -219,16 +228,18 @@ class UpdateStatusRequest(BaseModel):
 
 class AuditLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    audit_id: UUID
-    table_name: str
-    record_id: UUID
+    audit_id:       UUID
+    table_name:     str
+    record_id:      UUID
     operation_type: str
-    old_values: Optional[Any] = None
-    new_values: Optional[Any] = None
-    performed_by: UUID
-    performed_at: datetime
-    ip_address: Optional[str] = None
-    user_agent: Optional[str] = None
+    old_values:     Optional[Any] = None
+    new_values:     Optional[Any] = None
+    performed_by:   UUID
+    performed_at:   datetime
+    ip_address:     Optional[str] = None
+    user_agent:     Optional[str] = None
+    employee_name:  Optional[str] = None  
+    employee_email: Optional[str] = None  
 
 
 class AuditLogListResponse(BaseModel):

@@ -1,751 +1,599 @@
+"""
+src/recognition/service.py
+───────────────────────────
+Recognition service — owns: reviews, review_categories, review_category_tags.
+
+DECOUPLING CHANGE
+──────────────────
+Previously create_review() called POST /aabhar/v1/wallets/credit-from-review
+synchronously.  Replaced with a fire-and-forget publish() to the
+'events:review.created' Redis Stream.  The Wallet service's
+review_created_consumer_loop credits points asynchronously.
+
+Result: review creation never fails because the Wallet service is slow
+or temporarily unavailable.
+"""
+from __future__ import annotations
+
 import asyncio
 import logging
 import math
 from datetime import datetime, timezone
-from fastapi import HTTPException, status
+from dateutil.relativedelta import relativedelta
+from typing import Optional
 
+from fastapi import HTTPException
+
+from src.common.event_publisher import publish
 from src.prisma.client import db
-from src.common.dependencies import CurrentUser
-from src.common.cache import (
-    cache_get, cache_set, cache_delete, invalidate_pattern,
-    TTL_VOLATILE,  L1_VOLATILE,
-    TTL_MEDIUM,    L1_MEDIUM,
-    TTL_SHORT,     L1_SHORT,
-)
+from src.recognition.points_engine import calculate_points
 from src.recognition.schemas import (
-    ReviewCreateRequest,
-    ReviewUpdateRequest,
     ReviewCategoryCreateRequest,
     ReviewCategoryUpdateRequest,
+    ReviewCreateRequest,
+    ReviewUpdateRequest,
 )
-from src.recognition.points_engine import calculate_points
-from src.notifications.service import NotificationService
-from src.notifications.schemas import NotificationType
 
 logger = logging.getLogger(__name__)
 
-def _get_notif() -> NotificationService:
-    try:
-        from src.notifications.redis_client import get_redis
-        r = get_redis()
-    except RuntimeError:
-        r = None
-    return NotificationService(db, redis=r)
 
-_ROLE_PRIORITY = ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"]
-
-# ── Cache keys ────────────────────────────────────────────────────────────────
-# Reviews        → VOLATILE  (60s  / 30s)   — change often
-# Categories     → MEDIUM    (3600s / 300s)  — HR_ADMIN only writes
-# Role weight    → MEDIUM    (3600s / 300s)  — rarely changes
-# Seasonal mult  → MEDIUM    (3600s / 300s)  — quarterly, rarely changes
-# Team headcount → SHORT     (300s  / 60s)   — employees join/leave occasionally
-
-def _key_reviews(user_id: str, page: int, limit: int) -> str:
-    return f"recognition:reviews:{user_id}:{page}:{limit}"
-
-def _key_categories(page: int, limit: int, active_only: bool) -> str:
-    return f"recognition:categories:{page}:{limit}:{int(active_only)}"
-
-def _key_category(category_id: str) -> str:
-    return f"recognition:category:{category_id}"
-
-def _key_role_weight(role_code: str) -> str:
-    return f"recognition:role_weight:{role_code}"
-
-def _key_team_count(department_id: str | None) -> str:
-    return f"recognition:team_count:{department_id or 'all'}"
-
-async def invalidate_reviews(user_id: str):
-    await invalidate_pattern(f"recognition:reviews:{user_id}:*")
-
-async def invalidate_categories():
-    await invalidate_pattern("recognition:categories:*")
-    await invalidate_pattern("recognition:category:*")
-
-# ─────────────────────────────────────────────────────────────────────────────
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERS
+# Review Categories
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_review_dict(review, tags: list) -> dict:
-    try:
-        data = {k: v for k, v in vars(review).items() if not k.startswith("_")}
-    except TypeError:
-        data = {col: getattr(review, col) for col in review.__fields__}
+async def list_review_categories(page: int = 1, limit: int = 20, active_only: bool = False):
+    where = {"is_active": True} if active_only else {}
 
-    tag_list = [
-        {
-            "category_id":         t.category_id,
-            "category_code":       t.category_code_snapshot,
-            "multiplier_snapshot": float(t.multiplier_snapshot),
-        }
-        for t in (tags or [])
-    ]
-    data["category_tags"]  = tag_list
-    data["category_ids"]   = [t["category_id"]   for t in tag_list]
-    data["category_codes"] = [t["category_code"] for t in tag_list]
-    return data
-
-
-async def _fetch_review_with_tags(review_id: str):
-    review = await db.reviews.find_unique(where={"review_id": review_id})
-    if not review:
-        return None, []
-    tags = await db.review_category_tags.find_many(
-        where={"review_id": review_id},
-        order={"created_at": "asc"},
-    )
-    return review, tags
-
-
-async def _get_cached_category(category_id: str) -> dict | None:
-    """
-    Fetch a single review category with MEDIUM-tier caching.
-    Returns a plain dict with {category_id, category_code, multiplier, is_active}
-    or None if not found.
-    Invalidated by invalidate_categories() on any category write.
-    """
-    key    = _key_category(category_id)
-    cached = await cache_get(key, l1_ttl=L1_MEDIUM)
-    if cached is not None:
-        return cached
-
-    row = await db.review_categories.find_unique(where={"category_id": category_id})
-    if row is None:
-        return None
-
-    value = {
-        "category_id":   row.category_id,
-        "category_code": row.category_code,
-        "multiplier":    float(row.multiplier),
-        "is_active":     row.is_active,
+    if where:
+        total = await db.review_categories.count(where=where)
+        rows = await db.review_categories.find_many(
+            where=where,
+            order={"category_name": "asc"},
+            skip=(page - 1) * limit,
+            take=limit,
+        )
+    else:
+        total = await db.review_categories.count()
+        rows = await db.review_categories.find_many(
+            order={"category_name": "asc"},
+            skip=(page - 1) * limit,
+            take=limit,
+        )
+    return {
+        "data": rows,
+        "pagination": {
+            "current_page": page, "per_page": limit, "total": total,
+            "total_pages":  math.ceil(total / limit) if total else 0,
+            "has_next":     (page * limit) < total,
+            "has_previous": page > 1,
+        },
     }
-    await cache_set(key, value, ttl=TTL_MEDIUM, l1_ttl=L1_MEDIUM)
-    return value
 
 
-async def _get_cached_role_weight(role_code: str) -> float:
-    """
-    Fetch reviewer_weight for a role with MEDIUM-tier caching.
-    Falls back to 1.0 if the role is not found.
-    """
-    key    = _key_role_weight(role_code)
-    cached = await cache_get(key, l1_ttl=L1_MEDIUM)
-    if cached is not None:
-        return float(cached)
+async def create_review_category(body: ReviewCategoryCreateRequest, current_user_id: str):
+    existing = await db.review_categories.find_first(where={
+        "OR": [{"category_code": body.category_code}, {"category_name": body.category_name}]
+    })
+    if existing:
+        raise HTTPException(status_code=409, detail="Category code or name already exists")
+    return await db.review_categories.create(data={
+        "category_code": body.category_code,
+        "category_name": body.category_name,
+        "multiplier":    body.multiplier,
+        "description":   body.description,
+        "is_active":     True,
+        "created_by":    current_user_id,
+        "updated_by":    current_user_id,
+        "updated_at":    _now(),
+    })
 
-    role_row = await db.roles.find_first(where={"role_code": role_code})
-    weight   = float(role_row.reviewer_weight) if role_row else 1.0
-    await cache_set(key, weight, ttl=TTL_MEDIUM, l1_ttl=L1_MEDIUM)
-    return weight
+
+async def update_review_category(
+    category_id: str, body: ReviewCategoryUpdateRequest, current_user_id: str
+):
+    existing = await db.review_categories.find_unique(where={"category_id": category_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Category not found")
+    data: dict = {"updated_by": current_user_id, "updated_at": _now()}
+    for field in ("category_code", "category_name", "multiplier", "description", "is_active"):
+        val = getattr(body, field, None)
+        if val is not None:
+            data[field] = val
+    return await db.review_categories.update(where={"category_id": category_id}, data=data)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Reviews
+# ─────────────────────────────────────────────────────────────────────────────
 
-async def _resolve_multipliers(
-    category_ids: list[str],
-    reviewer_roles: list[str],
-) -> tuple[float, float, list[dict]]:
-    if not category_ids:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="At least one category must be provided",
+async def list_reviews(
+    page: int = 1,
+    limit: int = 20,
+    reviewer_id: Optional[str] = None,
+    receiver_id: Optional[str] = None,
+):
+    where: dict = {}
+    if reviewer_id:
+        where["reviewer_id"] = reviewer_id
+    if receiver_id:
+        where["receiver_id"] = receiver_id
+
+    # Prisma 0.15.0 bug: passing where={} leaks enclosing scope into query builder.
+    # Fix: only pass where= when it has actual filters.
+    if where:
+        total = await db.reviews.count(where=where)
+        rows = await db.reviews.find_many(
+            where=where,
+            include={
+                "employees_reviews_reviewer_idToemployees": True,
+                "review_category_tags": True,
+            },
+            order={"review_at": "desc"},
+            skip=(page - 1) * limit,
+            take=limit,
+        )
+    else:
+        total = await db.reviews.count()
+        rows = await db.reviews.find_many(
+            include={
+                "employees_reviews_reviewer_idToemployees": True,
+                "review_category_tags": True,
+            },
+            order={"review_at": "desc"},
+            skip=(page - 1) * limit,
+            take=limit,
         )
 
-    tag_snapshots = []
-    multipliers   = []
+    return {
+        "data": [_serialize_review(r) for r in rows],
+        "pagination": {
+            "current_page": page, "per_page": limit, "total": total,
+            "total_pages":  math.ceil(total / limit) if total else 0,
+            "has_next":     (page * limit) < total,
+            "has_previous": page > 1,
+        },
+    }
+async def get_review(review_id: str):
+    row = await db.reviews.find_unique(
+        where={"review_id": review_id},
+        include={
+            "employees_reviews_reviewer_idToemployees": True,
+            "review_category_tags": True,
+        },
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return _serialize_review(row)
 
-    for cid in category_ids:
-        row = await _get_cached_category(cid)
-        if not row:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Review category not found: {cid}",
-            )
-        if not row["is_active"]:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Review category is not active: {row['category_code']}",
-            )
-        m = row["multiplier"]
-        multipliers.append(m)
-        tag_snapshots.append({
-            "category_id":            cid,
-            "multiplier_snapshot":    m,
-            "category_code_snapshot": row["category_code"],
+
+async def create_review(body: ReviewCreateRequest, reviewer_id: str):
+    # ── Validate categories ───────────────────────────────────────────────────
+    cat_ids = [str(cid) for cid in body.category_ids]
+    categories = await db.review_categories.find_many(
+        where={"category_id": {"in": cat_ids}, "is_active": True}
+    )
+    if len(categories) != len(cat_ids):
+        raise HTTPException(status_code=400, detail="One or more category IDs are invalid or inactive")
+
+    # ── Calculate points ──────────────────────────────────────────────────────
+    reviewer_weight  = await _get_reviewer_weight(reviewer_id)
+    total_multiplier = sum(float(c.multiplier) for c in categories)
+    pts_result       = calculate_points(
+        total_category_multiplier=total_multiplier,
+        reviewer_weight=reviewer_weight,
+        category_code=",".join(c.category_code for c in categories),
+    )
+    raw_points = round(pts_result.raw_points)
+
+    # ── Resolve status ────────────────────────────────────────────────────────
+    status = await db.status_master.find_first(
+        where={"status_code": "ACTIVE", "entity_type": "REVIEW"}
+    ) or await db.status_master.find_first(where={"status_code": "ACTIVE"})
+    if not status:
+        raise HTTPException(status_code=500, detail="No ACTIVE status found in status_master")
+
+    # ── Persist review ────────────────────────────────────────────────────────
+    review = await db.reviews.create(data={
+        "reviewer_id": reviewer_id,
+        "receiver_id": str(body.receiver_id),
+        "comment":     body.comment,
+        "image_url":   str(body.image_url) if body.image_url else None,
+        "video_url":   str(body.video_url) if body.video_url else None,
+        "status_id":   status.status_id,
+        "raw_points":  raw_points,
+        "review_at":   _now(),
+        "created_by":  reviewer_id,
+        "updated_by":  reviewer_id,
+        "updated_at":  _now(),
+    })
+
+    # ── Persist category tag snapshots ────────────────────────────────────────
+    for cat in categories:
+        await db.review_category_tags.create(data={
+            "review_id":              review.review_id,
+            "category_id":            cat.category_id,
+            "category_code_snapshot": cat.category_code,
+            "multiplier_snapshot":    float(cat.multiplier),
         })
 
-    total_multiplier = sum(multipliers)
+    # ── Publish event — replaces synchronous HTTP call to Wallet ─────────────
+    # Previously: httpx.post("/aabhar/v1/wallets/credit-from-review")
+    # Now: fire-and-forget; Wallet's review_created_consumer credits asynchronously.
+    await publish("events:review.created", {
+        "review_id":   str(review.review_id),
+        "reviewer_id": reviewer_id,
+        "receiver_id": str(body.receiver_id),
+        "raw_points":  str(raw_points),
+    })
 
-    # Role weight — cached per role code
-    reviewer_weight = 1.0
-    for role_code in _ROLE_PRIORITY:
-        if role_code in reviewer_roles:
-            reviewer_weight = await _get_cached_role_weight(role_code)
-            break
+    logger.info(
+        "Review %s created — published review.created (receiver=%s, points=%d)",
+        review.review_id, body.receiver_id, raw_points,
+    )
 
-    return total_multiplier, reviewer_weight, tag_snapshots
-
-
-async def _get_team_member_count(department_id: str | None) -> int:
-    """
-    Count active employees (excluding the current user) with SHORT-tier caching.
-    TTL 300s — acceptable staleness for a monthly quota check.
-    Invalidated implicitly by TTL; explicit invalidation not needed for quota logic.
-    """
-    key    = _key_team_count(department_id)
-    cached = await cache_get(key, l1_ttl=L1_SHORT)
-    if cached is not None:
-        return max(0, int(cached) - 1)
-
-    where: dict = {
-        "status_master_employees_status_idTostatus_master": {"status_code": "ACTIVE"}
-    }
-    if department_id:
-        where["department_id"] = department_id
-
-    count = await db.employees.count(where=where)
-    await cache_set(key, count, ttl=TTL_SHORT, l1_ttl=L1_SHORT)
-    return max(0, count - 1)
+    return _serialize_review(await db.reviews.find_unique(
+        where={"review_id": review.review_id},
+        include={
+            "employees_reviews_reviewer_idToemployees": True,
+            "review_category_tags": True,
+        },
+    ))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SERVICE
-# ─────────────────────────────────────────────────────────────────────────────
+async def update_review(review_id: str, body: ReviewUpdateRequest, current_user_id: str):
+    existing = await db.reviews.find_unique(where={"review_id": review_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Review not found")
+    if str(existing.reviewer_id) != current_user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to edit this review")
 
-class RecognitionService:
+    data: dict = {"updated_by": current_user_id, "updated_at": _now()}
+    if body.comment is not None:
+        data["comment"] = body.comment
+    if body.image_url is not None:
+        data["image_url"] = str(body.image_url)
+    if body.video_url is not None:
+        data["video_url"] = str(body.video_url)
 
-    # =========================================================
-    # LIST REVIEWS  — VOLATILE tier (60s / 30s)
-    # =========================================================
-    @staticmethod
-    async def list_reviews(page: int, limit: int, current_user: CurrentUser):
-        key    = _key_reviews(current_user.id, page, limit)
-        cached = await cache_get(key, l1_ttl=L1_VOLATILE)
-        logger.debug("cache reviews key=%s %s", key, "HIT" if cached is not None else "MISS")
-        if cached is not None:
-            return cached
-
-        skip  = (page - 1) * limit
-        where = {}
-        if not any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"]):
-            where["OR"] = [
-                {"reviewer_id": current_user.id},
-                {"receiver_id": current_user.id},
-            ]
-
-        # Run count + page fetch in parallel — saves one round trip
-        total, reviews = await asyncio.gather(
-            db.reviews.count(where=where),
-            db.reviews.find_many(
-                where=where,
-                skip=skip,
-                take=limit,
-                order={"review_at": "desc"},
-                # No include — avoids N+1 (one extra query per review).
-                # Tags are batch-fetched below in a single query.
-            ),
-        )
-        total_pages = math.ceil(total / limit) if total > 0 else 0
-
-        # Single batch fetch for all tags on this page
-        review_ids = [r.review_id for r in reviews]
-        all_tags   = await db.review_category_tags.find_many(
-            where={"review_id": {"in": review_ids}},
-            order={"created_at": "asc"},
-        )
-        tags_by_review: dict[str, list] = {rid: [] for rid in review_ids}
-        for tag in all_tags:
-            tags_by_review.setdefault(tag.review_id, []).append(tag)
-
-        result = {
-            "data": [
-                _build_review_dict(r, tags_by_review.get(r.review_id, []))
-                for r in reviews
-            ],
-            "pagination": {
-                "current_page": page,
-                "per_page":     limit,
-                "total":        total,
-                "total_pages":  total_pages,
-                "has_next":     page < total_pages,
-                "has_previous": page > 1 and total_pages > 0,
-            },
-        }
-
-        await cache_set(key, result, ttl=TTL_VOLATILE, l1_ttl=L1_VOLATILE)
-        return result
-
-    # =========================================================
-    # GET REVIEW  (access-control sensitive — not cached)
-    # =========================================================
-    @staticmethod
-    async def get_review(review_id: str, current_user: CurrentUser):
-        # 1. Fetch from DB
-        review = await db.reviews.find_unique(
-            where={"review_id": review_id},
-            include={"review_category_tags": True},
-        )
-
-        # 2. Priority: If it doesn't exist, it's a 404, not a permission issue
-        if not review:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-
-        # 3. Then check permissions
-        is_admin = any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
-        is_owner = review.reviewer_id == current_user.id or review.receiver_id == current_user.id
-
-        if not is_admin and not is_owner:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
-        return _build_review_dict(review, getattr(review, "review_category_tags", []))
-
-    # =========================================================
-    # LIST REVIEW CATEGORIES  — MEDIUM tier (3600s / 300s)
-    # =========================================================
-    @staticmethod
-    async def list_review_categories(page: int, limit: int, active_only: bool = True):
-        key    = _key_categories(page, limit, active_only)
-        cached = await cache_get(key, l1_ttl=L1_MEDIUM)
-        logger.debug("cache categories key=%s %s", key, "HIT" if cached is not None else "MISS")
-        if cached is not None:
-            return cached
-
-        skip  = (page - 1) * limit
-        where = {"is_active": True} if active_only else {}
-
-        total      = await db.review_categories.count(where=where)
+    if body.category_ids is not None:
+        cat_ids    = [str(cid) for cid in body.category_ids]
         categories = await db.review_categories.find_many(
-            where=where, skip=skip, take=limit, order={"category_name": "asc"}
+            where={"category_id": {"in": cat_ids}, "is_active": True}
         )
-        total_pages = math.ceil(total / limit) if total > 0 else 0
-
-        result = {
-            "data": [
-                {k: v for k, v in vars(c).items() if not k.startswith("_")}
-                for c in categories
-            ],
-            "pagination": {
-                "current_page": page,
-                "per_page":     limit,
-                "total":        total,
-                "total_pages":  total_pages,
-                "has_next":     page < total_pages,
-                "has_previous": page > 1 and total_pages > 0,
-            },
-        }
-
-        await cache_set(key, result, ttl=TTL_MEDIUM, l1_ttl=L1_MEDIUM)
-        return result
-
-    # =========================================================
-    # CREATE REVIEW CATEGORY
-    # =========================================================
-    @staticmethod
-    async def create_review_category(
-        payload: ReviewCategoryCreateRequest,
-        current_user: CurrentUser,
-    ):
-        existing_code = await db.review_categories.find_unique(
-            where={"category_code": payload.category_code}
+        if len(categories) != len(cat_ids):
+            raise HTTPException(status_code=400, detail="One or more category IDs invalid or inactive")
+        reviewer_weight  = await _get_reviewer_weight(current_user_id)
+        total_multiplier = sum(float(c.multiplier) for c in categories)
+        pts_result       = calculate_points(
+            total_category_multiplier=total_multiplier,
+            reviewer_weight=reviewer_weight,
         )
-        if existing_code:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"A category with code '{payload.category_code}' already exists",
-            )
+        data["raw_points"] = round(pts_result.raw_points)
+        await db.review_category_tags.delete_many(where={"review_id": review_id})
+        for cat in categories:
+            await db.review_category_tags.create(data={
+                "review_id":              review_id,
+                "category_id":            cat.category_id,
+                "category_code_snapshot": cat.category_code,
+                "multiplier_snapshot":    float(cat.multiplier),
+            })
 
-        existing_name = await db.review_categories.find_unique(
-            where={"category_name": payload.category_name}
-        )
-        if existing_name:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"A category with name '{payload.category_name}' already exists",
-            )
+    await db.reviews.update(where={"review_id": review_id}, data=data)
+    return _serialize_review(await db.reviews.find_unique(
+        where={"review_id": review_id},
+        include={
+            "employees_reviews_reviewer_idToemployees": True,
+            "review_category_tags": True,
+        },
+    ))
 
-        now = datetime.now(timezone.utc)
 
-        category = await db.review_categories.create(
-            data={
-                "category_code": payload.category_code,
-                "category_name": payload.category_name,
-                "multiplier":    payload.multiplier,
-                "description":   payload.description,
-                "is_active":     True,
-                "created_at":    now,
-                "created_by":    current_user.id,
-                "updated_at":    now,
-                "updated_by":    current_user.id,
-            }
-        )
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal endpoints (served by recognition/internal_router.py)
+# ─────────────────────────────────────────────────────────────────────────────
 
-        await invalidate_categories()
-        logger.info(
-            "Review category created | code=%s multiplier=%.4f by=%s",
-            category.category_code, float(category.multiplier), current_user.id,
-        )
+async def get_review_stats_internal(employee_id: str) -> dict:
+    from dateutil.relativedelta import relativedelta
+    now        = _now()
+    start_this = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    start_last = (start_this - relativedelta(months=1))
 
-        return {k: v for k, v in vars(category).items() if not k.startswith("_")}
+    total, this_month, last_month = await asyncio.gather(
+        db.reviews.count(where={"receiver_id": employee_id}),
+        db.reviews.count(where={"receiver_id": employee_id,
+                                 "review_at": {"gte": start_this, "lt": now}}),
+        db.reviews.count(where={"receiver_id": employee_id,
+                                 "review_at": {"gte": start_last, "lt": start_this}}),
+    )
+    return {"reviews_total": total, "reviews_this_month": this_month, "reviews_last_month": last_month}
 
-    # =========================================================
-    # UPDATE REVIEW CATEGORY
-    # =========================================================
-    @staticmethod
-    async def update_review_category(
-        category_id: str,
-        payload: ReviewCategoryUpdateRequest,
-        current_user: CurrentUser,
-    ):
-        category = await db.review_categories.find_unique(
-            where={"category_id": category_id}
-        )
-        if not category:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Review category not found",
-            )
 
-        update_data: dict = {}
+async def get_recent_reviews_internal(employee_id: str, limit: int = 5) -> list:
+    rows = await db.reviews.find_many(
+        where={"receiver_id": employee_id},
+        include={
+            "employees_reviews_reviewer_idToemployees": True,
+            "review_category_tags": True,
+        },
+        order={"review_at": "desc"},
+        take=limit,
+    )
+    return [_serialize_review(r) for r in rows]
 
-        if payload.category_code is not None:
-            conflict = await db.review_categories.find_first(
-                where={"category_code": payload.category_code, "NOT": {"category_id": category_id}}
-            )
-            if conflict:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"A category with code '{payload.category_code}' already exists",
-                )
-            update_data["category_code"] = payload.category_code
 
-        if payload.category_name is not None:
-            conflict = await db.review_categories.find_first(
-                where={"category_name": payload.category_name, "NOT": {"category_id": category_id}}
-            )
-            if conflict:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"A category with name '{payload.category_name}' already exists",
-                )
-            update_data["category_name"] = payload.category_name
+async def get_recognition_trend_internal(range_: str) -> dict:
+    """Time-series review activity — used by Analytics."""
+    from dateutil.relativedelta import relativedelta
 
-        if payload.multiplier  is not None: update_data["multiplier"]  = payload.multiplier
-        if payload.description is not None: update_data["description"] = payload.description
-        if payload.is_active   is not None: update_data["is_active"]   = payload.is_active
+    now = _now()
+    builtins_range = range
 
-        update_data["updated_at"] = datetime.now(timezone.utc)
-        update_data["updated_by"] = current_user.id
-
-        updated = await db.review_categories.update(
-            where={"category_id": category_id},
-            data=update_data,
-        )
-
-        await invalidate_categories()
-        logger.info(
-            "Review category updated | id=%s fields=%s by=%s",
-            category_id, list(update_data.keys()), current_user.id,
-        )
-
-        return {k: v for k, v in vars(updated).items() if not k.startswith("_")}
-
-    # =========================================================
-    # CREATE REVIEW  — invalidates both parties' caches
-    # =========================================================
-    @staticmethod
-    async def create_review(payload: ReviewCreateRequest, current_user: CurrentUser):
-
-        if str(payload.receiver_id) == current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Self review not allowed",
-            )
-
-        now         = datetime.now(timezone.utc)
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        receiver_id = str(payload.receiver_id)
-
-        # Parallelise the four independent pre-flight checks
-        status_include = {"status_master_employees_status_idTostatus_master": True}
-        reviewer, receiver, already_reviewed, review_status_row = await asyncio.gather(
-            db.employees.find_unique(where={"employee_id": current_user.id},        include=status_include),
-            db.employees.find_unique(where={"employee_id": receiver_id},             include=status_include),
-            db.reviews.find_first(where={
-                "reviewer_id": current_user.id,
-                "receiver_id": receiver_id,
-                "review_at":   {"gte": month_start},
-            }),
-            db.status_master.find_first(where={"entity_type": "REVIEW", "status_code": "REVIEW_ACTIVE"}),
-        )
-
-        if not reviewer or (
-            not reviewer.status_master_employees_status_idTostatus_master
-            or reviewer.status_master_employees_status_idTostatus_master.status_code != "ACTIVE"
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Your account is not active and cannot submit reviews",
-            )
-        if not receiver:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receiver not found")
-        if (
-            not receiver.status_master_employees_status_idTostatus_master
-            or receiver.status_master_employees_status_idTostatus_master.status_code != "ACTIVE"
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Receiver is not active",
-            )
-        if already_reviewed:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="You have already reviewed this person this month",
-            )
-
-        is_privileged = any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
-        if not is_privileged:
-            monthly_quota, monthly_given = await asyncio.gather(
-                _get_team_member_count(current_user.department_id),
-                db.reviews.count(where={"reviewer_id": current_user.id, "review_at": {"gte": month_start}}),
-            )
-            if monthly_quota == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="No active team members found to review",
-                )
-            if monthly_given >= monthly_quota:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"Monthly review limit reached ({monthly_given}/{monthly_quota}). "
-                        "Your quota equals the number of active teammates in your department."
-                    ),
-                )
-
-        review_status = review_status_row
-        if not review_status:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Review status configuration missing",
-            )
-
-        category_ids_str = [str(cid) for cid in payload.category_ids]
-
-        total_multiplier, reviewer_weight, tag_snapshots = (
-            await _resolve_multipliers(
-                category_ids   = category_ids_str,
-                reviewer_roles = current_user.roles,
-            )
-        )
-
-        joined_codes = ",".join(t["category_code_snapshot"] for t in tag_snapshots)
-        pts = calculate_points(
-            total_category_multiplier = total_multiplier,
-            reviewer_weight           = reviewer_weight,
-            category_code             = joined_codes,
-        )
-
-        logger.info(
-            "Points calculated | receiver=%s categories=%s "
-            "total_mult=%.4f raw=%.4f reviewer_roles=%s",
-            payload.receiver_id, joined_codes,
-            total_multiplier, pts.raw_points, current_user.roles,
-        )
-
-        review = await db.reviews.create(
-            data={
-                "reviewer_id": current_user.id,
-                "receiver_id": str(payload.receiver_id),
-                "comment":     payload.comment,
-                "image_url":   str(payload.image_url) if payload.image_url else None,
-                "video_url":   str(payload.video_url) if payload.video_url else None,
-                "status_id":   review_status.status_id,
-                "review_at":   now,
-                "created_at":  now,
-                "created_by":  current_user.id,
-                "updated_at":  now,
-                "updated_by":  current_user.id,
-                "raw_points":  round(pts.raw_points, 4),
-            }
-        )
-
-        # Batch-insert all tags in parallel
-        await asyncio.gather(*[
-            db.review_category_tags.create(
-                data={
-                    "review_id":              review.review_id,
-                    "category_id":            snap["category_id"],
-                    "multiplier_snapshot":    snap["multiplier_snapshot"],
-                    "category_code_snapshot": snap["category_code_snapshot"],
-                }
-            )
-            for snap in tag_snapshots
-        ])
-
-        # Invalidate review list caches for both parties in parallel
-        await asyncio.gather(
-            invalidate_reviews(current_user.id),
-            invalidate_reviews(receiver_id),
-        )
-
-        try:
-            from src.wallet.service import credit_wallet_from_review
-            wallet_result = await credit_wallet_from_review(
-                review_id    = review.review_id,
-                current_user = current_user,
-            )
-            logger.info(
-                "Wallet credited | review=%s credited=%d new_balance=%d",
-                review.review_id,
-                wallet_result.get("credited_points", 0),
-                wallet_result.get("new_balance", 0),
-            )
-        except HTTPException as exc:
-            if exc.status_code == 409:
-                logger.info("Wallet already credited for review %s", review.review_id)
-            else:
-                logger.exception("Wallet credit failed for review %s", review.review_id)
-        except Exception:
-            logger.exception("Unexpected wallet credit failure for review %s", review.review_id)
-
-        try:
-            preview = payload.comment[:100] + ("..." if len(payload.comment) > 100 else "")
-            await _get_notif().create_notification(
-                employee_id = str(payload.receiver_id),
-                title       = "You received a new recognition",
-                message     = (
-                    f"{current_user.email} reviewed you ({joined_codes}): \"{preview}\"\n"
-                    f"Points earned: {round(pts.raw_points, 1)}"
-                ),
-                type = NotificationType.REVIEW,
-            )
-        except Exception:
-            logger.exception("Notification failed for review %s", review.review_id)
-
-        # Build response directly from tag_snapshots — no extra DB round trip needed
-        final_tags_data = [
-            type("Tag", (), {
-                "category_id":            s["category_id"],
-                "category_code_snapshot": s["category_code_snapshot"],
-                "multiplier_snapshot":    s["multiplier_snapshot"],
-            })()
-            for s in tag_snapshots
+    if range_ == "3m":
+        n_buckets = 12
+        start     = now - relativedelta(weeks=n_buckets)
+        reviews   = await db.reviews.find_many(where={"review_at": {"gte": start}}, order={"review_at": "asc"})
+        points    = []
+        for i in builtins_range(n_buckets):
+            b_start = start + relativedelta(weeks=i)
+            b_end   = b_start + relativedelta(weeks=1)
+            bucket  = [r for r in reviews if b_start <= r.review_at.replace(tzinfo=timezone.utc) < b_end]
+            points.append({"label": b_start.strftime("%b %d"), "given": len({r.reviewer_id for r in bucket}), "received": len(bucket)})
+    else:
+        n_buckets     = 6 if range_ == "6m" else 12
+        bucket_starts = [
+            (now - relativedelta(months=i)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            for i in builtins_range(n_buckets - 1, -1, -1)
         ]
-        return _build_review_dict(review, final_tags_data)
+        start   = bucket_starts[0]
+        reviews = await db.reviews.find_many(where={"review_at": {"gte": start}}, order={"review_at": "asc"})
+        points  = []
+        for b_start in bucket_starts:
+            b_end  = b_start + relativedelta(months=1)
+            bucket = [r for r in reviews if b_start <= r.review_at.replace(tzinfo=timezone.utc) < b_end]
+            points.append({"label": b_start.strftime("%b %Y"), "given": len({r.reviewer_id for r in bucket}), "received": len(bucket)})
 
-    # =========================================================
-    # UPDATE REVIEW  — invalidates both parties' caches
-    # =========================================================
-    @staticmethod
-    async def update_review(
-        review_id: str,
-        payload: ReviewUpdateRequest,
-        current_user: CurrentUser,
-    ):
-        review = await db.reviews.find_unique(where={"review_id": review_id})
+    return {"data": points}
 
-        if not review:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
 
-        is_admin = any(role in current_user.roles for role in ["HR_ADMIN", "SUPER_ADMIN"])
-        is_owner = review.reviewer_id == current_user.id
+async def get_recognition_by_user_internal(range_: str, page: int, limit: int) -> dict:
+    from dateutil.relativedelta import relativedelta
+    mapping = {"week": relativedelta(weeks=1), "month": relativedelta(months=1),
+               "quarter": relativedelta(months=3), "year": relativedelta(years=1)}
+    start = _now() - mapping.get(range_, relativedelta(months=1))
 
-        if not is_admin and not is_owner:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not allowed to update this review",
-            )
+    employees, reviews, departments = await asyncio.gather(
+        db.employees.find_many(),
+        db.reviews.find_many(where={"review_at": {"gte": start}}),
+        db.departments.find_many(),
+    )
+    dept_name = {str(d.department_id): d.department_name for d in departments}
+    emp_dept  = {str(e.employee_id): str(e.department_id) for e in employees}
+    given_map: dict = {}
+    recv_map:  dict = {}
+    for r in reviews:
+        given_map[str(r.reviewer_id)] = given_map.get(str(r.reviewer_id), 0) + 1
+        recv_map[str(r.receiver_id)]  = recv_map.get(str(r.receiver_id), 0) + 1
 
-        update_data: dict = {}
-        if payload.comment   is not None: update_data["comment"]   = payload.comment
-        if payload.image_url is not None: update_data["image_url"] = str(payload.image_url)
-        if payload.video_url is not None: update_data["video_url"] = str(payload.video_url)
+    rows = sorted([
+        {"employee_id": str(e.employee_id), "username": e.username,
+         "department": dept_name.get(emp_dept.get(str(e.employee_id), ""), "Unknown"),
+         "given": given_map.get(str(e.employee_id), 0),
+         "received": recv_map.get(str(e.employee_id), 0)}
+        for e in employees
+    ], key=lambda x: x["given"], reverse=True)
 
-        if not update_data and payload.category_ids is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No fields provided for update",
-            )
+    total = len(rows)
+    skip  = (page - 1) * limit
+    return {"items": rows[skip:skip + limit], "total": total,
+            "page": page, "limit": limit, "pages": math.ceil(total / limit) if total else 0}
 
-        points_changed = payload.category_ids is not None
-        old_raw_points = float(getattr(review, "raw_points", 0) or 0)
 
-        if points_changed:
-            new_cat_ids = [str(cid) for cid in payload.category_ids]
+async def get_recognition_by_team_internal(range_: str, page: int, limit: int) -> dict:
+    from dateutil.relativedelta import relativedelta
+    mapping = {"week": relativedelta(weeks=1), "month": relativedelta(months=1),
+               "quarter": relativedelta(months=3), "year": relativedelta(years=1)}
+    start = _now() - mapping.get(range_, relativedelta(months=1))
 
-            total_multiplier, reviewer_weight, tag_snapshots = (
-                await _resolve_multipliers(
-                    category_ids   = new_cat_ids,
-                    reviewer_roles = current_user.roles,
-                )
-            )
+    departments, employees, reviews = await asyncio.gather(
+        db.departments.find_many(),
+        db.employees.find_many(),
+        db.reviews.find_many(where={"review_at": {"gte": start}}),
+    )
+    emp_dept      = {str(e.employee_id): str(e.department_id) for e in employees}
+    dept_members: dict = {}
+    for e in employees:
+        if e.department_id:
+            k = str(e.department_id)
+            dept_members[k] = dept_members.get(k, 0) + 1
 
-            joined_codes = ",".join(t["category_code_snapshot"] for t in tag_snapshots)
+    dept_given:    dict = {}
+    dept_received: dict = {}
+    for r in reviews:
+        if d := emp_dept.get(str(r.reviewer_id)):
+            dept_given[d]    = dept_given.get(d, 0) + 1
+        if d := emp_dept.get(str(r.receiver_id)):
+            dept_received[d] = dept_received.get(d, 0) + 1
 
-            pts = calculate_points(
-                total_category_multiplier = total_multiplier,
-                reviewer_weight           = reviewer_weight,
-                category_code             = joined_codes,
-            )
+    dept_name_map = {str(d.department_id): d.department_name for d in departments}
+    rows = sorted([
+        {"department_id": did, "name": dept_name_map.get(did, "Unknown"), "members": members,
+         "given": dept_given.get(did, 0), "received": dept_received.get(did, 0)}
+        for did, members in dept_members.items()
+    ], key=lambda x: x["given"], reverse=True)
 
-            new_raw_points = round(pts.raw_points, 4)
+    total = len(rows)
+    skip  = (page - 1) * limit
+    return {"items": rows[skip:skip + limit], "total": total,
+            "page": page, "limit": limit, "pages": math.ceil(total / limit) if total else 0}
 
-            logger.info(
-                "Points recalculated on update | review=%s categories=%s "
-                "old_raw=%.4f new_raw=%.4f",
-                review_id, joined_codes, old_raw_points, new_raw_points,
-            )
 
-            update_data.update({"raw_points": new_raw_points})
+async def get_participation_internal() -> dict:
+    from dateutil.relativedelta import relativedelta
+    now       = _now()
+    month_ago = now - relativedelta(months=1)
 
-            if payload.category_ids is not None:
-                await db.review_category_tags.delete_many(where={"review_id": review_id})
-                for snap in tag_snapshots:
-                    await db.review_category_tags.create(
-                        data={
-                            "review_id":              review_id,
-                            "category_id":            snap["category_id"],
-                            "multiplier_snapshot":    snap["multiplier_snapshot"],
-                            "category_code_snapshot": snap["category_code_snapshot"],
-                        }
-                    )
+    all_reviews, recent_reviews, departments, employees = await asyncio.gather(
+        db.reviews.find_many(),
+        db.reviews.find_many(where={"review_at": {"gte": month_ago}}),
+        db.departments.find_many(),
+        db.employees.find_many(
+            include={"status_master_employees_status_idTostatus_master": True}
+        ),
+    )
+    active_emps = [
+        e for e in employees
+        if e.status_master_employees_status_idTostatus_master
+        and e.status_master_employees_status_idTostatus_master.status_code == "ACTIVE"
+    ]
+    total_active = len(active_emps)
+    active_ids   = {str(e.employee_id) for e in active_emps}
+    participants = ({str(r.reviewer_id) for r in all_reviews} | {str(r.receiver_id) for r in all_reviews}) & active_ids
+    active_p     = len(participants)
+    rate         = round(active_p / total_active * 100, 1) if total_active else 0.0
 
-            points_delta = new_raw_points - old_raw_points
-            if abs(points_delta) > 0.0001:
-                try:
-                    from src.wallet.service import adjust_wallet_for_review_update
-                    wallet_result = await adjust_wallet_for_review_update(
-                        review_id    = review_id,
-                        delta_points = points_delta,
-                        current_user = current_user,
-                    )
-                    logger.info(
-                        "Wallet adjusted | review=%s delta=%.4f new_balance=%d",
-                        review_id, points_delta, wallet_result.get("new_balance", 0),
-                    )
-                except Exception:
-                    logger.exception(
-                        "Wallet adjustment failed for review %s (delta=%.4f)",
-                        review_id, points_delta,
-                    )
+    emp_dept     = {str(e.employee_id): str(e.department_id) for e in active_emps if e.department_id}
+    dept_members: dict = {}
+    for e in active_emps:
+        if e.department_id:
+            k = str(e.department_id)
+            dept_members[k] = dept_members.get(k, 0) + 1
 
-        update_data["updated_at"] = datetime.now(timezone.utc)
-        update_data["updated_by"] = current_user.id
+    dept_p: dict[str, set] = {}
+    for r in all_reviews:
+        for eid in (str(r.reviewer_id), str(r.receiver_id)):
+            if d := emp_dept.get(eid):
+                dept_p.setdefault(d, set()).add(eid)
 
-        updated = await db.reviews.update(
-            where={"review_id": review_id},
-            data=update_data,
+    dept_name = {str(d.department_id): d.department_name for d in departments}
+    return {
+        "pie": [{"name": "Active participants", "value": rate},
+                {"name": "Non-participants",    "value": round(100 - rate, 1)}],
+        "stats": {
+            "total_employees": total_active, "active_participants": active_p,
+            "non_participants": total_active - active_p, "participation_rate": rate,
+            "avg_reviews_per_employee": round(len(all_reviews) / total_active, 2) if total_active else 0.0,
+            "avg_reviews_last_month":  round(len(recent_reviews) / total_active, 2) if total_active else 0.0,
+        },
+        "by_department": [
+            {"department_id": did, "name": dept_name.get(did, "Unknown"),
+             "active": len(dept_p.get(did, set())), "total": members,
+             "rate": round(len(dept_p.get(did, set())) / members * 100, 1) if members else 0.0}
+            for did, members in dept_members.items()
+        ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Private helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _get_reviewer_weight(reviewer_id: str) -> float:
+    try:
+        roles = await db.employee_roles.find_many(
+            where={"employee_id": reviewer_id, "is_active": True},
+            include={"roles": True},
         )
+        for ra in roles:
+            if ra.roles and hasattr(ra.roles, "reviewer_weight") and ra.roles.reviewer_weight:
+                return float(ra.roles.reviewer_weight)
+    except Exception as exc:
+        logger.warning("Could not resolve reviewer_weight for %s: %s", reviewer_id, exc)
+    return 1.0
 
-        # Invalidate both parties' caches
-        await invalidate_reviews(review.reviewer_id)
-        await invalidate_reviews(review.receiver_id)
 
-        tags = await db.review_category_tags.find_many(
-            where={"review_id": review_id},
-            order={"created_at": "asc"},
-        )
-        return _build_review_dict(updated, tags)
+def _serialize_review(row) -> dict:
+    if row is None:
+        return {}
+    tags = row.review_category_tags or []
+    return {
+        "review_id":      row.review_id,
+        "reviewer_id":    row.reviewer_id,
+        "receiver_id":    row.receiver_id,
+        "comment":        row.comment,
+        "image_url":      row.image_url,
+        "video_url":      row.video_url,
+        "status_id":      row.status_id,
+        "review_at":      row.review_at,
+        "created_at":     row.created_at,
+        "created_by":     row.created_by,
+        "updated_at":     row.updated_at,
+        "updated_by":     row.updated_by,
+        "raw_points":     row.raw_points,
+        "category_tags":  [{"category_id": t.category_id, "category_code": t.category_code_snapshot,
+                             "multiplier_snapshot": t.multiplier_snapshot} for t in tags],
+        "category_ids":   [t.category_id for t in tags],
+        "category_codes": [t.category_code_snapshot for t in tags],
+    }
+async def get_review_stats_batch_internal(employee_ids: list[str]) -> dict:
+    """
+    Bulk review stats for a list of employee_ids.
+    Returns a dict keyed by employee_id with shape:
+        {reviews_total, reviews_this_month, reviews_last_month}
+ 
+    Replaces N calls to get_review_stats_internal() with 3 DB queries total,
+    regardless of how many employees are requested.
+ 
+    Called by recognition/internal_router.py → GET /internal/reviews/stats/batch
+    """
+    from src.prisma.client import db
+ 
+    if not employee_ids:
+        return {}
+ 
+    now   = datetime.now(timezone.utc)
+    start_this = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    start_last = start_this - relativedelta(months=1)
+    end_last   = start_this  # last month ends where this month begins
+ 
+    zero = {"reviews_total": 0, "reviews_this_month": 0, "reviews_last_month": 0}
+ 
+    # Three bulk queries — one per time bucket
+    all_reviews, reviews_this, reviews_last = await asyncio.gather(
+        db.reviews.find_many(
+            where={"receiver_id": {"in": employee_ids}},
+            # only select receiver_id to keep payload minimal
+        ),
+        db.reviews.find_many(
+            where={
+                "receiver_id": {"in": employee_ids},
+                "review_at":   {"gte": start_this},
+            },
+        ),
+        db.reviews.find_many(
+            where={
+                "receiver_id": {"in": employee_ids},
+                "review_at":   {"gte": start_last, "lt": end_last},
+            },
+        ),
+    )
+ 
+    # Aggregate counts per employee
+    totals:     dict[str, int] = {eid: 0 for eid in employee_ids}
+    this_month: dict[str, int] = {eid: 0 for eid in employee_ids}
+    last_month: dict[str, int] = {eid: 0 for eid in employee_ids}
+ 
+    for r in all_reviews:
+        rid = str(r.receiver_id)
+        if rid in totals:
+            totals[rid] += 1
+    for r in reviews_this:
+        rid = str(r.receiver_id)
+        if rid in this_month:
+            this_month[rid] += 1
+    for r in reviews_last:
+        rid = str(r.receiver_id)
+        if rid in last_month:
+            last_month[rid] += 1
+ 
+    return {
+        eid: {
+            "reviews_total":      totals.get(eid, 0),
+            "reviews_this_month": this_month.get(eid, 0),
+            "reviews_last_month": last_month.get(eid, 0),
+        }
+        for eid in employee_ids
+    }

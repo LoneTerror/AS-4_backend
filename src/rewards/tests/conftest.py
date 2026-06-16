@@ -75,7 +75,7 @@ def admin_user():
 def app_client(mock_db, admin_user):
     """FastAPI TestClient with overridden dependencies."""
     app = FastAPI()
-    app.include_router(router, prefix="/v1/rewards")
+    app.include_router(router, prefix="/aabhar/v1/rewards")
     
     # Override dependencies to use the mocks
     app.dependency_overrides[get_db] = lambda: mock_db

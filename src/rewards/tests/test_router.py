@@ -36,7 +36,7 @@ def test_get_categories_route(app_client, mocker):
 
     # 3. EXECUTE: Call the endpoint
     try:
-        response = app_client.get("/v1/rewards/categories?is_active=true")
+        response = app_client.get("/aabhar/v1/rewards/categories?is_active=true")
         
         # 4. ASSERT
         assert response.status_code == 200

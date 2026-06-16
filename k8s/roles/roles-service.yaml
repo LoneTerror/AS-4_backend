@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: roles-service
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: roles-service
+  template:
+    metadata:
+      labels:
+        app: roles-service
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+      - name: roles-container
+        image: mrmonster786/rnr-backend-base:latest 
+        imagePullPolicy: Always
+        args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.roles.main:app", "--host", "0.0.0.0", "--port", "8002"]
+        ports:
+        - containerPort: 8002
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: "roles-service"
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
+        resources:
+          requests:
+            memory: "200Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: roles-service
+spec:
+  selector:
+    app: roles-service
+  ports:
+    - protocol: TCP
+      port: 8002
+      targetPort: 8002

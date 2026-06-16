@@ -1,16 +1,35 @@
 """
 Async SMTP mailer — Aabhar Employee Recognition & Rewards Platform.
 
-Design language: HDFC Bank transactional email style.
-  - Colours : #E31837 (red) / #004C8F (navy)
-  - Logo    : hosted at GitHub raw URL, referenced directly in <img src>.
-              No file I/O — works identically on every OS and deployment.
-  - Layout  : navy header band (red left stripe + logo) → 3 px red rule
-              → classification badge → title → long-form body paragraphs
-              → navy callout box → formal sign-off → disclaimer block
-              → navy footer band (red left stripe).
+Design language: Authentic HDFC Bank transactional email style.
+  - White card background, no box-shadows
+  - Navy (#004C8F) header band with logo
+  - Thin red (#E31837) rule below header
+  - Clean Arial body text, left-aligned
+  - Security/info banner at the bottom (teal/info tone)
+  - Minimal padding, no decorative elements
+  - Footer: thin divider → small print → copyright line
 
-Install: pip install aiosmtplib
+Manager CC behaviour
+────────────────────
+  REVIEW and REWARD notification emails are CC'd to the employee's direct
+  manager.  The manager's address is resolved lazily via
+  ``internal_client.get_employee_manager_email`` and is injected as the
+  ``cc_emails`` argument to ``send_notification_email``.  If no manager
+  address is found the email is sent without a CC — it is never suppressed.
+
+  Callers that already know the employee ID should pass it; the mailer then
+  resolves the manager address internally so call-sites stay clean:
+
+      await email_sender.send_notification_email(
+          to_email   = employee.email,
+          subject    = subject,
+          body_html  = html,
+          type_      = "REVIEW",
+          employee_id = employee.employee_id,   # ← triggers manager CC
+      )
+
+  Alternatively, callers may pass ``cc_emails`` directly (e.g. in tests).
 """
 
 from __future__ import annotations
@@ -23,33 +42,31 @@ from email.mime.text import MIMEText
 
 import aiosmtplib
 
+from src.common import internal_client
+
 logger = logging.getLogger(__name__)
 
 
-# ── Brand palette ─────────────────────────────────────────────────────────────
+# ── Types that trigger a manager CC ──────────────────────────────────────────
+_MANAGER_CC_TYPES: frozenset[str] = frozenset({"REVIEW", "REWARD"})
+
+
+# ── Brand palette (HDFC-authentic) ────────────────────────────────────────────
 _B = {
     "red":        "#E31837",
-    "red_dark":   "#C0142F",
     "navy":       "#004C8F",
     "navy_dark":  "#003A6E",
-    "navy_light": "#EEF4FB",    # tint for callout boxes
-    "body_bg":    "#F0F2F5",
+    "white":      "#FFFFFF",
+    "body_bg":    "#FFFFFF",   # HDFC emails have a plain white background
     "card_bg":    "#FFFFFF",
-    "txt_head":   "#0D1B2A",
-    "txt_body":   "#2C3E50",
-    "txt_muted":  "#6B7280",
-    "border":     "#D1D5DB",
-    "divider":    "#E4E7EB",
-    "footer_bg":  "#F7F8FA",
-    "band_txt":   "#A8C4E0",    # subdued text on navy band
-}
-
-_BADGE_BG: dict[str, str] = {
-    "REVIEW":       _B["navy"],
-    "REWARD":       _B["red"],
-    "SYSTEM":       _B["navy_dark"],
-    "CELEBRATION":  _B["red"],
-    "ANNOUNCEMENT": _B["navy"],
+    "txt_head":   "#1A1A1A",
+    "txt_body":   "#333333",
+    "txt_muted":  "#666666",
+    "border":     "#CCCCCC",
+    "divider":    "#DDDDDD",
+    "info_bg":    "#E8F4F8",   # teal-tinted info banner (matches HDFC secure banking banner)
+    "info_border":"#1A8BAD",
+    "info_txt":   "#0A4F63",
 }
 
 _TYPE_LABEL: dict[str, str] = {
@@ -60,22 +77,16 @@ _TYPE_LABEL: dict[str, str] = {
     "ANNOUNCEMENT": "Company Announcement",
 }
 
-
-# ── Logo ──────────────────────────────────────────────────────────────────────
-# Hosted on GitHub — no file I/O, no path issues, works on any OS.
-# Update this constant if the repo or branch changes.
-
 _LOGO_URL = (
     "https://raw.githubusercontent.com/"
     "rsah94614/AS-4_frontend/refs/heads/develop/public/logo.svg"
 )
 
 
-def _logo_html(height: int = 38) -> str:
+def _logo_html(height: int = 34) -> str:
     return (
         f'<img src="{_LOGO_URL}" height="{height}" alt="Aabhar"'
-        f' style="display:block;border:0;height:{height}px;'
-        f'max-height:{height}px;width:auto;" />'
+        f' style="display:block;border:0;height:{height}px;width:auto;" />'
     )
 
 
@@ -117,31 +128,103 @@ class EmailSender:
         subject: str,
         body_html: str,
         body_text: str | None = None,
+        # ── Manager CC ────────────────────────────────────────────────────────
+        type_: str | None = None,
+        employee_id: str | None = None,
+        cc_emails: list[str] | None = None,
     ) -> None:
+        """
+        Send a notification email, optionally CC'ing the employee's manager.
+
+        Manager CC is triggered automatically when:
+          - ``type_`` is "REVIEW" or "REWARD", AND
+          - ``employee_id`` is provided (used to look up the manager's address).
+
+        ``cc_emails`` can be passed directly to override / supplement the
+        automatic lookup (e.g. in unit tests or when the caller has already
+        resolved the address).
+
+        If the manager lookup returns None (no manager configured) the email
+        is sent without CC — it is never suppressed.
+        """
         if to_email.lower() == self._cfg.from_email.lower():
             logger.info("Email suppressed — recipient matches SMTP sender.")
             return
+
+        # Resolve manager CC address when needed
+        resolved_cc: list[str] = list(cc_emails or [])
+
+        if (
+            type_ in _MANAGER_CC_TYPES
+            and employee_id
+            and not resolved_cc          # skip lookup if caller supplied cc_emails
+        ):
+            try:
+                manager_email = await internal_client.get_employee_manager_email(
+                    employee_id
+                )
+                if manager_email:
+                    resolved_cc.append(manager_email)
+                    logger.debug(
+                        "Manager CC resolved for employee %s: %s",
+                        employee_id,
+                        manager_email,
+                    )
+                else:
+                    logger.debug(
+                        "No manager found for employee %s — sending without CC.",
+                        employee_id,
+                    )
+            except Exception:
+                # Never let a failed CC lookup block the primary email.
+                logger.warning(
+                    "Manager email lookup failed for employee %s — sending without CC.",
+                    employee_id,
+                    exc_info=True,
+                )
+
         msg = self._build_message(
             to_email=to_email,
             subject=subject,
             body_html=body_html,
             body_text=body_text or _html_to_plain(body_html),
+            cc_emails=resolved_cc,
         )
         await self._send(msg)
-        logger.info("Email sent to %s | subject=%r", to_email, subject)
+        logger.info(
+            "Email sent to %s%s | subject=%r",
+            to_email,
+            f" (CC: {', '.join(resolved_cc)})" if resolved_cc else "",
+            subject,
+        )
 
     def _build_message(
-        self, *, to_email: str, subject: str, body_html: str, body_text: str
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        body_html: str,
+        body_text: str,
+        cc_emails: list[str] | None = None,
     ) -> MIMEMultipart:
         msg            = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = f"Aabhar Recognition Platform <{self._cfg.from_email}>"
         msg["To"]      = to_email
+        if cc_emails:
+            msg["Cc"]  = ", ".join(cc_emails)
         msg.attach(MIMEText(body_text, "plain", "utf-8"))
         msg.attach(MIMEText(body_html, "html",  "utf-8"))
         return msg
 
     async def _send(self, message: MIMEMultipart) -> None:
+        # Collect all recipients (To + Cc) so aiosmtplib delivers to everyone
+        recipients: list[str] = [message["To"]]
+        if message["Cc"]:
+            recipients.extend(
+                addr.strip() for addr in message["Cc"].split(",") if addr.strip()
+            )
+
         kw: dict = dict(
             hostname=self._cfg.host,
             port=self._cfg.port,
@@ -153,26 +236,67 @@ class EmailSender:
         else:
             kw["start_tls"] = self._cfg.use_tls
         async with aiosmtplib.SMTP(**kw) as smtp:
-            await smtp.send_message(message)
+            await smtp.send_message(message, recipients=recipients)
 
 
 # ── Shared HTML shell ─────────────────────────────────────────────────────────
 
-def _shell(*, preheader: str, content_html: str) -> str:
+def _shell(*, preheader: str, content_html: str, show_security_banner: bool = True) -> str:
     """
-    Full HDFC-style email document wrapper.
+    HDFC-authentic email wrapper.
 
-    Anatomy
-    -------
-    [Navy band — red left stripe — logo — platform tagline]
-    [3 px red rule]
-    [content_html]                  ← injected by each builder function
-    [thin divider]
-    [Disclaimer block]
-    [Navy band — red left stripe — copyright]
-    [Below-card micro reference line]
+    Layout (top → bottom):
+    ┌──────────────────────────────────────┐
+    │  Navy header band  [Logo]            │
+    ├── 3px red rule ──────────────────────┤
+    │                                      │
+    │  content_html (body paragraphs)      │
+    │                                      │
+    ├── thin divider ──────────────────────┤
+    │  [Secure Banking info banner]        │
+    ├── thin divider ──────────────────────┤
+    │  For more details... | © Aabhar      │
+    └──────────────────────────────────────┘
     """
     b = _B
+
+    security_banner = ""
+    if show_security_banner:
+        security_banner = f"""
+        <!-- Security banner -->
+        <tr>
+          <td style="padding:0 0 16px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                   style="background-color:{b['info_bg']};border:1px solid {b['info_border']};">
+              <tr>
+                <td width="56" align="center" valign="middle"
+                    style="padding:12px 0 12px 14px;">
+                  <table role="presentation" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td align="center" valign="middle"
+                          style="background-color:{b['info_border']};border-radius:50%;
+                                 width:36px;height:36px;
+                                 font-size:18px;line-height:36px;text-align:center;">
+                        <span style="font-size:18px;line-height:36px;
+                                     display:block;text-align:center;">&#128274;</span>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+                <td style="padding:12px 14px 12px 10px;vertical-align:middle;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:11.5px;
+                            line-height:1.6;color:{b['info_txt']};">
+                    <strong>SECURE PLATFORM</strong> &mdash;
+                    This is an official communication from the Aabhar Employee
+                    Recognition &amp; Rewards Platform. Do not share your login
+                    credentials or personal details with anyone. Aabhar will never
+                    ask for your password via email.
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>"""
 
     return f"""<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
@@ -181,196 +305,108 @@ def _shell(*, preheader: str, content_html: str) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
   <title>Aabhar &mdash; Employee Recognition &amp; Rewards Platform</title>
-  <!--[if mso]>
-  <noscript><xml><o:OfficeDocumentSettings>
-  <o:PixelsPerInch>96</o:PixelsPerInch>
-  </o:OfficeDocumentSettings></xml></noscript>
-  <![endif]-->
   <style type="text/css">
     body,table,td,p,a,h1,h2,h3,span{{margin:0;padding:0;border:0;}}
-    body{{background-color:{b['body_bg']};
-         font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;
+    body{{background-color:#F4F4F4;
+         font-family:Arial,Helvetica,sans-serif;
          -webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;}}
     table{{border-collapse:collapse;mso-table-lspace:0;mso-table-rspace:0;}}
-    img{{border:0;height:auto;line-height:100%;outline:none;
-         text-decoration:none;-ms-interpolation-mode:bicubic;}}
-    a{{color:{b['navy']};text-decoration:none;}}
-    @media only screen and (max-width:640px){{
-      .outer{{padding:0 !important;}}
-      .card{{width:100% !important;border-radius:0 !important;}}
-      .c-pad{{padding:22px 16px !important;}}
-      .h-pad{{padding:20px 16px 16px !important;}}
-      .f-pad{{padding:12px 16px !important;}}
-      .hide-sm{{display:none !important;max-height:0 !important;
-                overflow:hidden !important;mso-hide:all !important;}}
+    img{{border:0;height:auto;line-height:100%;outline:none;text-decoration:none;}}
+    a{{color:{b['navy']};text-decoration:underline;}}
+    @media only screen and (max-width:600px){{
+      .outer-td{{padding:0 !important;}}
+      .card{{width:100% !important;}}
+      .body-pad{{padding:18px 16px !important;}}
     }}
   </style>
 </head>
-<body style="margin:0;padding:0;background-color:{b['body_bg']};">
+<body style="margin:0;padding:0;background-color:#F4F4F4;">
 
-<!-- ═══ PREHEADER ghost text ════════════════════════════════════════════════ -->
+<!-- Preheader ghost -->
 <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;
-            font-size:1px;color:{b['body_bg']};">
-  {preheader}&nbsp;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;
-  &#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;
-  &#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;
+            font-size:1px;color:#F4F4F4;">
+  {preheader}&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;
 </div>
 
-<!-- ═══ OUTER TABLE ═════════════════════════════════════════════════════════ -->
-<table class="outer" role="presentation" width="100%" cellpadding="0"
-       cellspacing="0"
-       style="background-color:{b['body_bg']};padding:36px 16px;">
+<!-- Outer wrapper -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+       style="background-color:#F4F4F4;">
   <tr>
-    <td align="center" valign="top">
+    <td class="outer-td" align="center" style="padding:24px 16px;">
 
-      <!-- ╔══════════════════════════════════════════════════════╗ -->
-      <!-- ║  CARD                                               ║ -->
-      <!-- ╚══════════════════════════════════════════════════════╝ -->
-      <table class="card" role="presentation" width="620" cellpadding="0"
+      <!-- Card -->
+      <table class="card" role="presentation" width="600" cellpadding="0"
              cellspacing="0"
-             style="background:{b['card_bg']};border-radius:3px;
-                    border:1px solid {b['border']};
-                    box-shadow:0 2px 10px rgba(0,0,0,0.10),
-                               0 1px 3px rgba(0,0,0,0.06);">
+             style="background-color:{b['card_bg']};
+                    border:1px solid {b['border']};">
 
-        <!-- ── HEADER BAND ──────────────────────────────────────── -->
+        <!-- HEADER: navy band -->
         <tr>
-          <td style="background-color:{b['navy']};padding:0;
-                     border-radius:3px 3px 0 0;">
-            <table role="presentation" width="100%" cellpadding="0"
-                   cellspacing="0">
-              <tr>
-                <!-- HDFC hallmark: red left-edge stripe -->
-                <td width="6"
-                    style="background-color:{b['red']};
-                           font-size:0;line-height:0;">&nbsp;</td>
-
-                <!-- Logo -->
-                <td style="padding:16px 26px 14px;vertical-align:middle;">
-                  {_logo_html(height=38)}
-                </td>
-
-                <!-- Platform tagline (hidden on mobile) -->
-                <td class="hide-sm" align="right"
-                    style="padding:16px 26px 14px 0;vertical-align:middle;">
-                  <span style="font-family:Arial,sans-serif;font-size:8.5px;
-                               font-weight:400;letter-spacing:1.5px;
-                               color:{b['band_txt']};text-transform:uppercase;
-                               white-space:nowrap;">
-                    Employee Recognition &amp; Rewards Platform
-                  </span>
-                </td>
-              </tr>
-            </table>
+          <td style="background-color:{b['navy']};padding:14px 20px;">
+            {_logo_html(height=34)}
           </td>
         </tr>
 
-        <!-- ── RED RULE (HDFC signature element) ───────────────── -->
+        <!-- Red rule -->
         <tr>
-          <td style="background-color:{b['red']};height:3px;
-                     font-size:0;line-height:0;">&nbsp;</td>
+          <td style="background-color:{b['red']};
+                     height:3px;font-size:0;line-height:0;">&nbsp;</td>
         </tr>
 
-        <!-- ── CONTENT (injected) ───────────────────────────────── -->
-        {content_html}
-
-        <!-- ── DIVIDER before disclaimer ────────────────────────── -->
+        <!-- BODY -->
         <tr>
-          <td style="padding:0 26px;">
-            <table role="presentation" width="100%" cellpadding="0"
-                   cellspacing="0">
+          <td class="body-pad" style="padding:24px 24px 8px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+
+              {content_html}
+
+              <!-- Divider -->
               <tr>
-                <td style="border-top:1px solid {b['divider']};
-                           height:0;font-size:0;line-height:0;">&nbsp;</td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-
-        <!-- ── DISCLAIMER ────────────────────────────────────────── -->
-        <tr>
-          <td style="background-color:{b['footer_bg']};
-                     padding:18px 26px 22px;">
-            <p style="margin:0 0 8px;font-family:Arial,sans-serif;
-                      font-size:10px;line-height:1.65;color:{b['txt_muted']};">
-              <strong style="color:#4B5563;">IMPORTANT NOTICE:</strong>
-              This is a system-generated communication from the Aabhar Employee
-              Recognition &amp; Rewards Platform. Please do not reply to this
-              message. This communication is intended solely for the named
-              recipient. If you have received this in error, please notify your
-              HR Administrator immediately and permanently delete this message
-              and any attachments.
-            </p>
-            <p style="margin:0;font-family:Arial,sans-serif;font-size:9.5px;
-                      line-height:1.6;color:{b['txt_muted']};">
-              The contents of this communication are confidential and may be
-              subject to privilege. Unauthorised reading, copying, disclosure,
-              or distribution is strictly prohibited. Aabhar and its affiliated
-              entities accept no liability for the completeness or accuracy of
-              this message if transmitted over public networks.
-            </p>
-          </td>
-        </tr>
-
-        <!-- ── FOOTER BAND ───────────────────────────────────────── -->
-        <tr>
-          <td style="background-color:{b['navy']};padding:0;
-                     border-radius:0 0 3px 3px;">
-            <table role="presentation" width="100%" cellpadding="0"
-                   cellspacing="0">
-              <tr>
-                <td width="6"
-                    style="background-color:{b['red']};
-                           font-size:0;line-height:0;">&nbsp;</td>
-                <td class="f-pad" style="padding:13px 26px;">
+                <td style="padding:20px 0 16px;">
                   <table role="presentation" width="100%" cellpadding="0"
                          cellspacing="0">
                     <tr>
-                      <td valign="middle">
-                        <p style="margin:0 0 2px;font-family:Arial,sans-serif;
-                                  font-size:10px;color:{b['band_txt']};
-                                  letter-spacing:0.2px;">
-                          Aabhar &mdash; Employee Recognition &amp; Rewards Platform
-                        </p>
-                        <p style="margin:0;font-family:Arial,sans-serif;
-                                  font-size:9px;color:#5A7FA0;">
-                          &copy; Aabhar. All rights reserved.
-                          &nbsp;|&nbsp; Automated Notification
-                        </p>
-                      </td>
-                      <td class="hide-sm" align="right" valign="middle">
-                        <span style="font-family:Arial,sans-serif;
-                                     font-size:14px;font-weight:700;
-                                     color:#FFFFFF;letter-spacing:0.3px;">
-                          Aabhar
-                        </span>
-                      </td>
+                      <td style="border-top:1px solid {b['divider']};
+                                 height:0;font-size:0;">&nbsp;</td>
                     </tr>
                   </table>
                 </td>
               </tr>
+
+              {security_banner}
+
             </table>
           </td>
         </tr>
 
-      </table><!-- /CARD -->
-
-      <!-- Below-card micro line -->
-      <table role="presentation" width="620" cellpadding="0" cellspacing="0">
+        <!-- FOOTER: small print + copyright -->
         <tr>
-          <td style="padding:9px 0 0;text-align:center;">
-            <p style="margin:0;font-family:Arial,sans-serif;font-size:9px;
-                      color:#9CA3AF;letter-spacing:0.4px;">
-              Aabhar Employee Recognition &amp; Rewards Platform
-              &nbsp;|&nbsp; Automated Notification System
-            </p>
+          <td style="padding:0 24px 16px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="border-top:1px solid {b['divider']};
+                           padding-top:10px;">
+                  <p style="margin:0 0 4px;font-family:Arial,sans-serif;
+                            font-size:11px;color:{b['txt_muted']};">
+                    For more details, please log in to the
+                    <a href="#" style="color:{b['navy']};">Aabhar Platform</a>.
+                  </p>
+                  <p style="margin:0;font-family:Arial,sans-serif;
+                            font-size:11px;color:{b['txt_muted']};">
+                    &copy; Aabhar Employee Recognition &amp; Rewards Platform.
+                    All rights reserved.
+                  </p>
+                </td>
+              </tr>
+            </table>
           </td>
         </tr>
-      </table>
+
+      </table><!-- /card -->
 
     </td>
   </tr>
-</table><!-- /OUTER -->
+</table>
 
 </body>
 </html>"""
@@ -381,23 +417,22 @@ def _shell(*, preheader: str, content_html: str) -> str:
 def build_notification_html(*, title: str, message: str, type_: str) -> str:
     title   = _sanitise(title)
     message = _sanitise(message)
-    b         = _B
-    badge_bg  = _BADGE_BG.get(type_, b["navy"])
-    label     = _TYPE_LABEL.get(type_, type_.replace("_", " ").title())
+    b       = _B
+    label   = _TYPE_LABEL.get(type_, type_.replace("_", " ").title())
 
-    # REVIEW: privacy-safe teaser — full content is in-app only
     if type_ == "REVIEW":
-        display_title   = "A Performance Review Has Been Submitted"
+        display_title   = "Your Performance Review Is Ready"
         display_message = (
-            "A new performance review has been submitted and recorded against your "
-            "employee profile on the Aabhar platform. In the interest of "
-            "confidentiality, the complete content of this review is not included "
-            "in this communication."
+            "Your manager has shared a performance review on your profile. "
+            "This is a moment to pause, reflect on the work you have put in, "
+            "and hear how your contributions are being seen by those around you. "
+            "We hope the feedback feels encouraging and gives you clarity on "
+            "where you are headed."
         )
         action_text = (
-            "Please log in to the Aabhar Employee Recognition &amp; Rewards Platform "
-            "at your earliest convenience to access the full review and take any "
-            "action that may be required."
+            "Your review is available on the Aabhar platform whenever you are ready. "
+            "Take your time going through it, and feel free to add your own "
+            "response or acknowledgement once you have had a chance to reflect."
         )
     else:
         display_title   = title
@@ -409,78 +444,64 @@ def build_notification_html(*, title: str, message: str, type_: str) -> str:
         )
 
     content_html = f"""
-        <!-- Classification badge + title -->
-        <tr>
-          <td class="h-pad"
-              style="padding:26px 26px 20px;
-                     border-bottom:2px solid {b['divider']};">
-            <!-- Badge -->
-            <table role="presentation" cellpadding="0" cellspacing="0"
-                   style="margin-bottom:12px;">
+              <!-- Greeting -->
               <tr>
-                <td style="background-color:{badge_bg};padding:4px 13px 5px;
-                           border-radius:2px;">
-                  <span style="font-family:Arial,sans-serif;font-size:9px;
-                               font-weight:700;letter-spacing:1.4px;
-                               text-transform:uppercase;color:#FFFFFF;">
-                    {label}
-                  </span>
+                <td style="padding-bottom:16px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.6;color:{b['txt_body']};">
+                    Dear Team Member,
+                  </p>
                 </td>
               </tr>
-            </table>
-            <!-- Title -->
-            <h1 style="margin:0;font-family:Arial,sans-serif;font-size:19px;
-                       font-weight:700;line-height:1.3;color:{b['txt_head']};">
-              {display_title}
-            </h1>
-          </td>
-        </tr>
 
-        <!-- Body -->
-        <tr>
-          <td class="c-pad" style="padding:26px 26px 8px;">
-
-            <p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13.5px;
-                      line-height:1.75;color:{b['txt_body']};">
-              Dear Team Member,
-            </p>
-
-            <p style="margin:0 0 22px;font-family:Arial,sans-serif;font-size:13.5px;
-                      line-height:1.8;color:{b['txt_body']};">
-              {display_message}
-            </p>
-
-            <!-- Navy callout box -->
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                   style="margin:0 0 24px;background-color:{b['navy_light']};
-                          border-left:4px solid {b['navy']};border-radius:2px;">
+              <!-- Notification type label -->
               <tr>
-                <td style="padding:14px 16px;">
-                  <p style="margin:0;font-family:Arial,sans-serif;font-size:13px;
-                            line-height:1.65;color:{b['txt_body']};">
-                    <strong style="color:{b['navy']};">Next Step:&nbsp;</strong>
+                <td style="padding-bottom:8px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;
+                            font-weight:700;letter-spacing:0.8px;
+                            text-transform:uppercase;color:{b['navy']};">
+                    {label}
+                  </p>
+                </td>
+              </tr>
+
+              <!-- Title -->
+              <tr>
+                <td style="padding-bottom:16px;
+                           border-bottom:1px solid {b['divider']};">
+                  <h2 style="margin:0;font-family:Arial,sans-serif;font-size:17px;
+                             font-weight:700;color:{b['txt_head']};line-height:1.35;">
+                    {display_title}
+                  </h2>
+                </td>
+              </tr>
+
+              <!-- Body paragraphs -->
+              <tr>
+                <td style="padding:16px 0 12px;">
+                  <p style="margin:0 0 14px;font-family:Arial,sans-serif;
+                            font-size:14px;line-height:1.7;color:{b['txt_body']};">
+                    {display_message}
+                  </p>
+                  <p style="margin:0;font-family:Arial,sans-serif;
+                            font-size:14px;line-height:1.7;color:{b['txt_body']};">
                     {action_text}
                   </p>
                 </td>
               </tr>
-            </table>
 
-            <!-- Sign-off -->
-            <p style="margin:0 0 28px;font-family:Arial,sans-serif;
-                      font-size:13.5px;line-height:1.8;color:{b['txt_body']};">
-              Yours sincerely,<br/>
-              <strong style="color:{b['txt_head']};">
-                Aabhar Recognition Platform
-              </strong>
-            </p>
+              <!-- Sign-off -->
+              <tr>
+                <td style="padding-bottom:4px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.7;color:{b['txt_body']};">
+                    Regards,<br/>
+                    <strong>Aabhar Recognition Platform</strong>
+                  </p>
+                </td>
+              </tr>"""
 
-          </td>
-        </tr>"""
-
-    return _shell(
-        preheader=f"{label}: {display_title}",
-        content_html=content_html,
-    )
+    return _shell(preheader=f"{label}: {display_title}", content_html=content_html)
 
 
 # ── Celebration email (BIRTHDAY / WORK_ANNIVERSARY) ───────────────────────────
@@ -496,10 +517,8 @@ def build_celebration_html(
     b          = _B
     first_name = employee_name.split()[0]
 
-    # ── Copy matrix ───────────────────────────────────────────────────────────
     if celebration_type == "BIRTHDAY":
-        badge_bg    = b["red"]
-        badge_label = "Birthday Recognition"
+        label = "Birthday Recognition"
 
         if is_personal:
             subject    = f"Birthday Wishes — {employee_name} | Aabhar"
@@ -515,36 +534,23 @@ def build_celebration_html(
                 ),
                 (
                     "Your professionalism, dedication, and commitment to your work are "
-                    "qualities that are deeply valued across the team. The effort you bring "
-                    "consistently reflects the culture we strive to build at Aabhar, and "
-                    "it does not go unnoticed."
-                ),
-                (
-                    "We hope that the year ahead brings you excellent health, continued "
-                    "professional growth, personal fulfilment, and every success you aspire "
-                    "to achieve. May this be a truly memorable birthday for you and your "
-                    "loved ones."
+                    "qualities that are deeply valued across the team. We hope the year "
+                    "ahead brings you excellent health, continued professional growth, and "
+                    "every success you aspire to achieve."
                 ),
             ]
-            milestone_html = ""
-            cta_label      = None
+            milestone_line = ""
 
         else:
             subject    = f"Birthday Announcement — {employee_name} | Aabhar"
-            headline   = f"Recognising {employee_name} on Their Birthday"
+            headline   = f"Wishing {employee_name} a Happy Birthday"
             salutation = "Dear Team,"
             paragraphs = [
                 (
-                    f"We are pleased to bring to your attention that today marks the birthday "
-                    f"of our colleague, <strong>{employee_name}</strong>. We warmly invite "
-                    f"all team members to take a moment to extend personal wishes and "
+                    f"We are pleased to inform you that today marks the birthday of our "
+                    f"colleague, <strong>{employee_name}</strong>. We warmly invite all "
+                    f"team members to take a moment to extend personal wishes and "
                     f"acknowledgement to {first_name} on this special occasion."
-                ),
-                (
-                    "The recognition of our colleagues as individuals — distinct from and in "
-                    "addition to their professional roles — is a fundamental part of the "
-                    "culture we are building at Aabhar. A brief, genuine message of goodwill "
-                    "is one of the most impactful gestures we can offer one another."
                 ),
                 (
                     f"We invite the entire team to join us in wishing {first_name} a very "
@@ -552,34 +558,12 @@ def build_celebration_html(
                     f"and personal satisfaction."
                 ),
             ]
-            milestone_html = ""
-            cta_label      = f"Send Your Wishes to {first_name}"
+            milestone_line = ""
 
     else:  # WORK_ANNIVERSARY
         ordinal     = _ordinal(years)
         yr_word     = f"{years} year{'s' if (years or 0) != 1 else ''}"
-        badge_bg    = b["navy"]
-        badge_label = "Work Anniversary"
-
-        milestone_html = f"""
-            <table role="presentation" width="100%" cellpadding="0"
-                   cellspacing="0" style="margin:20px 0;">
-              <tr>
-                <td align="center"
-                    style="background-color:{b['navy']};border-radius:2px;
-                           padding:20px 16px;">
-                  <span style="font-family:Arial,sans-serif;font-size:42px;
-                               font-weight:700;color:#FFFFFF;line-height:1;
-                               display:block;">{years}</span>
-                  <span style="font-family:Arial,sans-serif;font-size:9px;
-                               font-weight:700;letter-spacing:2px;
-                               text-transform:uppercase;color:{b['band_txt']};
-                               display:block;margin-top:5px;">
-                    Year{'s' if (years or 0) != 1 else ''}&nbsp;of&nbsp;Distinguished&nbsp;Service
-                  </span>
-                </td>
-              </tr>
-            </table>"""
+        label       = "Work Anniversary"
 
         if is_personal:
             subject    = f"Work Anniversary — {ordinal} Year with Aabhar | {employee_name}"
@@ -594,25 +578,17 @@ def build_celebration_html(
                     f"dedicated and exemplary service."
                 ),
                 (
-                    "Milestones of this nature are not simply a measure of time served — "
-                    "they are a reflection of consistent commitment, professional integrity, "
-                    "and the genuine investment you have made in the people and the mission "
-                    "of this organisation. The contributions you have delivered across this "
-                    "period are woven into the very foundations of what Aabhar has become."
-                ),
-                (
                     "Your dedication, the standards you hold yourself to, and the example "
                     "you set for colleagues around you are qualities that continue to "
                     "strengthen this organisation. We are privileged to have you as a "
-                    "valued member of the Aabhar family."
-                ),
-                (
-                    "We look forward with great anticipation to your continued contributions "
-                    "and the milestones that lie ahead. Thank you sincerely for everything "
-                    "you have brought to this team."
+                    "valued member of the Aabhar family and look forward to your continued "
+                    "contributions."
                 ),
             ]
-            cta_label = None
+            milestone_line = (
+                f"You have completed <strong>{yr_word} of distinguished service</strong> "
+                f"with Aabhar."
+            )
 
         else:
             subject    = f"Work Anniversary — {employee_name} | {ordinal} Year with Aabhar"
@@ -622,131 +598,98 @@ def build_celebration_html(
                 (
                     f"We are delighted to announce that our esteemed colleague, "
                     f"<strong>{employee_name}</strong>, is today celebrating their "
-                    f"<strong>{ordinal} work anniversary</strong> with Aabhar. This milestone "
-                    f"represents {yr_word} of dedicated, professional service and sustained "
-                    f"contribution to our shared goals."
-                ),
-                (
-                    f"{employee_name}'s tenure with the organisation reflects the kind of "
-                    f"consistency, commitment, and professional depth that elevates every "
-                    f"team. The institutional knowledge and the steady example that "
-                    f"{first_name} brings to the workplace benefit colleagues at every level."
+                    f"<strong>{ordinal} work anniversary</strong> with Aabhar — representing "
+                    f"{yr_word} of dedicated, professional service and sustained contribution "
+                    f"to our shared goals."
                 ),
                 (
                     f"We encourage all members of the team to take a moment to formally "
-                    f"acknowledge this achievement. Recognition from peers is among the "
-                    f"most meaningful forms of appreciation an employee can receive, and "
+                    f"acknowledge this achievement. Recognition from peers is among the most "
+                    f"meaningful forms of appreciation an employee can receive, and "
                     f"{first_name}'s anniversary is a milestone that deserves to be "
                     f"celebrated with sincerity."
                 ),
             ]
-            cta_label = f"Recognise {first_name}'s Contribution"
+            milestone_line = (
+                f"<strong>{employee_name}</strong> has completed "
+                f"<strong>{yr_word} of service</strong> with Aabhar."
+            )
 
-    # ── CTA button ────────────────────────────────────────────────────────────
-    cta_html = ""
-    if cta_label:
-        cta_html = f"""
-            <table role="presentation" cellpadding="0" cellspacing="0"
-                   style="margin-top:20px;">
-              <tr>
-                <td style="background-color:{b['navy']};border-radius:2px;
-                           border-bottom:3px solid {b['navy_dark']};">
-                  <span style="display:inline-block;padding:12px 28px;
-                               font-family:Arial,sans-serif;font-size:12.5px;
-                               font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">
-                    {cta_label}
-                  </span>
-                </td>
-              </tr>
-            </table>
-            <p style="margin:9px 0 0;font-family:Arial,sans-serif;font-size:10px;
-                      color:{b['txt_muted']};">
-              Log in to Aabhar to send a personalised recognition message.
-            </p>"""
-
-    # ── Paragraph block ───────────────────────────────────────────────────────
+    # Build paragraph HTML
     para_html = "".join(
-        f'<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13.5px;'
-        f'line-height:1.8;color:{b["txt_body"]};">{p}</p>'
+        f'<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:14px;'
+        f'line-height:1.7;color:{b["txt_body"]};">{p}</p>'
         for p in paragraphs
     )
 
-    content_html = f"""
-        <!-- Badge + headline -->
-        <tr>
-          <td class="h-pad"
-              style="padding:26px 26px 20px;
-                     border-bottom:2px solid {b['divider']};">
-            <table role="presentation" cellpadding="0" cellspacing="0"
-                   style="margin-bottom:12px;">
+    # Optional milestone highlight line (plain inline text, no boxes)
+    milestone_html = ""
+    if milestone_line:
+        milestone_html = f"""
               <tr>
-                <td style="background-color:{badge_bg};padding:4px 13px 5px;
-                           border-radius:2px;">
-                  <span style="font-family:Arial,sans-serif;font-size:9px;
-                               font-weight:700;letter-spacing:1.4px;
-                               text-transform:uppercase;color:#FFFFFF;">
-                    {badge_label}
-                  </span>
+                <td style="padding:4px 0 14px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.6;color:{b['navy']};">
+                    {milestone_line}
+                  </p>
                 </td>
-              </tr>
-            </table>
-            <h1 style="margin:0;font-family:Arial,sans-serif;font-size:19px;
-                       font-weight:700;line-height:1.3;color:{b['txt_head']};">
-              {headline}
-            </h1>
-          </td>
-        </tr>
+              </tr>"""
 
-        <!-- Body -->
-        <tr>
-          <td class="c-pad" style="padding:26px 26px 8px;">
-
-            <p style="margin:0 0 18px;font-family:Arial,sans-serif;
-                      font-size:12.5px;font-weight:700;letter-spacing:0.3px;
-                      color:{badge_bg};">
-              {salutation}
-            </p>
-
-            {para_html}
-
-            {milestone_html}
-
-            <!-- Navy callout -->
-            <table role="presentation" width="100%" cellpadding="0"
-                   cellspacing="0"
-                   style="margin:8px 0 20px;background-color:{b['navy_light']};
-                          border-left:4px solid {b['navy']};border-radius:2px;">
+    content_html = f"""
+              <!-- Greeting -->
               <tr>
-                <td style="padding:14px 16px;">
-                  <p style="margin:0;font-family:Arial,sans-serif;font-size:13px;
-                            line-height:1.65;color:{b['txt_body']};">
-                    <strong style="color:{b['navy']};">Platform Notice:&nbsp;</strong>
-                    Log in to the Aabhar Employee Recognition &amp; Rewards Platform
-                    to view this occasion and send a personalised message of
-                    recognition directly to the recipient.
+                <td style="padding-bottom:16px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.6;color:{b['txt_body']};">
+                    {salutation}
                   </p>
                 </td>
               </tr>
-            </table>
 
-            {cta_html}
+              <!-- Label -->
+              <tr>
+                <td style="padding-bottom:8px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;
+                            font-weight:700;letter-spacing:0.8px;
+                            text-transform:uppercase;color:{b['navy']};">
+                    {label}
+                  </p>
+                </td>
+              </tr>
 
-            <!-- Sign-off -->
-            <p style="margin:24px 0 28px;font-family:Arial,sans-serif;
-                      font-size:13.5px;line-height:1.8;color:{b['txt_body']};">
-              Yours sincerely,<br/>
-              <strong style="color:{b['txt_head']};">
-                Aabhar Recognition Platform
-              </strong>
-            </p>
+              <!-- Headline -->
+              <tr>
+                <td style="padding-bottom:16px;
+                           border-bottom:1px solid {b['divider']};">
+                  <h2 style="margin:0;font-family:Arial,sans-serif;font-size:17px;
+                             font-weight:700;color:{b['txt_head']};line-height:1.35;">
+                    {headline}
+                  </h2>
+                </td>
+              </tr>
 
-          </td>
-        </tr>"""
+              <!-- Milestone line -->
+              {milestone_html}
 
-    return subject, _shell(
-        preheader=subject,
-        content_html=content_html,
-    )
+              <!-- Body paragraphs -->
+              <tr>
+                <td style="padding:{'4' if milestone_line else '16'}px 0 12px;">
+                  {para_html}
+                </td>
+              </tr>
+
+              <!-- Sign-off -->
+              <tr>
+                <td style="padding-bottom:4px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.7;color:{b['txt_body']};">
+                    Regards,<br/>
+                    <strong>Aabhar Recognition Platform</strong>
+                  </p>
+                </td>
+              </tr>"""
+
+    return subject, _shell(preheader=subject, content_html=content_html)
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -757,28 +700,12 @@ def _html_to_plain(html: str) -> str:
 
 
 def _sanitise(text: str) -> str:
-    """
-    Strip emoji and non-printable Unicode characters from a display string.
-
-    Keeps: printable ASCII, accented Latin characters, common punctuation.
-    Removes: emoji, dingbats, pictographs, and other non-printing codepoints
-    that render as boxes or question marks in Outlook and corporate webmail.
-
-    Unicode ranges dropped:
-      U+2600–U+27BF  Miscellaneous Symbols, Dingbats
-      U+2900–U+297F  Supplemental Arrows
-      U+2B00–U+2BFF  Miscellaneous Symbols and Arrows
-      U+1F300+       Emoji, pictographs, symbols (main emoji block)
-    """
     import unicodedata
     result = []
     for ch in text:
         cp = ord(ch)
-        if (0x2600 <= cp <= 0x27BF or
-                0x2900 <= cp <= 0x297F or
-                0x2B00 <= cp <= 0x2BFF or
-                0xFE00 <= cp <= 0xFE0F or   # variation selectors (emoji modifiers)
-                cp >= 0x1F300):
+        if (0x2600 <= cp <= 0x27BF or 0x2900 <= cp <= 0x297F or
+                0x2B00 <= cp <= 0x2BFF or 0xFE00 <= cp <= 0xFE0F or cp >= 0x1F300):
             continue
         cat = unicodedata.category(ch)
         if cat in ("Cc", "Cf", "Cs") and ch not in ("\t", "\n"):

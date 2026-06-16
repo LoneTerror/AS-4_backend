@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rewards-service
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: rewards-service
+  template:
+    metadata:
+      labels:
+        app: rewards-service
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+      - name: rewards-container
+        image: mrmonster786/rnr-backend-base:latest 
+        imagePullPolicy: Always
+        args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.rewards.main:app", "--host", "0.0.0.0", "--port", "8006"]
+        ports:
+        - containerPort: 8006
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: "rewards-service"
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
+        resources: 
+          requests:
+            memory: "200Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rewards-service
+spec:
+  selector:
+    app: rewards-service
+  ports:
+    - protocol: TCP
+      port: 8006
+      targetPort: 8006

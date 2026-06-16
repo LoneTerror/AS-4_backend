@@ -1,7 +1,6 @@
 import uvicorn
 import os
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from fastapi.exceptions import RequestValidationError
@@ -14,6 +13,7 @@ from src.common.middleware import (
     generic_exception_handler,
     prisma_unique_violation_handler
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 
 # --- OpenTelemetry Imports ---
 from opentelemetry import trace
@@ -29,50 +29,34 @@ from src.roles.router import router
 from src.common.route_registry import register_app_routes
 
 # ── Route configuration ───────────────────────────────────────────────────────
-#
-# Route keys MUST match the format built by route_registry._extract_routes:
-#
-#   f"{METHOD}:{root_path}{route.path}"
-#
-# This app has root_path="/v1/roles" and the router registers bare paths
-# like "/list", "/employees", etc.  So the keys are:
-#
-#   GET:/v1/roles/list          (not GET:/v1/roles  — that would be the root)
-#   POST:/v1/roles/create
-#   etc.
-#
-# TIP: On startup, route_registry logs every route key it finds at DEBUG
-# level.  Set LOG_LEVEL=DEBUG once to verify all keys match what you have
-# here, then drop back to INFO.
-# ─────────────────────────────────────────────────────────────────────────────
-
 ROLE_OVERRIDES: dict[str, list[str]] = {
     # ── Roles ─────────────────────────────────────────────────────────────────
-    "GET:/v1/roles/list":                           ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/roles/create":                        ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/roles/list":                           ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/roles/create":                        ["SUPER_ADMIN"],
 
     # ── Employee ↔ Role ───────────────────────────────────────────────────────
-    "GET:/v1/roles/employees":                      ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/roles/assign":                        ["SUPER_ADMIN"],
-    "POST:/v1/roles/revoke":                        ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/roles/employees":                      ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/roles/assign":                        ["SUPER_ADMIN"],
+    "POST:/aabhar/v1/roles/revoke":                        ["SUPER_ADMIN"],
 
     # ── Route permissions ─────────────────────────────────────────────────────
-    "GET:/v1/roles/route-permissions":              ["SUPER_ADMIN"],
-    "POST:/v1/roles/route-permissions":             ["SUPER_ADMIN"],
-    "PATCH:/v1/roles/route-permissions":            ["SUPER_ADMIN"],
-    "PATCH:/v1/roles/route-permissions/title":      ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/roles/route-permissions":              ["SUPER_ADMIN"],
+    "POST:/aabhar/v1/roles/route-permissions":             ["SUPER_ADMIN"],
+    "PATCH:/aabhar/v1/roles/route-permissions":            ["SUPER_ADMIN"],
+    "PATCH:/aabhar/v1/roles/route-permissions/title":      ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/roles/my-permissions":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
 }
 
 ROUTE_TITLES: dict[str, str] = {
-    "GET:/v1/roles/list":                           "List Roles",
-    "POST:/v1/roles/create":                        "Create Role",
-    "GET:/v1/roles/employees":                      "List Employee Role Assignments",
-    "POST:/v1/roles/assign":                        "Assign Role to Employee",
-    "POST:/v1/roles/revoke":                        "Revoke Role from Employee",
-    "GET:/v1/roles/route-permissions":              "List Route Permissions",
-    "POST:/v1/roles/route-permissions":             "Add Route Permission",
-    "PATCH:/v1/roles/route-permissions":            "Remove Route Permission",
-    "PATCH:/v1/roles/route-permissions/title":      "Update Route Display Title",
+    "GET:/aabhar/v1/roles/list":                           "List Roles",
+    "POST:/aabhar/v1/roles/create":                        "Create Role",
+    "GET:/aabhar/v1/roles/employees":                      "List Employee Role Assignments",
+    "POST:/aabhar/v1/roles/assign":                        "Assign Role to Employee",
+    "POST:/aabhar/v1/roles/revoke":                        "Revoke Role from Employee",
+    "GET:/aabhar/v1/roles/route-permissions":              "List Route Permissions",
+    "POST:/aabhar/v1/roles/route-permissions":             "Add Route Permission",
+    "PATCH:/aabhar/v1/roles/route-permissions":            "Remove Route Permission",
+    "PATCH:/aabhar/v1/roles/route-permissions/title":      "Update Route Display Title",
 }
 
 # ── OpenTelemetry ─────────────────────────────────────────────────────────────
@@ -89,6 +73,15 @@ trace.set_tracer_provider(provider)
 async def lifespan(app: FastAPI):
     print("Roles Service: Connecting to Database...")
     await db.connect()
+
+    # Uncomment and Restart the backend if you have changed any routes or need to remove old lingering routes
+    # # This deletes any active route that doesn't start with '/aabhar' prefix
+    # await db.route_permissions.delete_many(
+    #     where={
+    #         "route_key": {"not": {"contains": "/aabhar/v1/"}}
+    #     }
+    # )
+    
     print("Roles Service: 🟢 Database Connected")
 
     print("Roles Service: Connecting to Redis...")
@@ -121,23 +114,12 @@ app = FastAPI(
     title="Roles & Permissions Service",
     version="1.0.0",
     lifespan=lifespan,
-    # root_path is the reverse-proxy strip prefix.
-    # route_registry prepends this to every route.path to build the DB key.
-    root_path="/v1/roles",
+    root_path="/aabhar/v1/roles",
     openapi_url="/openapi.json",
     docs_url="/docs",
 )
 
-cors_origins_str      = os.getenv("FRONTEND_CORS_ORIGINS", "")
-allowed_origins_list  = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+initialize_cors_and_middleware(app)
 
 app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)

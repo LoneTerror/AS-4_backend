@@ -1,7 +1,6 @@
 import os
-
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware # Optional: remove import if no longer used anywhere
 from fastapi.exceptions import RequestValidationError
 from prisma.errors import UniqueViolationError
 from contextlib import asynccontextmanager
@@ -24,53 +23,43 @@ from src.common.middleware import (
     generic_exception_handler,
     prisma_unique_violation_handler
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 from . import router as rewards_router
 from src.core.logger import logger
 from src.common.route_registry import register_app_routes
 
 ROLE_OVERRIDES = {
-    "GET:/v1/rewards/catalog":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/rewards/categories":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/rewards/history":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/rewards/history/me":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/rewards/redeem":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/rewards/catalog":                     ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/v1/rewards/catalog/{catalog_id}":       ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/v1/rewards/catalog/{catalog_id}/stock": ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/rewards/categories":                  ["SUPER_ADMIN", "HR_ADMIN"],
-    "PATCH:/v1/rewards/categories/{category_id}":   ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/rewards/catalog":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/rewards/categories":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/rewards/history":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/rewards/history/me":                   ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/rewards/redeem":                      ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/rewards/catalog":                     ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/aabhar/v1/rewards/catalog/{catalog_id}":       ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/aabhar/v1/rewards/catalog/{catalog_id}/stock": ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/rewards/categories":                  ["SUPER_ADMIN", "HR_ADMIN"],
+    "PATCH:/aabhar/v1/rewards/categories/{category_id}":   ["SUPER_ADMIN", "HR_ADMIN"],
 }
 # ── Rewards Service ───────────────────────────────────────────────────────────
 ROUTE_TITLES = {
-    "GET:/v1/rewards/catalog":                        "Browse Rewards Catalog",
-    "GET:/v1/rewards/categories":                     "List Reward Categories",
-    "GET:/v1/rewards/history":                        "View All Redemption History",
-    "GET:/v1/rewards/history/me":                     "View My Redemption History",
-    "POST:/v1/rewards/redeem":                        "Redeem Reward",
-    "POST:/v1/rewards/catalog":                       "Add Catalog Item",
-    "PATCH:/v1/rewards/catalog/{catalog_id}":         "Update Catalog Item",
-    "PATCH:/v1/rewards/catalog/{catalog_id}/stock":   "Update Catalog Item Stock",
-    "POST:/v1/rewards/categories":                    "Create Reward Category",
-    "PATCH:/v1/rewards/categories/{category_id}":     "Update Reward Category",
+    "GET:/aabhar/v1/rewards/catalog":                        "Browse Rewards Catalog",
+    "GET:/aabhar/v1/rewards/categories":                     "List Reward Categories",
+    "GET:/aabhar/v1/rewards/history":                        "View All Redemption History",
+    "GET:/aabhar/v1/rewards/history/me":                     "View My Redemption History",
+    "POST:/aabhar/v1/rewards/redeem":                        "Redeem Reward",
+    "POST:/aabhar/v1/rewards/catalog":                       "Add Catalog Item",
+    "PATCH:/aabhar/v1/rewards/catalog/{catalog_id}":         "Update Catalog Item",
+    "PATCH:/aabhar/v1/rewards/catalog/{catalog_id}/stock":   "Update Catalog Item Stock",
+    "POST:/aabhar/v1/rewards/categories":                    "Create Reward Category",
+    "PATCH:/aabhar/v1/rewards/categories/{category_id}":     "Update Reward Category",
 }
 
-# ==========================================
-# OpenTelemetry Configuration
-# ==========================================
-# 1. Identify the service in Jaeger
 resource = Resource.create({"service.name": "rnr-rewards"})
 provider = TracerProvider(resource=resource)
-
-# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
 otlp_exporter = OTLPSpanExporter()
-
-# 3. Process traces in batches in the background
 processor = BatchSpanProcessor(otlp_exporter)
 provider.add_span_processor(processor)
-
-# 4. Register globally
 trace.set_tracer_provider(provider)
-# ==========================================
 
 
 @asynccontextmanager
@@ -104,13 +93,14 @@ app = FastAPI(
     title="Reward Microservice",
     description="API for managing the reward catalog and point redemptions.",
     version="1.0.0",
-    root_path="/v1/rewards", 
+    root_path="/aabhar/v1/rewards", 
     openapi_url="/openapi.json", 
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
 )
 
+initialize_cors_and_middleware(app)
 
 @app.get("/health", tags=["System"])
 async def health_check():
@@ -122,32 +112,17 @@ async def health_check():
         "database": "Connected" if db.is_connected() else "Disconnected",
     }
 
-# Grab the env var, default to localhost for local dev fallback
-cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS")
-# Split by comma and strip whitespace to create a clean list
-allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
-    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
-)
-
 app.middleware("http")(request_rate_limit_middleware)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
-app.add_exception_handler(UniqueViolationError,prisma_unique_violation_handler)
+app.add_exception_handler(UniqueViolationError, prisma_unique_violation_handler)
 
 app.include_router(rewards_router.router)
 
 # ==========================================
 # Instrument FastAPI
 # ==========================================
-# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
 FastAPIInstrumentor.instrument_app(
     app,
     excluded_urls="health,/docs,/openapi.json,/redoc"

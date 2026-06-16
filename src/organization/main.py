@@ -1,7 +1,7 @@
 import uvicorn
 import os
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+# CORSMiddleware import removed
 from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 
@@ -15,6 +15,7 @@ from src.common.middleware import (
     generic_exception_handler,
     prisma_unique_violation_handler
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 
 # --- OpenTelemetry Imports ---
 from opentelemetry import trace
@@ -40,55 +41,51 @@ from src.common.route_registry import register_app_routes
 # ── Role overrides ────────────────────────────────────────────────────────────
 ROLE_OVERRIDES: dict[str, list[str]] = {
     # Departments
-    "GET:/v1/organizations/departments":                            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/organizations/departments/{department_id}":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/organizations/departments":                           ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/organizations/departments/{department_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/organizations/departments":                            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/organizations/departments/{department_id}":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/organizations/departments":                           ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/aabhar/v1/organizations/departments/{department_id}":            ["SUPER_ADMIN", "HR_ADMIN"],
     # Department Types
-    "GET:/v1/organizations/department-types":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/organizations/department-types":                       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
     # Designations
-    "GET:/v1/organizations/designations":                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/organizations/designations/{designation_id}":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/organizations/designations":                          ["SUPER_ADMIN", "HR_ADMIN"],
-    "PUT:/v1/organizations/designations/{designation_id}":          ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/organizations/designations":                           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/organizations/designations/{designation_id}":          ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/organizations/designations":                          ["SUPER_ADMIN", "HR_ADMIN"],
+    "PUT:/aabhar/v1/organizations/designations/{designation_id}":          ["SUPER_ADMIN", "HR_ADMIN"],
     # Statuses
-    "GET:/v1/organizations/statuses":                               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN", "HR_ADMIN"],
-    "POST:/v1/organizations/statuses":                              ["SUPER_ADMIN"],
-    "PUT:/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN"],
+    "GET:/aabhar/v1/organizations/statuses":                               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN", "HR_ADMIN"],
+    "POST:/aabhar/v1/organizations/statuses":                              ["SUPER_ADMIN"],
+    "PUT:/aabhar/v1/organizations/statuses/{status_id}":                   ["SUPER_ADMIN"],
     # Audit Logs
-    "GET:/v1/organizations/audit-logs":                             ["SUPER_ADMIN", "HR_ADMIN"],
-    "GET:/v1/organizations/audit-logs/{audit_id}":                  ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/organizations/audit-logs":                             ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/organizations/audit-logs/{audit_id}":                  ["SUPER_ADMIN", "HR_ADMIN"],
 }
 
 # ── Route titles ──────────────────────────────────────────────────────────────
-# BUG FIXED: previously ROUTE_TITLES was defined twice — the first definition
-# (which mistakenly contained recognitions keys) was silently overwritten by
-# the second. Now there is exactly one definition with the correct org keys.
 ROUTE_TITLES: dict[str, str] = {
     # Departments
-    "GET:/v1/organizations/departments":                            "List Departments",
-    "GET:/v1/organizations/departments/{department_id}":            "Get Department Details",
-    "POST:/v1/organizations/departments":                           "Create Department",
-    "PUT:/v1/organizations/departments/{department_id}":            "Update Department",
+    "GET:/aabhar/v1/organizations/departments":                            "List Departments",
+    "GET:/aabhar/v1/organizations/departments/{department_id}":            "Get Department Details",
+    "POST:/aabhar/v1/organizations/departments":                           "Create Department",
+    "PUT:/aabhar/v1/organizations/departments/{department_id}":            "Update Department",
     # Department Types
-    "GET:/v1/organizations/department-types":                       "List Department Types",
+    "GET:/aabhar/v1/organizations/department-types":                       "List Department Types",
     # Designations
-    "GET:/v1/organizations/designations":                           "List Designations",
-    "GET:/v1/organizations/designations/{designation_id}":          "Get Designation Details",
-    "POST:/v1/organizations/designations":                          "Create Designation",
-    "PUT:/v1/organizations/designations/{designation_id}":          "Update Designation",
+    "GET:/aabhar/v1/organizations/designations":                           "List Designations",
+    "GET:/aabhar/v1/organizations/designations/{designation_id}":          "Get Designation Details",
+    "POST:/aabhar/v1/organizations/designations":                          "Create Designation",
+    "PUT:/aabhar/v1/organizations/designations/{designation_id}":          "Update Designation",
     # Statuses
-    "GET:/v1/organizations/statuses":                               "List Statuses",
-    "GET:/v1/organizations/statuses/{status_id}":                   "Get Status Details",
-    "POST:/v1/organizations/statuses":                              "Create Status",
-    "PUT:/v1/organizations/statuses/{status_id}":                   "Update Status",
+    "GET:/aabhar/v1/organizations/statuses":                               "List Statuses",
+    "GET:/aabhar/v1/organizations/statuses/{status_id}":                   "Get Status Details",
+    "POST:/aabhar/v1/organizations/statuses":                              "Create Status",
+    "PUT:/aabhar/v1/organizations/statuses/{status_id}":                   "Update Status",
     # Audit Logs
-    "GET:/v1/organizations/audit-logs":                             "List Audit Logs",
-    "GET:/v1/organizations/audit-logs/{audit_id}":                  "Get Audit Log Details",
+    "GET:/aabhar/v1/organizations/audit-logs":                             "List Audit Logs",
+    "GET:/aabhar/v1/organizations/audit-logs/{audit_id}":                  "Get Audit Log Details",
 }
 
-# Paths that never require auth — excluded from BearerAuth injection in OpenAPI
 _PUBLIC_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
 
 # ── OpenTelemetry ─────────────────────────────────────────────────────────────
@@ -134,22 +131,13 @@ app = FastAPI(
     title="Organization Service",
     description="Microservice for handling company structure: Departments and Designations",
     version="1.0.0",
-    root_path="/v1/organizations",
+    root_path="/aabhar/v1/organizations",
     openapi_url="/openapi.json",
     docs_url="/docs",
     lifespan=lifespan,
 )
 
-cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "http://localhost:8005,http://localhost:8001,http://localhost:8003")
-allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+initialize_cors_and_middleware(app)
 
 app.middleware("http")(request_rate_limit_middleware)
 
@@ -172,9 +160,6 @@ app.include_router(audit_logs_router,           prefix="/audit-logs",           
 
 
 # ── OpenAPI schema ────────────────────────────────────────────────────────────
-# BUG FIXED: the old loop used `.values()` (not `.items()`) so it couldn't
-# check the path name and injected BearerAuth onto /health too, causing
-# check_route_permission to return 401 on health polls.
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema

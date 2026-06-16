@@ -19,11 +19,11 @@ DEP = "src.common.dependencies"
 def mock_request():
     request = MagicMock(spec=Request)
     # Default state for a fresh request mock
-    request.scope = {"path": "/v1/analytics/dashboard", "route": MagicMock()}
+    request.scope = {"path": "/aabhar/v1/analytics/dashboard", "route": MagicMock()}
     request.scope["route"].path = "/dashboard"
-    request.url.path = "/v1/analytics/dashboard"
+    request.url.path = "/aabhar/v1/analytics/dashboard"
     request.method = "GET"
-    request.app.root_path = "/v1/analytics"
+    request.app.root_path = "/aabhar/v1/analytics"
     request.state = MagicMock()
     return request
 
@@ -46,7 +46,7 @@ class TestDependencies:
         
         # 2. FastAPI components must return strings for concatenation to work
         mock_req.app = MagicMock()
-        mock_req.app.root_path = "/v1/auth"
+        mock_req.app.root_path = "/aabhar/v1/auth"
         
         # 3. Simulate a matched APIRoute object
         from fastapi.routing import APIRoute
@@ -60,7 +60,7 @@ class TestDependencies:
         key = _build_route_key(mock_req)
         
         # 6. Assert exact string match
-        assert key == "POST:/v1/auth/login"
+        assert key == "POST:/aabhar/v1/auth/login"
 
     @pytest.mark.asyncio
     async def test_auth_client_singleton(self):

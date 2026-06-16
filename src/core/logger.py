@@ -91,9 +91,6 @@ def setup_logger(name: str = "app_logger"):
 
     logger.setLevel(logging.DEBUG)
 
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-
     # Use the new comprehensive MaskingFormatter
     formatter = MaskingFormatter(
         "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
@@ -105,32 +102,37 @@ def setup_logger(name: str = "app_logger"):
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # STRICT Debug File Handler
-    debug_handler = RotatingFileHandler(
+    log_to_file = os.getenv("LOG_TO_FILE", "false").lower() == "true"
+
+    if log_to_file:
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        
+        debug_handler = RotatingFileHandler(
         os.path.join(log_dir, "debug.log"), maxBytes=5*1024*1024, backupCount=3
     )
-    debug_handler.setLevel(logging.DEBUG)
-    debug_handler.addFilter(ExactLevelFilter(logging.DEBUG))
-    debug_handler.setFormatter(formatter)
-    logger.addHandler(debug_handler)
+        debug_handler.setLevel(logging.DEBUG)
+        debug_handler.addFilter(ExactLevelFilter(logging.DEBUG))
+        debug_handler.setFormatter(formatter)
+        logger.addHandler(debug_handler)
 
-    # STRICT Warning File Handler
-    warning_handler = RotatingFileHandler(
-        os.path.join(log_dir, "warning.log"), maxBytes=5*1024*1024, backupCount=3
-    )
-    warning_handler.setLevel(logging.WARNING)
-    warning_handler.addFilter(ExactLevelFilter(logging.WARNING))
-    warning_handler.setFormatter(formatter)
-    logger.addHandler(warning_handler)
+        # STRICT Warning File Handler
+        warning_handler = RotatingFileHandler(
+            os.path.join(log_dir, "warning.log"), maxBytes=5*1024*1024, backupCount=3
+        )
+        warning_handler.setLevel(logging.WARNING)
+        warning_handler.addFilter(ExactLevelFilter(logging.WARNING))
+        warning_handler.setFormatter(formatter)
+        logger.addHandler(warning_handler)
 
-    # STRICT Error File Handler
-    error_handler = RotatingFileHandler(
-        os.path.join(log_dir, "error.log"), maxBytes=5*1024*1024, backupCount=5
-    )
-    error_handler.setLevel(logging.ERROR)
-    error_handler.addFilter(ExactLevelFilter(logging.ERROR))
-    error_handler.setFormatter(formatter)
-    logger.addHandler(error_handler)
+        # STRICT Error File Handler
+        error_handler = RotatingFileHandler(
+            os.path.join(log_dir, "error.log"), maxBytes=5*1024*1024, backupCount=5
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.addFilter(ExactLevelFilter(logging.ERROR))
+        error_handler.setFormatter(formatter)
+        logger.addHandler(error_handler)
 
     return logger
 

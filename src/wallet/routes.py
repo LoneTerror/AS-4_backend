@@ -1,6 +1,6 @@
 # src/wallet/routes.py
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
@@ -34,14 +34,15 @@ transactions_router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
 @transactions_router.post("", response_model=TransactionResponse)
 async def create_txn(
+    request: Request,
     data: TransactionCreate,
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    txn = await create_transaction(data, current_user)
+    txn = await create_transaction(data, current_user, request)
     return {
-        "transaction_id":   txn.transaction_id,
-        "wallet_id":        txn.wallet_id,
-        "amount":           txn.amount,
+        "transaction_id": txn.transaction_id,
+        "wallet_id":      txn.wallet_id,
+        "amount":         txn.amount,
         "status": {
             "status_id": str(txn.status_master.status_id),
             "code":      txn.status_master.status_code,
@@ -71,13 +72,13 @@ async def list_transaction_types(
 
 
 @transactions_router.get("", response_model=TransactionListResponse)
-async def list_transaction(
+async def list_transactions(
     wallet_id: str,
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(10, ge=1, le=100, description="Items per page"),
     start_date: datetime | None = Query(None, description="Filter transactions after this date"),
     end_date: datetime | None = Query(None, description="Filter transactions before this date"),
-    status_code: str | None = Query(None, description="Filter by status code (SUCCESS, FAILED, REFUNDED)"),
+    status_code: str | None = Query(None, description="Filter by status code"),
     current_user: CurrentUser = Depends(check_route_permission),
 ):
     return await get_transactions(
@@ -133,7 +134,9 @@ async def credit_from_review_route(
     review_id: str,
     current_user: CurrentUser = Depends(check_route_permission),
 ):
-    """Credit wallet based on review rating. Triggered automatically after review creation."""
+    """Credit wallet based on review. Triggered automatically after review creation."""
+    # No request object passed — this is an internal/consumer-triggered call.
+    # audit_ctx handles request=None by leaving ip_address/user_agent as NULL.
     return await credit_wallet_from_review(review_id, current_user)
 
 

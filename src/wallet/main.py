@@ -1,70 +1,115 @@
-import os
+"""
+src/wallet/main.py  — Wallet Service entry point.
+"""
+from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from prisma.errors import UniqueViolationError
+import asyncio
+import os
 from contextlib import asynccontextmanager
 
-# --- OpenTelemetry Imports ---
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+# CORSMiddleware import removed
+from fastapi.responses import JSONResponse
+from prisma.errors import UniqueViolationError
+
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-# -----------------------------
 
-from src.prisma.client import db, connect_with_retry
-from src.wallet.routes import router as wallet_router
-from src.notifications.redis_client import connect_redis, disconnect_redis
 from src.common.dependencies import close_auth_client
 from src.common.middleware import (
-    request_rate_limit_middleware,
-    http_exception_handler,
+    generic_exception_handler, http_exception_handler,
+    prisma_unique_violation_handler, request_rate_limit_middleware,
     validation_exception_handler,
-    generic_exception_handler,
-    prisma_unique_violation_handler
 )
+from src.common.cors_setup import initialize_cors_and_middleware
 from src.common.route_registry import register_app_routes
+from src.notifications.redis_client import connect_redis, disconnect_redis
+from src.prisma.client import connect_with_retry, db
+from src.wallet.employee_consumer import employee_created_consumer_loop
+from src.wallet.internal_router import router as internal_router
+from src.wallet.review_consumer import review_created_consumer_loop
+from src.wallet.reward_consumer import reward_redeemed_consumer_loop
+from src.wallet.routes import router as wallet_router
+
+import logging
+logger = logging.getLogger(__name__)
+
+resource      = Resource.create({"service.name": "rnr-wallet"})
+provider      = TracerProvider(resource=resource)
+otlp_exporter = OTLPSpanExporter()
+provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+trace.set_tracer_provider(provider)
 
 ROLE_OVERRIDES = {
-    "GET:/v1/wallets/employees/{employee_id}":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/{wallet_id}/balance":        ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/{wallet_id}/points-summary": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/transactions":               ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/transactions/{transaction_id}": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "GET:/v1/wallets/transactions/types":         ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
-    "POST:/v1/wallets/transactions":              ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
-    "POST:/v1/wallets/credit-from-review":        ["SUPER_ADMIN", "HR_ADMIN"],
+    "GET:/aabhar/v1/wallets/employees/{employee_id}":       ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/{wallet_id}/balance":           ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/{wallet_id}/points-summary":    ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/transactions":                  ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/transactions/{transaction_id}": ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "GET:/aabhar/v1/wallets/transactions/types":            ["SUPER_ADMIN", "HR_ADMIN", "MANAGER", "EMPLOYEE"],
+    "POST:/aabhar/v1/wallets/transactions":                 ["SUPER_ADMIN", "HR_ADMIN", "MANAGER"],
 }
 ROUTE_TITLES = {
-    "GET:/v1/wallets/employees/{employee_id}":          "Get Employee Wallet",
-    "GET:/v1/wallets/{wallet_id}/balance":              "Get Wallet Balance",
-    "GET:/v1/wallets/{wallet_id}/points-summary":       "Get Points Summary",
-    "GET:/v1/wallets/transactions":                     "List All Transactions",
-    "GET:/v1/wallets/transactions/{transaction_id}":    "Get Transaction Details",
-    "GET:/v1/wallets/transactions/types":               "List Transaction Types",
-    "POST:/v1/wallets/transactions":                    "Create Transaction",
-    "POST:/v1/wallets/credit-from-review":              "Credit Points from Review",
+    "GET:/aabhar/v1/wallets/employees/{employee_id}":        "Get Employee Wallet",
+    "GET:/aabhar/v1/wallets/{wallet_id}/balance":            "Get Wallet Balance",
+    "GET:/aabhar/v1/wallets/{wallet_id}/points-summary":     "Get Points Summary",
+    "GET:/aabhar/v1/wallets/transactions":                   "List All Transactions",
+    "GET:/aabhar/v1/wallets/transactions/{transaction_id}":  "Get Transaction Details",
+    "GET:/aabhar/v1/wallets/transactions/types":             "List Transaction Types",
+    "POST:/aabhar/v1/wallets/transactions":                  "Create Transaction",
 }
-# ==========================================
-# OpenTelemetry Configuration
-# ==========================================
-# 1. Identify the service in Jaeger
-resource = Resource.create({"service.name": "rnr-wallet"})
-provider = TracerProvider(resource=resource)
 
-# 2. Set up the exporter (Automatically reads OTEL_EXPORTER_OTLP_ENDPOINT)
-otlp_exporter = OTLPSpanExporter()
+cors_origins_str     = os.getenv("FRONTEND_CORS_ORIGINS", "")
+allowed_origins_list = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
 
-# 3. Process traces in batches in the background
-processor = BatchSpanProcessor(otlp_exporter)
-provider.add_span_processor(processor)
 
-# 4. Register globally
-trace.set_tracer_provider(provider)
-# ==========================================
+def _make_consumer_task(
+    loop_fn,
+    shutdown_event: asyncio.Event,
+    name: str,
+    consumer_tasks: list,
+) -> asyncio.Task:
+    """
+    Create a consumer task with a done-callback that:
+    - Logs any unhandled exception so silent crashes are visible
+    - Auto-restarts the consumer after a 3-second delay if it crashes
+      (unless shutdown is in progress)
+    This prevents the "works only after restart" symptom caused by the
+    task dying silently and only recovering via _recover_pending on next boot.
+    """
+    task = asyncio.create_task(loop_fn(shutdown_event), name=name)
+
+    def _on_done(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc:
+            logger.error("Consumer task '%s' crashed: %s — restarting in 3s", name, exc)
+            if not shutdown_event.is_set():
+                async def _restart():
+                    await asyncio.sleep(3)
+                    if not shutdown_event.is_set():
+                        new_task = _make_consumer_task(loop_fn, shutdown_event, name, consumer_tasks)
+                        # Replace the dead task reference in the shared list
+                        for i, old in enumerate(consumer_tasks):
+                            if old is t:
+                                consumer_tasks[i] = new_task
+                                break
+                        else:
+                            consumer_tasks.append(new_task)
+                        logger.info("Consumer task '%s' restarted", name)
+                asyncio.ensure_future(_restart())
+        else:
+            if not shutdown_event.is_set():
+                logger.warning("Consumer task '%s' exited cleanly without shutdown signal", name)
+
+    task.add_done_callback(_on_done)
+    return task
 
 
 @asynccontextmanager
@@ -72,11 +117,27 @@ async def lifespan(app: FastAPI):
     await connect_with_retry()
     print("Wallet Service: 🟢 Database Connected")
 
+    _shutdown      = asyncio.Event()
+    consumer_tasks = []
+
     try:
         await connect_redis()
-        print("Wallet Service: ☑️ Redis Connected")
-    except Exception as e:
-        print(f"Wallet Service: ⚠️  Redis unavailable ({e}) — caching disabled")
+        print("Wallet Service: ☑️  Redis Connected")
+
+        consumer_tasks.extend([
+            _make_consumer_task(employee_created_consumer_loop, _shutdown, "employee_created_consumer", consumer_tasks),
+            _make_consumer_task(review_created_consumer_loop,   _shutdown, "review_created_consumer",   consumer_tasks),
+            _make_consumer_task(reward_redeemed_consumer_loop,  _shutdown, "reward_redeemed_consumer",  consumer_tasks),
+        ])
+
+        # Yield to the event loop so all three consumer tasks actually start
+        # running before lifespan continues. Without this, tasks are scheduled
+        # but not yet executing — their first xreadgroup call hasn't happened yet.
+        await asyncio.sleep(0)
+
+        print("Wallet Service: 👂 Stream consumers started")
+    except Exception as exc:
+        print(f"Wallet Service: ⚠️  Redis unavailable ({exc}) — consumers disabled")
 
     await register_app_routes(
         app,
@@ -87,6 +148,15 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    _shutdown.set()
+    for task in consumer_tasks:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    print("Wallet Service: 👂 Consumers stopped")
+
     await close_auth_client()
     await disconnect_redis()
     await db.disconnect()
@@ -96,48 +166,41 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Wallet Service",
     version="1.0.0",
-    root_path="/v1/wallets", 
-    openapi_url="/openapi.json", 
+    root_path="/aabhar/v1/wallets",
+    openapi_url="/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
+initialize_cors_and_middleware(app)
 
 @app.get("/health", tags=["System"])
 async def health_check():
     return {"status": "healthy", "service": "Wallet Service"}
 
 
+# Deprecated route remains for signal consistency
+@app.post("/credit-from-review", include_in_schema=False)
+async def credit_from_review_deprecated():
+    return JSONResponse(status_code=410, content={
+        "detail": "Deprecated. Use the review.created Redis Stream event instead."
+    })
+
+
+# Middleware & Exception Handlers
 app.middleware("http")(request_rate_limit_middleware)
-app.add_exception_handler(Exception, generic_exception_handler)
+app.add_exception_handler(Exception,               generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(HTTPException, http_exception_handler)
-app.add_exception_handler(UniqueViolationError,prisma_unique_violation_handler)
+app.add_exception_handler(HTTPException,           http_exception_handler)
+app.add_exception_handler(UniqueViolationError,    prisma_unique_violation_handler)
 
-# Grab the env var, default to localhost for local dev fallback
-cors_origins_str = os.getenv("FRONTEND_CORS_ORIGINS")
-# Split by comma and strip whitespace to create a clean list
-allowed_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-Correlation-ID"],
-    expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
-)
+# CORS MIDDLEWARE REMOVED FROM HERE
 
 app.include_router(wallet_router)
+app.include_router(internal_router)
 
-
-# ==========================================
-# Instrument FastAPI
-# ==========================================
-# Automatically trace HTTP requests, but ignore noisy health and docs endpoints
+# Instrumentation
 FastAPIInstrumentor.instrument_app(
-    app,
-    excluded_urls="health,docs,openapi.json,redoc"
+    app, excluded_urls="health,docs,openapi.json,redoc,internal"
 )
-# ==========================================

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallet-service
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wallet-service
+  template:
+    metadata:
+      labels:
+        app: wallet-service
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+      - name: wallet-container
+        image: mrmonster786/rnr-backend-base:latest 
+        imagePullPolicy: Always
+        args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.wallet.main:app", "--host", "0.0.0.0", "--port", "8004"]
+        env:
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: rnr-secrets
+              key: REDIS_URL
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service:8001"
+        - name: OTEL_SERVICE_NAME
+          value: "wallet-service"
+        ports:
+        - containerPort: 8004
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
+        resources:
+          requests:
+            memory: "200Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wallet-service
+spec:
+  selector:
+    app: wallet-service
+  ports:
+    - protocol: TCP
+      port: 8004
+      targetPort: 8004

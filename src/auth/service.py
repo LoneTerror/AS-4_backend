@@ -1,456 +1,414 @@
+"""
+src/auth/service.py
+───────────────────
+Auth service — owns: employees (auth columns), refresh_tokens.
+
+DECOUPLING CHANGE
+──────────────────
+Wallet creation removed from create_employee().
+After persisting the employee row, publishes 'employee.created'
+to a Redis Stream. The Wallet service consumes and provisions
+the wallet asynchronously.
+"""
+from __future__ import annotations
+
+import logging
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+from uuid import uuid4
+
+from fastapi import HTTPException, Request, status
+
+from src.common.audit import audit, audit_ctx
+from src.common.event_publisher import publish
 from src.prisma.client import db
 from src.core.security import (
-    verify_password,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
     create_access_token,
-    hash_password,
-    hash_refresh_token,
-    verify_refresh_token,
-    decode_token,
     create_reset_token,
     decode_reset_token,
-    ACCESS_TOKEN_EXPIRE_MINUTES
+    decode_token,
+    hash_password,
+    hash_refresh_token,
+    verify_password,
+    verify_refresh_token,
 )
+
 try:
-    from src.core.email_utils import send_password_reset_email, send_password_reset_confirmation
-    _email_utils_available = True
-except Exception as _email_import_err:
-    print(f"⚠️  email_utils import failed — password reset emails disabled: {_email_import_err}")
-    _email_utils_available = False
-    def send_password_reset_email(*a, **kw): pass
-    def send_password_reset_confirmation(*a, **kw): pass
+    from src.core.email_utils import send_password_reset_confirmation, send_password_reset_email
+    _email_available = True
+except Exception as _err:
+    _email_available = False
+    def send_password_reset_email(*a, **kw): pass        # type: ignore
+    def send_password_reset_confirmation(*a, **kw): pass # type: ignore
 
-from fastapi import HTTPException, status
-from datetime import datetime, timedelta, timezone
-from uuid import uuid4
-import secrets
+logger = logging.getLogger(__name__)
 
-def _now():
-    """Always returns a timezone-aware UTC datetime"""
-    return datetime.now(timezone.utc)
-
-# Separator that will NEVER appear in a UUID or token_urlsafe string
 _TOKEN_SEP = "||"
 
-# Helper to format the response to match Schema
-def _build_login_response(user, access_token, refresh_token_raw):
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _build_login_response(user, access_token: str, refresh_token_raw: str) -> dict:
     return {
-        "access_token": access_token,
+        "access_token":  access_token,
         "refresh_token": refresh_token_raw,
-        "token_type": "Bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "token_type":    "Bearer",
+        "expires_in":    ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "employee": {
-            "employee_id": user.employee_id,
-            "username": user.username,
-            "email": user.email,
+            "employee_id":    user.employee_id,
+            "username":       user.username,
+            "email":          user.email,
             "designation_id": user.designation_id,
-            "department_id": user.department_id
-        }
+            "department_id":  user.department_id,
+        },
     }
 
 
-# -------------------------------
-# TOKEN VALIDATION (for other services)
-# -------------------------------
-async def validate_token(token: str):
-    """
-    Validate JWT token and return user info.
-    Used by other microservices to authenticate requests.
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+# Token validation  (no audit — read-only, called on every request)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def validate_token(token: str) -> dict:
     payload = decode_token(token)
-
     if not payload:
-        return {
-            "valid": False,
-            "error": "Invalid or expired token"
-        }
-
+        return {"valid": False, "error": "Invalid or expired token"}
     return {
-        "valid": True,
-        "user_id": payload.get("sub"),
-        "email": payload.get("email"),
-        "roles": payload.get("roles", []),
-        "department_id": payload.get("department_id")
+        "valid":         True,
+        "user_id":       payload.get("sub"),
+        "email":         payload.get("email"),
+        "roles":         payload.get("roles", []),
+        "department_id": payload.get("department_id"),
     }
 
 
-# -------------------------------
-# LOGIN
-# -------------------------------
-async def authenticate_user(username: str, password: str):
-    print(f"DEBUG: Attempting login for {username}")
+# ─────────────────────────────────────────────────────────────────────────────
+# Login
+# Audits: successful login (INSERT on refresh_tokens triggers DB audit).
+# Failed login audited explicitly — no DB row exists to trigger on.
+# ─────────────────────────────────────────────────────────────────────────────
 
-    # ERR-437 FIX: Normalize input to lowercase here as a defence-in-depth
-    # measure. The LoginRequest schema already lowercases at the boundary,
-    # but normalizing here too means the service is safe if called directly
-    # (e.g. from tests or other services) without going through the schema.
+async def authenticate_user(
+    username: str,
+    password: str,
+    request: Optional[Request] = None,
+) -> dict:
     username = username.strip().lower()
 
-    # 1. Fetch User with roles included — mode "insensitive" makes the DB
-    #    comparison case-insensitive at the storage level (Prisma / Postgres).
     user = await db.employees.find_first(
         where={
             "OR": [
                 {"username": {"equals": username, "mode": "insensitive"}},
-                {"email":    {"equals": username, "mode": "insensitive"}}
+                {"email":    {"equals": username, "mode": "insensitive"}},
             ]
         },
         include={
             "employee_roles_employee_roles_employee_idToemployees": {
-                "where": {"is_active": True},
-                "include": {"roles": True}
+                "where":   {"is_active": True},
+                "include": {"roles": True},
             }
-        }
+        },
     )
 
-    if not user:
-        print("DEBUG: User not found in DB")
+    # ── Failed login — audit explicitly (no DB row to trigger on) ─────────────
+    if not user or not verify_password(password, user.password_hash):
+        # Use sentinel UUID as performed_by — no authenticated user exists yet
+        await audit(
+            table_name   = "employees",
+            record_id    = str(user.employee_id) if user else "00000000-0000-0000-0000-000000000000",
+            operation    = "LOGIN_FAILED",
+            performed_by = str(user.employee_id) if user else "00000000-0000-0000-0000-000000000000",
+            new_values   = {"username": username, "reason": "invalid_credentials"},
+            request      = request,
+        )
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # 2. Verify Password
-    if not verify_password(password, user.password_hash):
-        print("DEBUG: Password mismatch")
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    # 3. Extract Roles
-    roles = []
+    roles: list[str] = []
     try:
-        emp_roles = user.employee_roles_employee_roles_employee_idToemployees or []
-        for er in emp_roles:
+        for er in (user.employee_roles_employee_roles_employee_idToemployees or []):
             if er.roles and hasattr(er.roles, "role_code"):
                 roles.append(er.roles.role_code)
-        print(f"DEBUG: Found roles: {roles}")
-    except Exception as e:
-        print(f"CRITICAL WARNING: Failed to extract roles. Error: {e}")
-
-    # FIX: Apply fallback AFTER extraction attempt, not inside the except block only
+    except Exception as exc:
+        logger.warning("Role extraction failed for %s: %s", user.employee_id, exc)
     if not roles:
         roles = ["EMPLOYEE"]
 
-    # 4. Create Access Token
-    access_token = create_access_token({
-        "sub": str(user.employee_id),
-        "email": user.email,
-        "roles": roles,
-        "department_id": str(user.department_id),
+    access_token  = create_access_token({
+        "sub": str(user.employee_id), "email": user.email,
+        "roles": roles, "department_id": str(user.department_id),
     })
+    token_id      = str(uuid4())
+    token_secret  = secrets.token_urlsafe(64)
+    client_token  = f"{token_id}{_TOKEN_SEP}{token_secret}"
 
-    # 5. Create Refresh Token
-    token_id = str(uuid4())
-    token_secret = secrets.token_urlsafe(64)
-
-    client_refresh_token = f"{token_id}{_TOKEN_SEP}{token_secret}"
-
-    refresh_token_hash = hash_refresh_token(token_secret)
-
-    await db.refresh_tokens.create(
-        data={
-            "token_id": token_id,
-            "token_hash": refresh_token_hash,
+    # DB trigger fires on the refresh_tokens INSERT — captures LOGIN implicitly.
+    # We also write an explicit app-level audit row with richer context.
+    token_record = None
+    async with audit_ctx(
+        user_id    = str(user.employee_id),
+        request    = request,
+        table_name = "refresh_tokens",
+        record_id  = lambda: str(token_record.token_id),
+        operation  = "LOGIN",
+        new_values = lambda: {
+            "employee_id": str(user.employee_id),
+            "username":    user.username,
+            "roles":       roles,
+        },
+    ):
+        token_record = await db.refresh_tokens.create(data={
+            "token_id":    token_id,
+            "token_hash":  hash_refresh_token(token_secret),
             "employee_id": user.employee_id,
-            "expires_at": _now() + timedelta(days=7),
-            "created_at": _now(),
-            "updated_at": _now(),
-        }
-    )
+            "expires_at":  _now() + timedelta(days=7),
+            "created_at":  _now(),
+            "updated_at":  _now(),
+        })
 
-    return _build_login_response(user, access_token, client_refresh_token)
+    return _build_login_response(user, access_token, client_token)
 
 
-# -------------------------------
-# REFRESH TOKEN
-# -------------------------------
-async def refresh_access_token(client_refresh_token: str):
+# ─────────────────────────────────────────────────────────────────────────────
+# Refresh token  (no extra audit — DB trigger on refresh_tokens UPDATE covers it)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def refresh_access_token(client_refresh_token: str) -> dict:
     if _TOKEN_SEP not in client_refresh_token:
         raise HTTPException(status_code=401, detail="Invalid token format")
 
     token_id, token_secret = client_refresh_token.split(_TOKEN_SEP, 1)
-
-    # 1. Direct Lookup by ID
-    stored_token = await db.refresh_tokens.find_unique(
-        where={"token_id": token_id},
-        include={"employees": True}
+    stored = await db.refresh_tokens.find_unique(
+        where={"token_id": token_id}, include={"employees": True}
     )
-
-    # 2. Validation
-    if not stored_token:
+    if not stored:
         raise HTTPException(status_code=401, detail="Token not found")
-
-    if stored_token.revoked_at or stored_token.expires_at < _now():
+    if stored.revoked_at or stored.expires_at < _now():
         raise HTTPException(status_code=401, detail="Token expired or revoked")
-
-    if not verify_refresh_token(token_secret, stored_token.token_hash):
+    if not verify_refresh_token(token_secret, stored.token_hash):
         raise HTTPException(status_code=401, detail="Invalid token signature")
 
-    user = stored_token.employees
-
-    # 3. Fetch current roles
-    roles = []
+    user  = stored.employees
+    roles: list[str] = []
     try:
-        roles_relation = await db.employee_roles.find_many(
-            where={
-                "employee_id": user.employee_id,
-                "is_active": True
-            },
-            include={"roles": True}
+        relations = await db.employee_roles.find_many(
+            where={"employee_id": user.employee_id, "is_active": True},
+            include={"roles": True},
         )
-        roles = [
-            r.roles.role_code for r in roles_relation
-            if r.roles and r.is_active
-        ]
-    except Exception as e:
-        print(f"Refresh Token Role Error: {e}")
-
-    # FIX: Fallback applied after query so it's never silently discarded
+        roles = [r.roles.role_code for r in relations if r.roles and r.is_active]
+    except Exception as exc:
+        logger.warning("Refresh role extraction failed: %s", exc)
     if not roles:
         roles = ["EMPLOYEE"]
 
-    # 4. Create new access token
-    new_access_token = create_access_token({
-        "sub": str(user.employee_id),
-        "email": user.email,
-        "roles": roles,
-        "department_id": str(user.department_id),
+    new_access = create_access_token({
+        "sub": str(user.employee_id), "email": user.email,
+        "roles": roles, "department_id": str(user.department_id),
     })
+    return _build_login_response(user, new_access, client_refresh_token)
 
-    return _build_login_response(user, new_access_token, client_refresh_token)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Logout
+# DB trigger on refresh_tokens UPDATE fires automatically.
+# App-level audit row adds explicit LOGOUT operation for clarity.
+# ─────────────────────────────────────────────────────────────────────────────
 
-# -------------------------------
-# LOGOUT
-# -------------------------------
-async def logout_user(client_refresh_token: str, user_id: str):
+async def logout_user(
+    client_refresh_token: str,
+    user_id: str,
+    request: Optional[Request] = None,
+) -> dict:
     if _TOKEN_SEP not in client_refresh_token:
         return {"message": "Invalid token format, but logged out locally"}
 
     token_id, token_secret = client_refresh_token.split(_TOKEN_SEP, 1)
-
-    # Only revoke if the token belongs to the requesting user
-    stored_token = await db.refresh_tokens.find_first(
-        where={
-            "token_id": token_id,
-            "employee_id": user_id
-        }
+    stored = await db.refresh_tokens.find_first(
+        where={"token_id": token_id, "employee_id": user_id}
     )
 
-    if stored_token and verify_refresh_token(token_secret, stored_token.token_hash):
-        await db.refresh_tokens.update(
-            where={"token_id": token_id},
-            data={
-                "revoked_at": _now(),
-                "updated_at": _now(),
-            }
-        )
+    if stored and verify_refresh_token(token_secret, stored.token_hash):
+        async with audit_ctx(
+            user_id    = user_id,
+            request    = request,
+            table_name = "refresh_tokens",
+            record_id  = str(stored.token_id),
+            operation  = "LOGOUT",
+            old_values = {"revoked_at": None},
+            new_values = {"revoked_at": _now().isoformat()},
+        ):
+            await db.refresh_tokens.update(
+                where={"token_id": token_id},
+                data={"revoked_at": _now(), "updated_at": _now()},
+            )
 
     return {"message": "Logged out successfully"}
 
 
-# -------------------------------
-# CREATE EMPLOYEE
-# -------------------------------
-async def create_employee(payload, current_user_id: str):
-    # ERR-440 FIX: Normalize username — strip leading/trailing whitespace as a
-    # defence-in-depth measure. The SignUpRequest schema already enforces this
-    # via StringConstraints(strip_whitespace=True), but normalizing here ensures
-    # the service is safe when called directly (e.g. bulk-import, tests) without
-    # going through Pydantic validation.
+# ─────────────────────────────────────────────────────────────────────────────
+# Create employee (signup / bulk import)
+# DB trigger fires on employees INSERT.
+# App-level audit adds source context (signup vs bulk_import).
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def create_employee(
+    payload,
+    current_user_id: str,
+    request: Optional[Request] = None,
+    source: str = "signup",          # "signup" | "bulk_import"
+):
+    """
+    Persists the employee record.
+
+    Wallet creation REMOVED — the Wallet service listens on the
+    'employee.created' Redis Stream event and provisions the wallet
+    asynchronously.
+    """
     payload.username = payload.username.strip()
 
-    # Validate manager exists if provided
     if payload.manager_id:
-        manager = await db.employees.find_unique(
-            where={"employee_id": str(payload.manager_id)}
-        )
-        if not manager:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Manager not found"
-            )
+        if not await db.employees.find_unique(where={"employee_id": str(payload.manager_id)}):
+            raise HTTPException(status_code=400, detail="Manager not found")
 
-    # Validate designation exists
-    designation = await db.designations.find_unique(
-        where={"designation_id": str(payload.designation_id)}
-    )
-    if not designation:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Designation not found"
-        )
+    if not await db.designations.find_unique(where={"designation_id": str(payload.designation_id)}):
+        raise HTTPException(status_code=400, detail="Designation not found")
 
-    # Validate department exists
-    department = await db.departments.find_unique(
-        where={"department_id": str(payload.department_id)}
-    )
-    if not department:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Department not found"
-        )
+    if not await db.departments.find_unique(where={"department_id": str(payload.department_id)}):
+        raise HTTPException(status_code=400, detail="Department not found")
 
-    active_status = await db.status_master.find_first(
-        where={"status_code": "ACTIVE"}
-    )
+    active_status = await db.status_master.find_first(where={"status_code": "ACTIVE"})
     if not active_status:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Default ACTIVE status not found. Please check status_master table."
-        )
+        raise HTTPException(status_code=500, detail="Default ACTIVE status not found")
 
-    # Hash password
-    hashed_pwd = hash_password(payload.password)
-
-    # Create employee
-    # FIX: date_of_birth must be a full timezone-aware datetime, NOT a bare date
-    # string. Prisma's DateTime field rejects "2026-03-10" (ISO date-only) with
-    # "not a valid ISO-8601 DateTime". datetime.combine() + replace(tzinfo=utc)
-    # produces "2026-03-10T00:00:00+00:00" which Prisma accepts correctly.
-    new_emp = await db.employees.create(
-        data={
-            "username": payload.username,
-            "email": payload.email,
-            "password_hash": hashed_pwd,
-            "designation_id": str(payload.designation_id),
-            "department_id": str(payload.department_id),
-            "manager_id": str(payload.manager_id) if payload.manager_id else None,
+    new_emp = None
+    async with audit_ctx(
+        user_id    = current_user_id,
+        request    = request,
+        table_name = "employees",
+        record_id  = lambda: str(new_emp.employee_id),
+        operation  = "INSERT",
+        new_values = lambda: {
+            "username":      new_emp.username,
+            "email":         new_emp.email,
+            "department_id": str(new_emp.department_id),
+            "designation_id":str(new_emp.designation_id),
+            "source":        source,
+        },
+    ):
+        new_emp = await db.employees.create(data={
+            "username":        payload.username,
+            "email":           payload.email,
+            "password_hash":   hash_password(payload.password),
+            "designation_id":  str(payload.designation_id),
+            "department_id":   str(payload.department_id),
+            "manager_id":      str(payload.manager_id) if payload.manager_id else None,
             "date_of_joining": _now(),
             "date_of_birth": (
-                datetime.combine(payload.date_of_birth, datetime.min.time())
-                .replace(tzinfo=timezone.utc)
+                datetime.combine(payload.date_of_birth, datetime.min.time()).replace(tzinfo=timezone.utc)
                 if payload.date_of_birth else None
             ),
-            "status_id": active_status.status_id,
+            "status_id":  active_status.status_id,
             "created_by": current_user_id,
             "updated_by": current_user_id,
-            "updated_at": _now()
-        }
-    )
+            "updated_at": _now(),
+        })
 
-    # Create wallet for the new employee
-    await db.wallets.create(
-        data={
-            "employee_id": new_emp.employee_id,
-            "available_points": 0,
-            "redeemed_points": 0,
-            "total_earned_points": 0,
-            "created_by": current_user_id,
-            "updated_by": current_user_id,
-            "updated_at": _now()
-        }
-    )
+    # Notify downstream services — Wallet provisions asynchronously
+    await publish("events:employee.created", {
+        "employee_id": str(new_emp.employee_id),
+        "created_by":  current_user_id,
+    })
 
     return new_emp
 
 
-# -------------------------------
-# FORGOT PASSWORD
-# -------------------------------
-async def request_password_reset(email: str):
-    """
-    Request password reset - sends email with reset token.
-    Always returns success to prevent email enumeration attacks.
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+# Password reset — request
+# No DB write → explicit audit row only.
+# We only audit when the user actually exists (no user enumeration in audit log).
+# ─────────────────────────────────────────────────────────────────────────────
 
-    # 1. Lookup user by email
-    user = await db.employees.find_unique(
-        where={"email": email}
-    )
-
-    # 2. If user exists, generate token and send email
+async def request_password_reset(
+    email: str,
+    request: Optional[Request] = None,
+) -> dict:
+    user = await db.employees.find_unique(where={"email": email})
     if user:
-        reset_token = create_reset_token(
-            employee_id=str(user.employee_id),
-            email=user.email
-        )
-
+        reset_token = create_reset_token(employee_id=str(user.employee_id), email=user.email)
         try:
             send_password_reset_email(
-                email=user.email,
-                reset_token=reset_token,
-                username=user.username
+                email=user.email, reset_token=reset_token, username=user.username
             )
-            print(f"✅ Password reset email sent to {user.email}")
-        except Exception as e:
-            print(f"❌ Failed to send reset email: {e}")
-            # Don't raise — still return success response
-    else:
-        print(f"⚠️ Password reset requested for non-existent email: {email}")
+        except Exception as exc:
+            logger.warning("Failed to send reset email to %s: %s", email, exc)
 
-    # 3. Always return success (prevents email enumeration)
-    return {
-        "message": "If your email is registered, you will receive a password reset link shortly."
-    }
-
-
-# -------------------------------
-# RESET PASSWORD
-# -------------------------------
-async def reset_password(token: str, new_password: str):
-    """Reset password using the reset token."""
-
-    # 1. Decode and validate token
-    payload = decode_reset_token(token)
-
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired reset token"
+        # Audit the reset request — performed_by the employee themselves
+        await audit(
+            table_name   = "employees",
+            record_id    = str(user.employee_id),
+            operation    = "PASSWORD_RESET_REQUESTED",
+            performed_by = str(user.employee_id),
+            new_values   = {"email": email},
+            request      = request,
         )
+
+    return {"message": "If your email is registered, you will receive a password reset link shortly."}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Password reset — confirm
+# DB trigger fires on employees UPDATE (password_hash change).
+# DB trigger fires on refresh_tokens UPDATE_MANY (revoke all tokens).
+# App-level audit adds explicit PASSWORD_RESET operation on employees table.
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def reset_password(
+    token: str,
+    new_password: str,
+    request: Optional[Request] = None,
+) -> dict:
+    payload = decode_reset_token(token)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
     employee_id = payload.get("sub")
-    email = payload.get("email")
-
+    email       = payload.get("email")
     if not employee_id or not email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid token payload"
-        )
+        raise HTTPException(status_code=400, detail="Invalid token payload")
 
-    # 2. Verify user still exists
-    user = await db.employees.find_unique(
-        where={"employee_id": employee_id}
-    )
-
+    user = await db.employees.find_unique(where={"employee_id": employee_id})
     if not user or user.email != email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid reset token"
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+
+    async with audit_ctx(
+        user_id    = employee_id,
+        request    = request,
+        table_name = "employees",
+        record_id  = employee_id,
+        operation  = "PASSWORD_RESET",
+        # Never store old/new password hashes — leave values minimal
+        new_values = {"password_changed": True, "all_tokens_revoked": True},
+    ):
+        await db.employees.update(
+            where={"employee_id": employee_id},
+            data={
+                "password_hash": hash_password(new_password),
+                "updated_at":    _now(),
+                "updated_by":    employee_id,
+            },
         )
 
-    # 3. Hash new password
-    new_password_hash = hash_password(new_password)
-
-    # 4. Update password
-    await db.employees.update(
-        where={"employee_id": employee_id},
-        data={
-            "password_hash": new_password_hash,
-            "updated_at": _now(),
-            "updated_by": employee_id  # Self-updated
-        }
-    )
-
-    # 5. Revoke all existing refresh tokens — force re-login with new password
+    # Revoke all existing refresh tokens — DB trigger fires per row
     await db.refresh_tokens.update_many(
-        where={
-            "employee_id": employee_id,
-            "revoked_at": None
-        },
-        data={
-            "revoked_at": _now(),
-            "updated_at": _now()
-        }
+        where={"employee_id": employee_id, "revoked_at": None},
+        data={"revoked_at": _now(), "updated_at": _now()},
     )
 
-    # 6. Send confirmation email
     try:
-        send_password_reset_confirmation(
-            email=user.email,
-            username=user.username
-        )
-    except Exception as e:
-        print(f"⚠️ Failed to send confirmation email: {e}")
+        send_password_reset_confirmation(email=user.email, username=user.username)
+    except Exception as exc:
+        logger.warning("Failed to send confirmation to %s: %s", email, exc)
 
-    print(f"✅ Password reset successful for user: {user.username}")
-
-    return {
-        "message": "Password reset successful. Please login with your new password."
-    }
+    return {"message": "Password reset successful. Please login with your new password."}

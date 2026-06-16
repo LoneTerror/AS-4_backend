@@ -21,7 +21,7 @@ class RevokeRoleRequest(BaseModel):
 
 
 class SetRoutePermissionRequest(BaseModel):
-    route_key: str            # e.g. "POST:/v1/rewards/grant"
+    route_key: str            # e.g. "POST:/aabhar/v1/rewards/grant"
     role_id:   str
     title:     Optional[str] = None
 

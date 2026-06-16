@@ -1,0 +1,97 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aabhar-master-ingress
+  namespace: default
+  annotations:
+    # --- AWS ALB Core Configuration ---
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/group.name: aabhar-group
+    
+    # --- HTTPS & SSL Configuration ---
+    # 1. Open both Port 80 and 443
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    
+    # 2. Attach your ACM Certificate (Replace with your actual ARN)
+    alb.ingress.kubernetes.io/certificate-arn: ${ACM_ARN}
+    
+    # 3. Industry Standard: Redirect all HTTP (80) traffic to HTTPS (443)
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    
+    # --- Health Checks ---
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/success-codes: "200,307,308"
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
+spec:
+  ingressClassName: alb
+  rules:
+  - host: aabhar.top
+    http:
+      paths:
+      # --- Microservices (Specific paths first) ---
+      - path: /aabhar/v1/auth
+        pathType: Prefix
+        backend:
+          service:
+            name: auth-service
+            port:
+              number: 8001
+      - path: /aabhar/v1/roles
+        pathType: Prefix
+        backend:
+          service:
+            name: roles-service
+            port:
+              number: 8002
+      - path: /aabhar/v1/employees
+        pathType: Prefix
+        backend:
+          service:
+            name: employees-service
+            port:
+              number: 8003
+      - path: /aabhar/v1/wallets
+        pathType: Prefix
+        backend:
+          service:
+            name: wallet-service
+            port:
+              number: 8004
+      - path: /aabhar/v1/recognitions
+        pathType: Prefix
+        backend:
+          service:
+            name: recognition-service
+            port:
+              number: 8005
+      - path: /aabhar/v1/rewards
+        pathType: Prefix
+        backend:
+          service:
+            name: rewards-service
+            port:
+              number: 8006
+      - path: /aabhar/v1/organizations
+        pathType: Prefix
+        backend:
+          service:
+            name: organization-service
+            port:
+              number: 8007
+      - path: /aabhar/v1/analytics
+        pathType: Prefix
+        backend:
+          service:
+            name: analytics-service
+            port:
+              number: 8008
+
+      # --- Frontend Public Layer (Catch-all) ---
+      - path: /aabhar/
+        pathType: Prefix
+        backend:
+          service:
+            name: aabhar-frontend
+            port:
+              number: 80

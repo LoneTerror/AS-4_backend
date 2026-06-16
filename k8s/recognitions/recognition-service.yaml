@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recognition-service
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: recognition-service
+  template:
+    metadata:
+      labels:
+        app: recognition-service
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+      - name: recognition-container
+        image: mrmonster786/rnr-backend-base:latest 
+        imagePullPolicy: Always
+        args: ["opentelemetry-instrument", "python", "-m", "uvicorn", "src.recognition.main:app", "--host", "0.0.0.0", "--port", "8005"]
+        ports:
+        - containerPort: 8005
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: "recognition-service"
+        envFrom:
+        - secretRef:
+            name: rnr-secrets
+        resources: 
+          requests:
+            memory: "200Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recognition-service
+spec:
+  selector:
+    app: recognition-service
+  ports:
+    - protocol: TCP
+      port: 8005
+      targetPort: 8005

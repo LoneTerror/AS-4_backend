@@ -22,6 +22,7 @@ tests/
 .prisma/
 .cache/
 prisma_binaries/
+**/.cache/prisma-python/
 
 # Environment variables
 .env
