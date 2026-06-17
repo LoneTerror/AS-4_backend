@@ -113,7 +113,7 @@ async def create_transaction(
             user_id    = created_by,
             request    = request,
             table_name = "transactions",
-            record_id  = lambda: str(new_txn.transaction_id),
+            record_id  = lambda: str(new_txn.transaction_id) if new_txn else "",
             operation  = "INSERT",
             new_values = lambda: {
                 "wallet_id":        wallet_id,
@@ -227,6 +227,25 @@ async def get_transactions(
     )
     total = await db.transactions.count(where=where_clause)
 
+    # Dynamically patch legacy descriptions that have raw UUIDs instead of reviewer names
+    for txn in transactions:
+        desc = txn.description or ""
+        if desc.startswith("Points credited from review") and " by " not in desc:
+            review_id = txn.reference_number
+            if review_id and review_id.startswith("REVIEW-"):
+                review_id = review_id.replace("REVIEW-", "")
+            if review_id:
+                try:
+                    review = await db.reviews.find_unique(
+                        where={"review_id": review_id},
+                        include={"employees_reviews_reviewer_idToemployees": True}
+                    )
+                    if review and getattr(review, "employees_reviews_reviewer_idToemployees", None):
+                        reviewer_name = review.employees_reviews_reviewer_idToemployees.username
+                        txn.description = f"Points credited from {reviewer_name}"
+                except Exception:
+                    pass
+
     formatted = []
     for txn in transactions:
         formatted.append({
@@ -270,6 +289,23 @@ async def get_transaction_by_id(transaction_id: str, current_user: CurrentUser):
         wallet = await db.wallets.find_unique(where={"wallet_id": txn.wallet_id})
         if not wallet or wallet.employee_id != current_user.id:
             raise HTTPException(status_code=403, detail=AD)
+
+    desc = txn.description or ""
+    if desc.startswith("Points credited from review") and " by " not in desc:
+        review_id = txn.reference_number
+        if review_id and review_id.startswith("REVIEW-"):
+            review_id = review_id.replace("REVIEW-", "")
+        if review_id:
+            try:
+                review = await db.reviews.find_unique(
+                    where={"review_id": review_id},
+                    include={"employees_reviews_reviewer_idToemployees": True}
+                )
+                if review and getattr(review, "employees_reviews_reviewer_idToemployees", None):
+                    reviewer_name = review.employees_reviews_reviewer_idToemployees.username
+                    txn.description = f"Points credited from {reviewer_name}"
+            except Exception:
+                pass
 
     return {
         "transaction_id":   txn.transaction_id,
@@ -350,8 +386,6 @@ async def get_points_summary(wallet_id: str, current_user: CurrentUser):
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
-    review_id = str(review_id)
-
     review = await db.reviews.find_unique(
         where={"review_id": review_id},
         include={"review_category_tags": True},
@@ -392,6 +426,9 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
     if not status_record:
         raise HTTPException(status_code=500, detail="APPROVED status not found")
 
+    reviewer = await db.employees.find_unique(where={"employee_id": created_by})
+    reviewer_name = reviewer.username if reviewer else "Anonymous"
+
     tags           = getattr(review, "review_category_tags", []) or []
     category_label = ",".join(t.category_code_snapshot for t in tags) if tags else "REVIEW"
     reference      = f"REVIEW-{review_id}"
@@ -407,7 +444,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
             user_id    = str(created_by),
             request    = None,
             table_name = "transactions",
-            record_id  = lambda: str(new_txn.transaction_id),
+            record_id  = lambda: str(new_txn.transaction_id) if new_txn else "",
             operation  = "CREDIT",
             new_values = lambda: {
                 "wallet_id":       str(wallet.wallet_id),
@@ -425,7 +462,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
                         "amount":              points,
                         "transaction_type_id": txn_type.type_id,
                         "status_id":           status_record.status_id,
-                        "description":         f"{category_label} review → {points} pts",
+                        "description":         f"{category_label} from {reviewer_name} → {points} pts",
                         "reference_number":    reference,
                         "created_by":          created_by,
                         "updated_by":          created_by,
@@ -453,7 +490,7 @@ async def credit_wallet_from_review(review_id: str, current_user: CurrentUser):
         try:
             await _get_notif().create_notification(
                 employee_id=employee_id,
-                title=f"{points} points credited to your wallet 💰",
+                title=f"{points} points credited to your wallet",
                 message=(
                     f"You earned {points} pts for a {category_label} review. "
                     f"New balance: {new_available} pts."
@@ -491,7 +528,6 @@ async def adjust_wallet_for_review_update(
     delta_points: float,
     current_user: CurrentUser,
 ):
-    review_id = str(review_id)
     int_delta = round(delta_points)
 
     if int_delta == 0:
@@ -545,7 +581,7 @@ async def adjust_wallet_for_review_update(
             user_id    = updated_by,
             request    = None,     # internal call — no HTTP context
             table_name = "transactions",
-            record_id  = lambda: str(new_txn.transaction_id),
+            record_id  = lambda: str(new_txn.transaction_id) if new_txn else "",
             operation  = "ADJUST",
             new_values = lambda: {
                 "wallet_id":   str(wallet.wallet_id),
