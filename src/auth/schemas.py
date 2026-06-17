@@ -19,6 +19,16 @@ class SignUpRequest(BaseModel):
     manager_id: Optional[UUID] = None
     date_of_birth: Optional[date] = None
 
+    # BUG FIX: Normalize email to lowercase, mirroring LoginRequest's
+    # username normalizer (ERR-437). Without this, signup could create
+    # "Jane@Company.com" and "jane@company.com" as two distinct DB rows
+    # (unique constraint is case-sensitive) even though login treats
+    # email case-insensitively — leading to duplicate/unreachable accounts.
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower() if isinstance(v, str) else v
+
 
 # --- Shared Models ---
 class EmployeeResponse(BaseModel):
@@ -82,6 +92,15 @@ class TokenValidationResponse(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     """Request schema for forgot password"""
     email: EmailStr
+
+    # Same fix as SignUpRequest — request_password_reset() does an exact
+    # (case-sensitive) DB lookup on email, so normalize here too or a
+    # legitimate user typing different case than what's stored gets
+    # silently treated as "not found".
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower() if isinstance(v, str) else v
 
 
 class ForgotPasswordResponse(BaseModel):
