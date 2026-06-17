@@ -10,14 +10,15 @@ from fastapi.routing import APIRoute
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from prisma import Prisma
-import jwt  
-from jwt.exceptions import PyJWTError, ExpiredSignatureError
 
 from src.prisma.client import db
 from src.common.cache import cache_get, cache_set
-
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM  = os.getenv("ALGORITHM", "HS256")
+# Local-fallback validation must go through the same helper every other
+# service uses (src/core/security.py) instead of decoding the JWT raw.
+# decode_token() applies the project's standard leeway for clock drift and
+# reads SECRET_KEY from the single place it's defined, so a pod falling
+# back to local validation behaves identically to the primary path.
+from src.core.security import decode_token
 
 security        = HTTPBearer(auto_error=False)
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
@@ -228,46 +229,29 @@ async def get_current_user(
             f"[{request_id}] Auth service unreachable, falling back to local JWT validation. ({e})"
         )
 
-        try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            user_id = payload.get("user_id") or payload.get("sub")
+        payload = decode_token(token)
 
-            if not user_id or not isinstance(user_id, str) or user_id.lower() == "null":
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid token payload: missing or null user_id",
-                )
-
-            roles = [r.upper() for r in payload.get("roles", [])]
-            return CurrentUser(
-                id=str(user_id),
-                email=payload.get("email", ""),
-                roles=roles,
-                department_id=payload.get("department_id"),
-            )
-
-        except ExpiredSignatureError:
+        if not payload:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has expired",
+                detail="Token has expired or is invalid",
             )
-        except PyJWTError: 
+
+        user_id = payload.get("sub") or payload.get("user_id")
+
+        if not user_id or not isinstance(user_id, str) or user_id.lower() == "null":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token signature",
+                detail="Invalid token payload: missing or null user_id",
             )
-        except HTTPException:
-            raise
-        except Exception as fallback_err:
-            from src.core.logger import logger
-            logger.error(
-                f"[{request_id}] Fallback validation failed: {fallback_err}",
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Authentication service unavailable",
-            )
+
+        roles = [r.upper() for r in payload.get("roles", [])]
+        return CurrentUser(
+            id=str(user_id),
+            email=payload.get("email", ""),
+            roles=roles,
+            department_id=payload.get("department_id"),
+        )
 
 
 # ── Permission check ──────────────────────────────────────────────────────────
