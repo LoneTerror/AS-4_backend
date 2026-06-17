@@ -103,13 +103,23 @@ async def _credit_points(review_id: str, receiver_id: str, raw_points: int, ip_a
         "total_earned_points": wallet.total_earned_points,
     }
 
+    # ── Fetch reviewer details for description ────────────────────────────────
+    review = await db.reviews.find_unique(
+        where={"review_id": review_id},
+        include={"employees_reviews_reviewer_idToemployees": True}
+    )
+    
+    reviewer_name = "System"
+    if review and review.employees_reviews_reviewer_idToemployees:
+        reviewer_name = review.employees_reviews_reviewer_idToemployees.username
+
     new_txn = None
     async with audit_ctx(
         user_id    = receiver_id,
         request    = None,
         ip_address = ip_address,   # forwarded from Recognition service via stream payload
         table_name = "transactions",
-        record_id  = lambda: str(new_txn.transaction_id),
+        record_id  = lambda: str(new_txn.transaction_id) if new_txn else "",
         operation  = "CREDIT",
         old_values = wallet_before,
         new_values = lambda: {
@@ -126,7 +136,7 @@ async def _credit_points(review_id: str, receiver_id: str, raw_points: int, ip_a
             "transaction_type_id": credit_type.type_id,
             "status_id":           status.status_id,
             "reference_number":    review_id,
-            "description":         f"Points credited from review {review_id}",
+            "description":         f"Points credited from review by {reviewer_name}",
             "transaction_at":      _now(),
             "created_by":          receiver_id,
             "updated_by":          receiver_id,

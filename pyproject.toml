@@ -62,3 +62,7 @@ exclude = ["tests*", "scripts*"]
 # ✅ SINGLE merged block — no duplicates
 [tool.pytest.ini_options]
 asyncio_mode   = "auto"
+
+[tool.pyright]
+extraPaths = ['.']
+
