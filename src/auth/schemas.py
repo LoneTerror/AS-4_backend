@@ -12,7 +12,7 @@ class SignUpRequest(BaseModel):
     email: EmailStr
     password: Annotated[
         str,
-        StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
+        StringConstraints(min_length=1, max_length=128)
     ]
     designation_id: UUID
     department_id: UUID

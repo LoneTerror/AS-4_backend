@@ -15,7 +15,8 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, cast
+import prisma.types
 from uuid import uuid4
 
 from fastapi import HTTPException, Request, status
@@ -40,8 +41,8 @@ try:
     _email_available = True
 except Exception as _err:
     _email_available = False
-    def send_password_reset_email(*a, **kw): pass        # type: ignore
-    def send_password_reset_confirmation(*a, **kw): pass # type: ignore
+    def send_password_reset_email(*a, **kw) -> bool: return False
+    def send_password_reset_confirmation(*a, **kw) -> bool: return False
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ async def authenticate_user(
         user_id    = str(user.employee_id),
         request    = request,
         table_name = "refresh_tokens",
-        record_id  = lambda: str(token_record.token_id),
+        record_id  = lambda: str(token_record.token_id) if token_record else "UNKNOWN",
         operation  = "LOGIN",
         new_values = lambda: {
             "employee_id": str(user.employee_id),
@@ -159,14 +160,16 @@ async def authenticate_user(
             "roles":       roles,
         },
     ):
-        token_record = await db.refresh_tokens.create(data={
+        token_record = await db.refresh_tokens.create(
+            data=cast(prisma.types.refresh_tokensCreateInput, {
             "token_id":    token_id,
             "token_hash":  hash_refresh_token(token_secret),
-            "employee_id": user.employee_id,
+            "employee_id": str(user.employee_id),
             "expires_at":  _now() + timedelta(days=7),
             "created_at":  _now(),
             "updated_at":  _now(),
         })
+    )
 
     return _build_login_response(user, access_token, client_token)
 
@@ -191,6 +194,9 @@ async def refresh_access_token(client_refresh_token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token signature")
 
     user  = stored.employees
+    if not user:
+        raise HTTPException(status_code=401, detail="User record not found for this token")
+    
     roles: list[str] = []
     try:
         relations = await db.employee_roles.find_many(
@@ -287,17 +293,18 @@ async def create_employee(
         user_id    = current_user_id,
         request    = request,
         table_name = "employees",
-        record_id  = lambda: str(new_emp.employee_id),
+        record_id  = lambda: str(new_emp.employee_id) if new_emp else "UNKNOWN",
         operation  = "INSERT",
         new_values = lambda: {
-            "username":      new_emp.username,
-            "email":         new_emp.email,
-            "department_id": str(new_emp.department_id),
-            "designation_id":str(new_emp.designation_id),
+            "username":      new_emp.username if new_emp else "",
+            "email":         new_emp.email if new_emp else "",
+            "department_id": str(new_emp.department_id) if new_emp else "",
+            "designation_id":str(new_emp.designation_id) if new_emp else "",
             "source":        source,
         },
     ):
-        new_emp = await db.employees.create(data={
+        new_emp = await db.employees.create(
+            data=cast(prisma.types.employeesCreateInput, {
             "username":        payload.username,
             "email":           payload.email,
             "password_hash":   hash_password(payload.password),
@@ -314,6 +321,7 @@ async def create_employee(
             "updated_by": current_user_id,
             "updated_at": _now(),
         })
+    )
 
     # Notify downstream services — Wallet provisions asynchronously
     await publish("events:employee.created", {
@@ -392,12 +400,12 @@ async def reset_password(
         new_values = {"password_changed": True, "all_tokens_revoked": True},
     ):
         await db.employees.update(
-            where={"employee_id": employee_id},
-            data={
+            where={"employee_id": str(employee_id)},
+            data=cast(prisma.types.employeesUpdateInput, {
                 "password_hash": hash_password(new_password),
                 "updated_at":    _now(),
-                "updated_by":    employee_id,
-            },
+                "updated_by":    str(employee_id),
+            }),
         )
 
     # Revoke all existing refresh tokens — DB trigger fires per row
