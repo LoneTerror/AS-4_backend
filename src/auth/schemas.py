@@ -37,9 +37,18 @@ class EmployeeResponse(BaseModel):
     email: EmailStr
     designation_id: Optional[UUID] = None
     department_id: Optional[UUID] = None
+    must_change_password: bool = True
 
     class Config:
         from_attributes = True
+
+class ChangePasswordRequest(BaseModel):
+    """Request schema for changing password when logged in"""
+    new_password: str
+
+class ChangePasswordResponse(BaseModel):
+    """Response schema for changing password"""
+    message: str
 
 
 

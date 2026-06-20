@@ -16,10 +16,12 @@ from src.auth.schemas import (
     LoginRequest, LogoutRequest, RefreshRequest, ResetPasswordRequest,
     ResetPasswordResponse, SignUpRequest, TokenResponse,
     TokenValidationRequest, TokenValidationResponse,
+    ChangePasswordRequest, ChangePasswordResponse,
 )
 from src.auth.service import (
     authenticate_user, create_employee, logout_user,
     refresh_access_token, request_password_reset, reset_password, validate_token,
+    change_password,
 )
 from src.common.dependencies import check_route_permission, CurrentUser
 from src.core.security import decode_token
@@ -127,6 +129,20 @@ async def reset_password_endpoint(
 
 
 # ── Protected endpoints ───────────────────────────────────────────────────────
+
+@router.post("/change-password", response_model=ChangePasswordResponse)
+async def change_password_endpoint(
+    request: Request,
+    payload: ChangePasswordRequest,
+    token: str = Depends(oauth2_scheme),
+):
+    """Allows an authenticated user to change their password and clears the must_change_password flag."""
+    user_data = decode_token(token)
+    if not user_data or not user_data.get("sub"):
+        raise HTTPException(status_code=401, detail="Invalid session")
+    return await change_password(user_data["sub"], payload.new_password, request)
+
+
 
 @router.post("/signup", response_model=EmployeeResponse)
 async def signup(
