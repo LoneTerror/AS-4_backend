@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from prisma.errors import UniqueViolationError
 from starlette import status
+from typing import cast
 
 from src.core.logger import logger
 
@@ -46,20 +47,22 @@ def map_status_to_error_code(status_code: int) -> str:
 # ==========================================================
 # GLOBAL ERROR HANDLERS
 # ==========================================================
-async def http_exception_handler(request: Request, exc: HTTPException):
+async def http_exception_handler(request: Request, exc: Exception):
+    specific_exc = cast(HTTPException, exc)
+    
     request_id = getattr(request.state, "request_id", "unknown")
 
-    if exc.status_code >= 500:
-        logger.error(f"[{request_id}] HTTP {exc.status_code} at {request.url.path}: {exc.detail}")
+    if specific_exc.status_code >= 500:
+        logger.error(f"[{request_id}] HTTP {specific_exc.status_code} at {request.url.path}: {specific_exc.detail}")
     else:
-        logger.warning(f"[{request_id}] HTTP {exc.status_code} at {request.url.path}: {exc.detail}")
+        logger.warning(f"[{request_id}] HTTP {specific_exc.status_code} at {request.url.path}: {specific_exc.detail}")
 
     return JSONResponse(
-        status_code=exc.status_code,
+        status_code=specific_exc.status_code,
         content={
             "error": {
-                "code":       map_status_to_error_code(exc.status_code),
-                "message":    exc.detail,
+                "code":       map_status_to_error_code(specific_exc.status_code),
+                "message":    specific_exc.detail,
                 "timestamp":  datetime.now(timezone.utc).isoformat(),
                 "path":       request.url.path,
                 "request_id": request_id,
@@ -68,9 +71,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-async def prisma_unique_violation_handler(request: Request, exc: UniqueViolationError):
+async def prisma_unique_violation_handler(request: Request, exc: Exception):
+    # Cast the generic exception to the specific one for type safety and autocomplete
+    specific_exc = cast(UniqueViolationError, exc)
+
     request_id = getattr(request.state, "request_id", "unknown")
-    logger.warning(f"[{request_id}] Unique Constraint Violation at {request.url.path}: {str(exc)}")
+    logger.warning(f"[{request_id}] Unique Constraint Violation at {request.url.path}: {str(specific_exc)}")
+
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={
@@ -85,11 +92,13 @@ async def prisma_unique_violation_handler(request: Request, exc: UniqueViolation
     )
 
 
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(request: Request, exc: Exception):
+    specific_exc = cast(RequestValidationError, exc)
+
     request_id = getattr(request.state, "request_id", "unknown")
 
     formatted_errors = {}
-    for err in exc.errors():
+    for err in specific_exc.errors():
         field = err["loc"][-1]
         formatted_errors.setdefault(field, []).append(err["msg"])
 
@@ -141,7 +150,12 @@ async def request_rate_limit_middleware(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     request.state.request_id = request_id
 
-    client_ip = request.client.host
+    # Extract true client IP from proxy headers, fallback to socket host, then null-check
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "unknown"
     logger.info(f"[{request_id}] Incoming {request.method} {request.url.path} from IP: {client_ip}")
 
     now          = time.time()

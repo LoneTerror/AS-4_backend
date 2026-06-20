@@ -39,8 +39,11 @@ def _parse_xlsx(content: bytes) -> list[dict]:
         import openpyxl
     except ImportError:
         raise HTTPException(status_code=500, detail="openpyxl not installed")
-    wb   = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    rows = list(wb.active.iter_rows(values_only=True))
+    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    ws = wb.active
+    if ws is None:  # Explicit null-check for Pylance
+        return []
+    rows = list(ws.iter_rows(values_only=True))
     if not rows:
         return []
     headers = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
@@ -196,8 +199,8 @@ async def bulk_import_employees(
             failed += 1
             results.append({
                 "row":      idx,
-                "username": payload.username,
-                "email":    payload.email,
+                "username": row.get("username"),
+                "email":    row.get("email"),
                 "status":   "error",
                 "error":    exc.detail,
             })
@@ -205,8 +208,8 @@ async def bulk_import_employees(
             failed += 1
             results.append({
                 "row":      idx,
-                "username": payload.username,
-                "email":    payload.email,
+                "username": row.get("username"),
+                "email":    row.get("email"),
                 "status":   "error",
                 "error":    str(exc),
             })

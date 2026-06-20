@@ -138,4 +138,11 @@ app.openapi = custom_openapi
 FastAPIInstrumentor.instrument_app(app, excluded_urls="health,/docs,/openapi.json")
 
 if __name__ == "__main__":
-    uvicorn.run("src.auth.main:app", host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run(
+        "src.auth.main:app", 
+        host="0.0.0.0", 
+        port=8001, 
+        reload=True,
+        proxy_headers=True,
+        forwarded_allow_ips="*"
+    )
