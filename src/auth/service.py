@@ -155,7 +155,7 @@ async def authenticate_user(
         table_name = "refresh_tokens",
         record_id  = lambda: str(token_record.token_id) if token_record else "UNKNOWN",
         operation  = "LOGIN",
-        new_values = {
+        new_values = lambda: {
             "employee_id": str(user.employee_id),
             "username":    user.username,
             "roles":       roles,
