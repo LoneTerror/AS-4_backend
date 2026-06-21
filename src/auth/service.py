@@ -65,6 +65,7 @@ def _build_login_response(user, access_token: str, refresh_token_raw: str) -> di
             "email":          user.email,
             "designation_id": user.designation_id,
             "department_id":  user.department_id,
+            "must_change_password": user.must_change_password,
         },
     }
 
@@ -403,6 +404,7 @@ async def reset_password(
             where={"employee_id": str(employee_id)},
             data=cast(prisma.types.employeesUpdateInput, {
                 "password_hash": hash_password(new_password),
+                "must_change_password": False,
                 "updated_at":    _now(),
                 "updated_by":    str(employee_id),
             }),
@@ -420,3 +422,39 @@ async def reset_password(
         logger.warning("Failed to send confirmation to %s: %s", email, exc)
 
     return {"message": "Password reset successful. Please login with your new password."}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Change password (for authenticated user)
+# DB trigger fires on employees UPDATE.
+# App-level audit adds explicit PASSWORD_CHANGE operation.
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def change_password(
+    employee_id: str,
+    new_password: str,
+    request: Optional[Request] = None,
+) -> dict:
+    user = await db.employees.find_unique(where={"employee_id": employee_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    async with audit_ctx(
+        user_id    = employee_id,
+        request    = request,
+        table_name = "employees",
+        record_id  = employee_id,
+        operation  = "PASSWORD_CHANGE",
+        new_values = {"password_changed": True, "must_change_password": False},
+    ):
+        await db.employees.update(
+            where={"employee_id": employee_id},
+            data={
+                "password_hash": hash_password(new_password),
+                "must_change_password": False,
+                "updated_at":    _now(),
+                "updated_by":    employee_id,
+            },
+        )
+
+    return {"message": "Password updated successfully."}
