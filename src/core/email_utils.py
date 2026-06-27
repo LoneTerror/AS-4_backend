@@ -424,3 +424,135 @@ Aabhar Recognition Platform
     except Exception as e:
         print(f"Failed to send confirmation email: {e}")
         return False
+    
+def send_welcome_email(email: str, username: str, raw_password: str) -> bool:
+    """Send welcome email with initial credentials to a newly created employee."""
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000/aabhar")
+    login_link   = f"{frontend_url}/login"
+    subject      = "Welcome to Aabhar - Your Account Credentials"
+
+    content_html = f"""
+              <tr>
+                <td style="padding-bottom:16px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.6;color:{_BODY};">
+                    Dear {username},
+                  </p>
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding-bottom:8px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;
+                            font-weight:700;letter-spacing:0.8px;
+                            text-transform:uppercase;color:{_NAVY};">
+                    Account Provisioned
+                  </p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding-bottom:16px;border-bottom:1px solid {_DIVIDER};">
+                  <h2 style="margin:0;font-family:Arial,sans-serif;font-size:17px;
+                             font-weight:700;color:#1A1A1A;line-height:1.35;">
+                    Welcome to Aabhar
+                  </h2>
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding:16px 0 12px;">
+                  <p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.7;color:{_BODY};">
+                    An account has been created for you on the Aabhar Employee Recognition & Rewards Platform. 
+                    Please use the following credentials to access your account:
+                  </p>
+
+                  <div style="background-color:#F8F9FA; border:1px solid {_BORDER}; border-radius:6px; padding:16px; margin-bottom:20px;">
+                      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:14px;color:{_BODY};">
+                        <strong>Email / Username:</strong> {email}
+                      </p>
+                      <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:{_BODY};">
+                        <strong>Temporary Password:</strong> {raw_password}
+                      </p>
+                  </div>
+
+                  <p style="margin:0 0 20px;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.7;">
+                    <a href="{login_link}"
+                       style="color:{_NAVY};text-decoration:underline;word-break:break-all;">
+                      Click here to log in
+                    </a>
+                  </p>
+
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.7;color:{_RED};font-weight:bold;">
+                    For security purposes, you will be required to change your password immediately upon your first login.
+                  </p>
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding-bottom:4px;">
+                  <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;
+                            line-height:1.7;color:{_BODY};">
+                    Regards,<br/>
+                    <strong>Aabhar Recognition Platform</strong>
+                  </p>
+                </td>
+              </tr>"""
+
+    html_body = _shell(preheader="Welcome to Aabhar — Your Credentials", content_html=content_html)
+
+    text_body = f"""
+Welcome to Aabhar — Your Credentials
+
+Dear {username},
+
+An account has been created for you on the Aabhar Employee Rewards System.
+
+Email / Username: {email}
+Temporary Password: {raw_password}
+
+Login URL: {login_link}
+
+For security purposes, you will be required to change your password immediately upon your first login.
+
+Regards,
+Aabhar Recognition Platform
+    """.strip()
+
+    print("=" * 80)
+    print("SENDING WELCOME EMAIL")
+    print("=" * 80)
+    print(f"To: {email}")
+
+    try:
+        smtp_host       = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        smtp_port       = int(os.getenv("SMTP_PORT", "587"))
+        smtp_username   = os.getenv("SMTP_USERNAME")
+        smtp_password   = os.getenv("SMTP_PASSWORD")
+
+        if not smtp_username or not smtp_password:
+            print("SMTP not configured — skipping welcome email.")
+            return False
+            
+        smtp_from_email = os.getenv("SMTP_FROM_EMAIL") or smtp_username
+
+        msg            = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = smtp_from_email
+        msg["To"]      = email
+        msg.attach(MIMEText(text_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_username, smtp_password)
+            server.send_message(msg)
+
+        print("Welcome email sent successfully.")
+        return True
+
+    except Exception as e:
+        print(f"Failed to send welcome email: {e}")
+        return False

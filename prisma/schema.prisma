@@ -1,9 +1,9 @@
 generator client {
   provider                    = "prisma-client-py"
   binaryTargets               = ["native", "linux-static-x64"]
-  recursive_type_depth        = "5"
-  enable_experimental_decimal = "true"
   interface                   = "asyncio"
+  enable_experimental_decimal = "true"
+  recursive_type_depth        = "5"
 }
 
 datasource db {
