@@ -449,12 +449,12 @@ async def change_password(
     ):
         await db.employees.update(
             where={"employee_id": employee_id},
-            data={
+            data=cast(prisma.types.employeesUpdateInput,{
                 "password_hash": hash_password(new_password),
                 "must_change_password": False,
                 "updated_at":    _now(),
                 "updated_by":    employee_id,
-            },
+            }),
         )
 
     return {"message": "Password updated successfully."}

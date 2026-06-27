@@ -277,12 +277,13 @@ Aabhar Recognition Platform
         smtp_port       = int(os.getenv("SMTP_PORT", "587"))
         smtp_username   = os.getenv("SMTP_USERNAME")
         smtp_password   = os.getenv("SMTP_PASSWORD")
-        smtp_from_email = os.getenv("SMTP_FROM_EMAIL", smtp_username)
 
         if not smtp_username or not smtp_password:
             print("ERROR: SMTP credentials not configured.")
             print("Reset token:", reset_token)
             return False
+        
+        smtp_from_email = os.getenv("SMTP_FROM_EMAIL") or smtp_username
 
         msg            = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -398,11 +399,12 @@ Aabhar Recognition Platform
         smtp_port       = int(os.getenv("SMTP_PORT", "587"))
         smtp_username   = os.getenv("SMTP_USERNAME")
         smtp_password   = os.getenv("SMTP_PASSWORD")
-        smtp_from_email = os.getenv("SMTP_FROM_EMAIL", smtp_username)
 
         if not smtp_username or not smtp_password:
             print("SMTP not configured — skipping confirmation email.")
             return False
+        
+        smtp_from_email = os.getenv("SMTP_FROM_EMAIL") or smtp_username
 
         msg            = MIMEMultipart("alternative")
         msg["Subject"] = subject
