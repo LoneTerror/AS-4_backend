@@ -37,12 +37,13 @@ from src.core.security import (
 )
 
 try:
-    from src.core.email_utils import send_password_reset_confirmation, send_password_reset_email
+    from src.core.email_utils import send_password_reset_confirmation, send_password_reset_email, send_welcome_email
     _email_available = True
 except Exception as _err:
     _email_available = False
     def send_password_reset_email(*a, **kw) -> bool: return False
     def send_password_reset_confirmation(*a, **kw) -> bool: return False
+    def send_welcome_email(*a, **kw) -> bool: return False
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +331,16 @@ async def create_employee(
         "created_by":  current_user_id,
     })
 
+    # Dispatch Welcome Email
+    try:
+        send_welcome_email(
+            email=payload.email,
+            username=payload.username,
+            raw_password=payload.password
+        )
+    except Exception as exc:
+        logger.warning("Failed to send welcome email to %s: %s", payload.email, exc)
+
     return new_emp
 
 
@@ -449,12 +460,12 @@ async def change_password(
     ):
         await db.employees.update(
             where={"employee_id": employee_id},
-            data={
+            data=cast(prisma.types.employeesUpdateInput,{
                 "password_hash": hash_password(new_password),
                 "must_change_password": False,
                 "updated_at":    _now(),
                 "updated_by":    employee_id,
-            },
+            }),
         )
 
     return {"message": "Password updated successfully."}
